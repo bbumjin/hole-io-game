@@ -1328,16 +1328,16 @@ func _on_swallowed(_node: Node3D) -> void:
 
 func update_hud() -> void:
 	if player_alive():
-		hud.text = "SCORE %d    R %.2f    삼킴 %d" % [score, hole.radius, swallowed_total]
+		hud.text = "SCORE %d    SIZE %.2f    EATEN %d" % [score, hole.radius, swallowed_total]
 	else:
-		hud.text = "SCORE %d    (먹힘)" % score
+		hud.text = "SCORE %d    (EATEN)" % score
 	hud_timer.text = "%d:%02d" % [int(time_left) / 60, int(time_left) % 60]
 	hud_board.text = leaderboard_text()
 	hud_over.visible = state == State.OVER
 	if state == State.OVER:
-		var head := "시간 종료" if over_reason == "time" else "먹혔다"
-		var mine := "승리" if winner == "P" else "패배"
-		hud_over.text = "%s\n1위 %s  %d점\n당신: %s (%d점)\nR 키로 다시 시작"\
+		var head := "TIME UP" if over_reason == "time" else "YOU WERE EATEN"
+		var mine := "WIN" if winner == "P" else "LOSE"
+		hud_over.text = "%s\n1st  %s   %d\nYOU: %s (%d)\nPRESS R TO RESTART"\
 			% [head, winner, winner_score, mine, score]
 
 
@@ -1352,7 +1352,7 @@ func leaderboard_text() -> String:
 		if int(a.score) != int(b.score):
 			return int(a.score) > int(b.score)
 		return float(a.radius) > float(b.radius))
-	var lines := PackedStringArray(["순위  이름   점수    R"])
+	var lines := PackedStringArray([" #  NAME   SCORE   SIZE"])
 	for i in hs.size():
 		var h: Node3D = hs[i]
 		lines.append("%2d.  %-4s %6d  %5.1f" % [i + 1, h.label, h.score, h.radius])
@@ -4408,6 +4408,20 @@ func flat_dist(a: Vector3, b: Vector3) -> float:
 | `--judge2` C3 (`score 2029 vs 2028`) | 광장을 26 → 18로 줄였더니, R=7.8로 자란 구멍이 x=16까지 이동해 **Area 도달 반경 23.9m**가 광장을 넘어 도시 프롭을 삼켰다 | 광장을 26으로 되돌렸다. 대가로 플레이어는 반경 26m의 빈 광장에서 시작한다(약 2초 이동) |
 | **게임: 판이 끝난 뒤에도 구멍끼리 잡아먹음** | `resolve_bites()`가 `state`를 보지 않았다 | `state == OVER`면 돌지 않는다. **T3가 잡았다** — 종료 후 120프레임 동안 레지스트리가 변했다 |
 | `--judge4` G3·G4 | 위 수정의 부작용 — G6 시나리오에서 플레이어가 먹혀 판이 끝나면 이후 포식 시나리오가 아예 성립하지 않는다 | 각 포식 시나리오가 시작 시 `resume()`을 부른다 |
+
+### 배포 (rev.16)
+
+- **저장소**: https://github.com/bbumjin/hole-io-game
+- **플레이**: https://hole-io-game-delta.vercel.app (Vercel 프로덕션)
+- GitHub Pages(`gh-pages` 브랜치)에도 같은 빌드를 올려 두었다 — 예비 경로다.
+
+**웹은 Forward+ 를 지원하지 않는다**(WebGL2 = Compatibility 뿐). `project.godot` 에 `rendering_method.web="gl_compatibility"` 오버라이드를 두었다. 그 렌더러에서도 착시가 성립하는 것을 **실측으로 확인했다** — `--rendering-driver opengl3` 로 1a 판정을 돌려 H1·H2·H7·H8(`rim_aa=16/32`)·H9 가 전부 통과했다. 데스크톱 Forward+ 의 `rim_aa` 는 13~18 이므로 엣지 품질도 같은 수준이다.
+
+**스레드를 쓰지 않는 변형으로 내보낸다**(`variant/thread_support=false`). `SharedArrayBuffer` 를 안 쓰므로 `COOP`/`COEP` 헤더가 필요 없고, 헤더를 설정할 수 없는 정적 호스팅에서도 그대로 돈다.
+
+**브라우저에서 확인한 결함 하나**: 웹 빌드에는 시스템 폰트 폴백이 없어 **HUD 의 한글이 전부 두부(□)로 깨졌다.** 데스크톱에서는 시스템 폰트가 받쳐 줘서 안 보이던 문제다. UI 문자열을 ASCII 로 바꿔 해결했다(`SCORE / SIZE / EATEN / # NAME SCORE SIZE / TIME UP / PRESS R TO RESTART`). 한글 UI 를 유지하려면 폰트를 번들해야 한다.
+
+빌드 크기: `index.wasm` 37.7MB + `index.pck` 11.2MB.
 
 ### 남은 것 — 도로 위계
 

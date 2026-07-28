@@ -313,16 +313,16 @@ func _on_swallowed(_node: Node3D) -> void:
 
 func update_hud() -> void:
 	if player_alive():
-		hud.text = "SCORE %d    R %.2f    삼킴 %d" % [score, hole.radius, swallowed_total]
+		hud.text = "SCORE %d    SIZE %.2f    EATEN %d" % [score, hole.radius, swallowed_total]
 	else:
-		hud.text = "SCORE %d    (먹힘)" % score
+		hud.text = "SCORE %d    (EATEN)" % score
 	hud_timer.text = "%d:%02d" % [int(time_left) / 60, int(time_left) % 60]
 	hud_board.text = leaderboard_text()
 	hud_over.visible = state == State.OVER
 	if state == State.OVER:
-		var head := "시간 종료" if over_reason == "time" else "먹혔다"
-		var mine := "승리" if winner == "P" else "패배"
-		hud_over.text = "%s\n1위 %s  %d점\n당신: %s (%d점)\nR 키로 다시 시작"\
+		var head := "TIME UP" if over_reason == "time" else "YOU WERE EATEN"
+		var mine := "WIN" if winner == "P" else "LOSE"
+		hud_over.text = "%s\n1st  %s   %d\nYOU: %s (%d)\nPRESS R TO RESTART"\
 			% [head, winner, winner_score, mine, score]
 
 
@@ -337,7 +337,7 @@ func leaderboard_text() -> String:
 		if int(a.score) != int(b.score):
 			return int(a.score) > int(b.score)
 		return float(a.radius) > float(b.radius))
-	var lines := PackedStringArray(["순위  이름   점수    R"])
+	var lines := PackedStringArray([" #  NAME   SCORE   SIZE"])
 	for i in hs.size():
 		var h: Node3D = hs[i]
 		lines.append("%2d.  %-4s %6d  %5.1f" % [i + 1, h.label, h.score, h.radius])
