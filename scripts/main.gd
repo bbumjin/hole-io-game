@@ -46,9 +46,27 @@ var winner_score := 0
 ## 종료 사유 — "time"(시간 만료) 또는 "eaten"(플레이어가 먹힘).
 var over_reason := ""
 
-## 재시작 때 판정 대상 8개를 원래 자리에 되살리기 위한 기록.
-## _ready 에서 한 번만 찍어 두고 이후에는 읽기만 한다.
-var _judge_set_spec: Array = []
+## §20. 판정 대상 8개(소형 6 + 대형 2). **판정 모드에서만** 스폰한다.
+##
+## 원래는 main.tscn 에 손으로 놓여 있었다. 그러나 이것들은 1a 의 스케일 기준용
+## 픽스처이지 게임의 일부가 아니다 — 노랑·파랑 큐브가 광장에 서서 **시작 화면에
+## 그대로 보였고**, 도시 에셋과 이질적이었다. §17 이 같은 이유로 `RefBox` 를 지운
+## 것과 같은 판단이다. 다만 이쪽은 1b·2·3b·5 판정의 시나리오가 통째로 이 8개 위에
+## 서 있으므로 지울 수는 없고, **판정에만 존재하도록** 옮겼다.
+##
+## 치수·자리를 바꾸면 안 된다. C2 는 "소형 6개를 다 먹어야 대형의 게이트가 열린다"
+## 를 시험하고(R 5 → 6.73, 게이트 3.03 > 대형 r 2.83), B1 은 MOVED_TO 가 이것들에서
+## 충분히 멀다는 전제 위에 있다(§17).
+const JUDGE_SET := [
+	["res://scenes/swallowable.tscn", "S0", Vector3(-6.0, 1.31, -8.0)],
+	["res://scenes/swallowable.tscn", "S1", Vector3(0.0, 1.31, -9.0)],
+	["res://scenes/swallowable.tscn", "S2", Vector3(6.0, 1.31, -9.0)],
+	["res://scenes/swallowable.tscn", "S3", Vector3(11.0, 1.31, -4.0)],
+	["res://scenes/swallowable.tscn", "S4", Vector3(-11.0, 1.31, -5.0)],
+	["res://scenes/swallowable.tscn", "S5", Vector3(3.0, 1.31, -14.0)],
+	["res://scenes/swallowable_big.tscn", "B0", Vector3(16.0, 2.0, -2.0)],
+	["res://scenes/swallowable_big.tscn", "B1", Vector3(14.0, 2.0, -12.0)],
+]
 
 ## 플레이어 점수. 구멍이 진실 원천이고 여기서는 되읽기만 한다
 ## (2단계 판정의 C3 가 이 이름으로 읽는다).
@@ -74,19 +92,29 @@ func _ready() -> void:
 	if arena:
 		spawn_ai()
 	cam.follow(hole, hole.radius, true)
-	record_judge_set()
+	spawn_judge_set()
 	time_left = round_seconds
 	update_hud()
 
 
-## 판정 대상(씬에 손으로 놓은 8개)의 원본 씬과 위치를 기록한다.
-## restart() 가 이것으로 되살린다 — 삼켜져 free 된 것은 되돌릴 방법이 없다.
-func record_judge_set() -> void:
+## 판정 대상 8개를 규격대로 세운다. **판정 모드가 아니면 아무것도 만들지 않는다** —
+## 게임에는 이 픽스처가 존재하지 않는다.
+##
+## `judging` 은 Judge._ready 가 Main._ready 보다 먼저(자식 → 부모) 세워 두므로
+## 여기서 읽을 수 있다. 판정 플래그 없이 실행하면 Judge 는 아무 일도 하지 않고
+## 이 함수도 빈손으로 돌아간다.
+##
+## _ready 와 restart() 가 **같은 함수**를 부른다. 둘 중 하나만 조건을 걸면
+## "게임에서는 없는데 재시작하면 나타난다" 가 된다.
+func spawn_judge_set() -> void:
 	var box := get_node_or_null("Swallowables")
-	if box == null:
+	if box == null or not judging:
 		return
-	for c in box.get_children():
-		_judge_set_spec.append([c.scene_file_path, c.name, (c as Node3D).transform])
+	for spec in JUDGE_SET:
+		var n: Node3D = load(spec[0]).instantiate()
+		n.name = spec[1]
+		box.add_child(n)
+		n.position = spec[2]
 
 
 ## AI 구멍을 원점 둘레에 고르게 배치한다. 위치를 난수로 뽑지 않는 이유는
@@ -211,11 +239,7 @@ func restart() -> void:
 	if box != null:
 		for c in box.get_children():
 			c.free()
-		for spec in _judge_set_spec:
-			var n: Node3D = load(spec[0]).instantiate()
-			n.name = spec[1]
-			box.add_child(n)
-			n.transform = spec[2]
+	spawn_judge_set()
 
 	state = State.PLAYING
 	time_left = round_seconds

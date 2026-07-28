@@ -1367,6 +1367,7 @@ func run_judge_3b() -> void:
 ## T4: 승자가 최고 점수 구멍인가
 ## T5: 재시작이 초기 상태를 복원하는가
 ## T6: 플레이어가 먹히면 그 자리에서 판이 끝나는가
+## T7: 판정 픽스처 8개가 게임에는 존재하지 않는가 (§20)
 func run_judge_5() -> void:
 	if not setup():
 		get_tree().quit(1)
@@ -1450,6 +1451,9 @@ func run_judge_5() -> void:
 	# --- T5: 재시작 복원 ---
 	var city: Node3D = _main.get_node("City")
 	var fp0: String = city.fingerprint(city.plan(city.city_seed))
+	# T5 는 **판정 모드의** 재시작을 본다. §20 이후 픽스처 8개는 판정 모드에서만
+	# 스폰되므로, 앞의 시나리오가 내려 둔 플래그를 여기서 다시 올려야 한다.
+	_main.judging = true
 	_main.restart()
 	await get_tree().process_frame
 	var hs: Array = _reg.holes()
@@ -1469,15 +1473,41 @@ func run_judge_5() -> void:
 		% [hs.size(), RESTART_HOLES, pf(radii_ok), pf(score_ok), props, RESTART_PROPS,
 		   jset, _main.state, _main.time_left])
 
+	# --- T7: 판정 픽스처는 게임에 존재하지 않는다 (§20) ---
+	# 두 갈래로 회귀할 수 있어 둘 다 막는다.
+	#   ① 씬에 손으로 다시 놓는다 → main.tscn 을 **파일로 열어** Swallowables 아래
+	#      노드 수를 센다. 실행 중의 노드를 세면 판정 모드에서 스폰된 8개와 구별할
+	#      수 없어 이 회귀를 영원히 못 잡는다.
+	#   ② 스폰 조건을 없앤다 → 게임 모드로 재시작해 픽스처가 0 인지 본다.
+	#      도시는 그대로여야 한다 — 제거가 픽스처에만 닿았는지 함께 묻는다.
+	var authored := 0
+	var st: SceneState = (load("res://scenes/main.tscn") as PackedScene).get_state()
+	for i in st.get_node_count():
+		# SceneState 의 경로는 루트 상대라 앞에 "./" 가 붙는다("./Swallowables/S0").
+		# 이 접두사를 빼먹은 첫 판은 **주입한 픽스처를 못 잡는 위약**이었다 — 고장
+		# 주입이 아니었으면 "0 개" 라는 통과 로그를 그대로 믿었을 것이다.
+		var p := str(st.get_node_path(i)).trim_prefix("./")
+		if p.begins_with("Swallowables/"):
+			authored += 1
+			print("JUDGE 5 T7 씬에 픽스처가 남아 있다: %s" % p)
+	_main.judging = false
+	_main.restart()
+	await get_tree().process_frame
+	var jset_play: int = get_tree().get_nodes_in_group("judge_set").size()
+	var props_play: int = city.get_child_count()
+	var t7: bool = authored == 0 and jset_play == 0 and props_play == RESTART_PROPS
+	print("JUDGE 5 T7: 씬에 놓인 픽스처=%d 게임 재시작 후 픽스처=%d 도시프롭=%d(기대 %d)"
+		% [authored, jset_play, props_play, RESTART_PROPS])
+
 	# --- T6: 플레이어가 먹히면 그 자리에서 끝난다 ---
 	var t6r := await judge_player_eaten()
 	var t6: bool = bool(t6r["over"]) and str(t6r["reason"]) == "eaten"
 	print("JUDGE 5 T6: state=%d reason=%s" % [t6r["state"], t6r["reason"]])
 
 	_main.judging = true
-	var ok: bool = t1 and t2 and t3 and t4 and t5 and t6
-	print("JUDGE 5 T1=%s T2=%s T3=%s T4=%s T5=%s T6=%s -> %s"
-		% [pf(t1), pf(t2), pf(t3), pf(t4), pf(t5), pf(t6), ("PASS" if ok else "FAIL")])
+	var ok: bool = t1 and t2 and t3 and t4 and t5 and t6 and t7
+	print("JUDGE 5 T1=%s T2=%s T3=%s T4=%s T5=%s T6=%s T7=%s -> %s"
+		% [pf(t1), pf(t2), pf(t3), pf(t4), pf(t5), pf(t6), pf(t7), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
