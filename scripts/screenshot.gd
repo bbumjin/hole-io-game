@@ -22,11 +22,18 @@ const HOVER_FRAMES := 150                          # C2: 큰 오브젝트 위에
 # 자기 값끼리 일치해 그대로 통과한다(1a~2단계에서 여섯 번 밟은 함정).
 const SPEC_GROUND_HALF := 224.0                     # 지면 반폭 (표본이 지면 밖으로 나가지 않게)
 const SPEC_PITCH := 32.0                           # 도로 중심선 간격
-const SPEC_ROAD_HALF := 4.0                        # 아스팔트 반폭
-const SPEC_CURB_HALF := 6.0                        # 보도 바깥 경계 반폭
+const SPEC_ROAD_HALF := 4.0                        # 일반 도로 아스팔트 반폭
+const SPEC_CURB_HALF := 6.0                        # 일반 도로 보도 바깥 경계 반폭
 const SPEC_LANE_HALF := 0.30                       # 중앙선 반폭 (가장 가는 특징)
 const SPEC_CROSS_W := 1.6                          # 횡단보도 띠 폭
 const SPEC_CROSS_PITCH := 1.2                      # 횡단보도 줄무늬 주기
+# --- 도로 위계 규격 (§18) --------------------------------------------------
+# 아스팔트 반폭이 선 인덱스의 함수가 됐다. 판정기는 그 **함수를** 따로 들고 있어야
+# 한다 — 셰이더의 boul_* uniform 을 읽으면 위계를 지운 빌드가 자기 값끼리 일치해
+# 그대로 통과한다. 표본 좌표가 전부 여기서 나온다.
+const SPEC_BOUL_EVERY := 3                         # k mod 3 == 0 인 중심선이 대로
+const SPEC_BOUL_HALF := 6.5                        # 대로 아스팔트 반폭
+const SPEC_LANE_GAP := 0.75                        # 대로 이중 중앙선의 중심 오프셋
 const SURF_DIFF_MIN := 0.05                        # D1: 인접 표면 휘도차 하한
 const PERIOD_TOL := 0.05                           # D3: 다른 블록에서 같은 표면의 휘도 허용 편차
 const CROSS_GROUPS_MIN := 3                        # D2: 횡단보도 띠에서 세어야 할 엣지 그룹 수
@@ -36,7 +43,12 @@ const PROBE_HOLE_K := 1.6                          # 표본이 구멍 중심에�
 # 노면표시가 서브픽셀이 되어 사라지는 것은 결함이 아니라 셰이더의 정상적인 페이드다
 # (실측: 64m 지점의 중앙선 휘도 = 아스팔트와 완전히 동일). 폭은 판정기의 SPEC 로
 # 계산하므로 중앙선을 아예 안 그린 빌드도 이 필터를 그대로 통과해 D1 에서 걸린다.
-const LANE_MIN_PX := 3.0
+## 3.0 은 **부풀려진 폭**을 기준으로 잡힌 값이었다(lane_width_px 참조). 직교 성분으로
+## 바로잡자 같은 블록이 3.1 → 2.99 로 내려가 기존 지점의 후보가 전부 사라졌다 —
+## 기준을 실측으로 재보정한다. 근거 두 점: §12 가 기록한 "뭉개져 판독 불가" 는 2.3px 이고,
+## 2.8px 에서 셰이더 fade 는 0.41 이라 중앙선 휘도가 아스팔트보다 0.17 높다
+## (SURF_DIFF_MIN 0.05 의 3.4배 여유). 그 사이에 둔다.
+const LANE_MIN_PX := 2.8
 # --- 3b 도시 배치 규격 ---------------------------------------------------
 const SPEC_PLAZA_R := 26.0                         # E6: 판정 시나리오용 빈 광장 반경
 ## 게임의 시작 반경. T5(재시작 복원)와 4a 자유 실행의 기준점이다.
@@ -48,6 +60,10 @@ const SPEC_START_R := 1.5
 ## "시작 반경이 얼마인가" 가 아니므로, 픽스처를 고정하는 편이 옳다.
 const FIXTURE_R := 5.0
 const MIN_PROPS := 300                             # E1: 도시가 실제로 생성됐는가
+## E7: 대로 규격에서만 가능한 자리에 선 프롭의 하한. 실측값의 절반 언저리로 잡는다
+## (§18 의 계측표 참조). 위계를 배치에서 지운 빌드는 0 이 되므로 여유는 넉넉하다.
+const MIN_BOUL_ROAD := 230                         # 실측 472
+const MIN_BOUL_WALK := 320                         # 실측 645
 const MIN_ALBEDOS := 12                            # E1: 단색 팔레트가 실제로 다양한가
 const GROUND_TOL := 0.05                           # E5: 접지 허용 오차(월드 단위)
 const TILT_TOL := 0.02                             # E5: 직립 허용 기울기(라디안)
@@ -82,21 +98,36 @@ const ROUND_TEST_FRAMES := 600                     # T1: 그 라운드를 덮고
 const TIMER_TOL := 0.25                            # T1: 판정기 시계와의 허용 오차(초)
 const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고정을 확인하는 프레임
 const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 수 (플레이어 + AI 5)
-const RESTART_PROPS := 3832                        # T5: 재시작 후 도시 프롭 수 (시드 고정)
+const RESTART_PROPS := 3804                        # T5: 재시작 후 도시 프롭 수 (시드 고정)
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
 
 # --- 3c 성능 예산 ---------------------------------------------------------
-const PERF_SPOT := Vector3(-48.0, 0.0, -48.0)      # 도시가 빽빽한 지점
+## 도시가 빽빽한 지점. **대로에 접한** 블록 중앙이어야 한다 — 구 지점 (-48, -48) 은
+## 대로 선(0, ±96) 어디에도 안 접해서, 대로 주변에서 늘어난 차량 밀도·드로우콜을
+## 성능 판정이 한 번도 보지 못한다. (-48, -80) 은 z = -96 대로에 붙어 있다.
+const PERF_SPOT := Vector3(-48.0, 0.0, -80.0)
 const PERF_FRAMES := 300
 const FRAME_BUDGET_MS := 16.67                     # 60fps
 const OVERLAP_EPS := 0.02                          # E3: SAT 수치 여유
 # D5: 구멍을 옮겨 재판정할 규격 지점 (오브젝트가 없는 -x/+z 쪽)
+# 앞의 셋에서 `road`·`block` 은 실측상 **인덱스 0 대로(z=0)** 를 표본한다(로그의 k·등급
+# 참조). 대로 표본이 실제로 잡혔는가는 D6 가 단언하므로 우연에 기대지 않는다.
+#
+# 카메라가 구멍 +z 뒤 16.5m 에 있고 probe_blocks 가 sz = -1 을 먼저 시도하므로,
+# 구멍을 대로의 +z 쪽 블록 안에 두면 최근접 블록의 sz = -1 도로가 곧 그 대로가 된다.
+# 대로가 카메라에서 32.5m 여야 한다 — 16m 더 멀면 중앙선이 2.2px 로 뭉개져
+# LANE_MIN_PX 에 걸리고, 구멍을 블록 **정중앙**에 두면 블록 표본이 구멍과 겹쳐
+# "구멍근접" 으로 전부 탈락한다(둘 다 실측으로 밟았다).
 const CITY_SPOTS := {
 	"inter": Vector3(-32.0, 0.0, 32.0),            # 교차로 중심 (|ux|=0, |uz|=0)
 	"road": Vector3(-32.0, 0.0, 16.0),             # 도로 위·교차로 밖 (|ux|=0, |uz|=16)
 	"block": Vector3(-16.0, 0.0, 16.0),            # 블록 중앙 (|ux|=16, |uz|=16)
+	# 인덱스 3 대로(z=96). 위상이 어긋난 빌드(boul_every 3 → 4)는 여기를 일반 도로로
+	# 그려 D1 이 탈락한다 — 인덱스 0 은 3 으로도 4 로도 대로라 위상을 검출하지 못한다.
+	# 덤으로 구멍이 x=0 대로 위에 있어 D5 가 "넓은 도로도 똑같이 뚫리는가" 를 본다.
+	"boul_far": Vector3(0.0, 0.0, 112.0),
 }
 
 var _main: Node3D
@@ -107,6 +138,43 @@ var _clamped := false                              # px() 가 화면 밖을 잘�
 var _was_falling := {}                             # B3: 낙하 전환을 한 번만 채점한다
 var _r_cache := {}                                 # true_radius 캐시(get_debug_mesh 는 비싸다)
 var _blocks_ok := {}                               # D3: D1·D2 를 통과한 서로 다른 블록
+var _boul_ok := false                              # D6: 대로를 표본해 D1·D2 를 통과했는가
+
+
+# --- 도로 위계 규격 파생 (§18) ---------------------------------------------
+# 셰이더·city.gd 와 같은 함수를 판정기가 **따로** 들고 있다.
+
+## 좌표 → 가장 가까운 도로 중심선의 인덱스. 셰이더의 floor((p + hp)/pitch) 와
+## 같은 식이어야 한다 — round() 는 0.5 를 0에서 멀어지게 반올림해 블록 정중앙의
+## 음수 쪽(w = -16, -48 …)에서 한 칸 어긋나고, 그러면 판정기와 셰이더가 서로 다른
+## 선을 대로로 본다.
+func spec_line_index(w: float) -> int:
+	return floori(w / SPEC_PITCH + 0.5)
+
+
+func spec_is_boulevard(k: int) -> bool:
+	return posmod(k, SPEC_BOUL_EVERY) == 0
+
+
+func spec_road_half(k: int) -> float:
+	return SPEC_BOUL_HALF if spec_is_boulevard(k) else SPEC_ROAD_HALF
+
+
+## 보도 폭은 위계와 무관하게 일정하다.
+func spec_curb_half(k: int) -> float:
+	return spec_road_half(k) + (SPEC_CURB_HALF - SPEC_ROAD_HALF)
+
+
+## 차량이 넘어설 수 없는 중앙 분리대의 안쪽 경계.
+func spec_median(k: int) -> float:
+	return (SPEC_LANE_GAP + SPEC_LANE_HALF) if spec_is_boulevard(k) else 0.0
+
+
+## 중앙선 **도색**의 중심까지의 거리. 대로는 중앙선이 ±SPEC_LANE_GAP 두 줄로 갈라져
+## |u| = 0 이 아스팔트다 — 여기를 안 옮기면 정상 빌드가 D1 에서 탈락한다.
+## (city.gd 의 LANE 자리는 주행 차선 중심이라 완전히 다른 양이다. 이름을 구분한다.)
+func spec_lane_mark_u(k: int) -> float:
+	return SPEC_LANE_GAP if spec_is_boulevard(k) else 0.0
 
 
 func _ready() -> void:
@@ -496,22 +564,31 @@ func check_pipeline() -> bool:
 ## road·block 지점에서 유효 블록 0개). 규격은 네 변이 대칭이므로 양쪽을 다 시도한다.
 ## 좌표를 전부 SPEC_* 에서 계산하므로, 셰이더가 다른 주기·폭을 쓰면 표본이
 ## 엉뚱한 표면에 떨어져 D1 이 무너진다 — 그것이 이 기준의 검출력이다.
+## 표본 대상은 z = b.z + sz*half 의 도로다. **sz 의 부호가 곧 그 도로의 인덱스를
+## 결정하므로 한쪽으로 고정하지 않는다** — 고정하면 대로 옆 블록에서 규격 좌표가
+## 엉뚱한 등급으로 계산되어 정상 빌드가 탈락한다.
 func surf_points(b: Vector3, sz: float) -> Array:
 	var half := SPEC_PITCH * 0.5
+	var z := b.z + sz * half
+	var k := spec_line_index(z)
+	var rh := spec_road_half(k)
+	var ch := spec_curb_half(k)
 	return [
-		b,                                                                          # 블록   |uz| = 16
-		b + Vector3(0, 0, sz * (half - (SPEC_ROAD_HALF + SPEC_CURB_HALF) * 0.5)),   # 보도   |uz| = 5
-		b + Vector3(0, 0, sz * (half - SPEC_ROAD_HALF * 0.5)),                      # 아스팔트 |uz| = 2
-		b + Vector3(0, 0, sz * half),                                               # 중앙선 |uz| = 0
+		b,                                                       # 블록   |uz| = 16
+		Vector3(b.x, 0.0, z - sz * (rh + ch) * 0.5),             # 보도   일반 5   / 대로 7.5
+		Vector3(b.x, 0.0, z - sz * rh * 0.5),                    # 아스팔트 일반 2   / 대로 3.25
+		Vector3(b.x, 0.0, z - sz * spec_lane_mark_u(k)),         # 중앙선 일반 0   / 대로 0.75
 	]
 
 
 ## 횡단보도 띠를 가로지르는 선분의 두 끝점.
 ## (sx, sz) 가 가리키는 교차로의 바깥쪽 — |ux| = road_half + cross_w/2 (띠 안),
 ## |uz| <= 3 (도로 위). 점 하나로는 줄무늬의 틈에 떨어질 수 있으므로 선분으로 본다.
+## 띠의 위치는 **가로지르는 x 선의 등급**에서 나온다(sx 부호가 그 인덱스를 정한다).
 func cross_segment(b: Vector3, sx: float, sz: float) -> Array:
 	var half := SPEC_PITCH * 0.5
-	var x := b.x + sx * (half - (SPEC_ROAD_HALF + SPEC_CROSS_W * 0.5))
+	var rx := spec_road_half(spec_line_index(b.x + sx * half))
+	var x := b.x + sx * (half - (rx + SPEC_CROSS_W * 0.5))
 	var z := b.z + sz * half
 	return [Vector3(x, 0.0, z - 3.0), Vector3(x, 0.0, z + 3.0)]
 
@@ -543,13 +620,53 @@ func camera_focus() -> Vector3:
 
 
 ## 규격 중앙선의 화면 폭(픽셀). 구현체가 아니라 SPEC_LANE_HALF 로 계산한다.
+##
+## **선을 가로지르는 두 점의 화면 거리를 그대로 쓰면 안 된다.** 표본 블록이 카메라의
+## x 에서 벗어나면 그 화면 변위에 소실점 방향 성분 — 즉 **선을 따라가는 성분** — 이
+## 섞여 폭이 부풀려진다. 실측: 축상 블록은 3.1px(기하 계산과 일치)인데 32m 벗어난
+## 블록은 6.2px 로 찍혔고 실제 직교 폭은 3.9px 였다(1.6배). 그 상태의 LANE_MIN_PX 는
+## 가드로 작동하지 않는다 — 뭉개진 중앙선을 가진 블록을 그대로 통과시킨다.
+## 선 방향을 화면에서 직접 구해 그 **직교 성분만** 폭으로 센다.
 func lane_width_px(b: Vector3, sz: float) -> float:
 	var z := b.z + sz * SPEC_PITCH * 0.5
-	var a := Vector3(b.x, 0.0, z - SPEC_LANE_HALF)
-	var c := Vector3(b.x, 0.0, z + SPEC_LANE_HALF)
-	if _cam.is_position_behind(a) or _cam.is_position_behind(c):
-		return 0.0
-	return _cam.unproject_position(a).distance_to(_cam.unproject_position(c))
+	var c := z - sz * spec_lane_mark_u(spec_line_index(z))     # 실제 도색 위치
+	var a := Vector3(b.x, 0.0, c - SPEC_LANE_HALF)
+	var d := Vector3(b.x, 0.0, c + SPEC_LANE_HALF)
+	# 선 방향(도로는 x 축을 달린다). 짧으면 투영 오차에 묻히므로 넉넉히 잡는다.
+	var e := Vector3(b.x - 4.0, 0.0, c)
+	var f := Vector3(b.x + 4.0, 0.0, c)
+	for p in [a, d, e, f]:
+		if _cam.is_position_behind(p):
+			return 0.0
+	var dir := _cam.unproject_position(f) - _cam.unproject_position(e)
+	if dir.length() < 1e-6:
+		return _cam.unproject_position(a).distance_to(_cam.unproject_position(d))
+	var n := Vector2(-dir.y, dir.x).normalized()               # 화면에서 선에 직교
+	return absf((_cam.unproject_position(d) - _cam.unproject_position(a)).dot(n))
+
+
+## 중앙선의 휘도. 점 하나가 아니라 **줄 안을 훑는 짧은 선분의 최대값**으로 잰다.
+## px() 의 반올림(±0.5px)만 흡수하면 되므로 선분은 줄 반폭의 절반(±0.15m)이다.
+##
+## **선분을 넓히면 안 된다.** ±0.6m 로 잡았더니, 대로 표본(|u| = 0.75)의 선분이
+## |u| ∈ [0.15, 1.35] 까지 뻗어 **일반 중앙선 한 줄([-0.3, 0.3])의 가장자리를 주웠고**,
+## 대로에 한 줄만 그린 고장 빌드가 그대로 통과했다(실측: 주입 #2 가 PASS). 좁히자
+## 선분은 [0.60, 0.90] 이 되어 그 줄에서 1.6px 떨어진다 — 규격대로 아스팔트를 읽는다.
+func lane_lum(img: Image, b: Vector3, sz: float) -> float:
+	var z := b.z + sz * SPEC_PITCH * 0.5
+	var c := z - sz * spec_lane_mark_u(spec_line_index(z))
+	var a := Vector3(b.x, 0.0, c - SPEC_LANE_HALF * 0.5)
+	var d := Vector3(b.x, 0.0, c + SPEC_LANE_HALF * 0.5)
+	var mid := Vector3(b.x, 0.0, c)
+	if _cam.is_position_behind(a) or _cam.is_position_behind(d):
+		return lum_at(img, mid)
+	var line := sample_line(img, _cam.unproject_position(a), _cam.unproject_position(d))
+	if line.is_empty():
+		return lum_at(img, mid)          # 선분이 1픽셀 미만이면 점으로 되돌린다
+	var best := 0.0
+	for v in line:
+		best = maxf(best, float(v))
+	return best
 
 
 ## 표본 지점이 쓸 수 있는지. 못 쓰면 이유 문자열, 쓸 수 있으면 "" 를 돌려준다.
@@ -641,9 +758,11 @@ func judge_city(prefix: String, shot: Image, blocks: Array) -> bool:
 		var b: Vector3 = cand[0]
 		var sx: float = cand[1]
 		var sz: float = cand[2]
+		var k := spec_line_index(b.z + sz * SPEC_PITCH * 0.5)   # 표본한 도로의 인덱스
 		var l := []
 		for p in surf_points(b, sz):
 			l.append(lum_at(shot, p))
+		l[3] = lane_lum(shot, b, sz)                            # 중앙선만 선분 최대값으로
 		var seg: Array = cross_segment(b, sx, sz)
 		var groups := edge_groups_line(sample_line(shot,
 			_cam.unproject_position(seg[0]), _cam.unproject_position(seg[1])))
@@ -657,8 +776,12 @@ func judge_city(prefix: String, shot: Image, blocks: Array) -> bool:
 		d4 = d4 and b4
 		if b1 and b2:
 			_blocks_ok[Vector2i(roundi(b.x), roundi(b.z))] = true
-		print("JUDGE %scity b(%.0f,%.0f)s(%.0f,%.0f) block=%.4f curb=%.4f road=%.4f lane=%.4f cross=%d lanepx=%.1f D1=%s D2=%s D4=%s"
-			% [prefix, b.x, b.z, sx, sz, l[0], l[1], l[2], l[3], groups,
+			if spec_is_boulevard(k):
+				_boul_ok = true                                 # D6
+		print("JUDGE %scity b(%.0f,%.0f)s(%.0f,%.0f) k=%d %s block=%.4f curb=%.4f road=%.4f lane=%.4f cross=%d lanepx=%.1f D1=%s D2=%s D4=%s"
+			% [prefix, b.x, b.z, sx, sz, k,
+			   ("대로" if spec_is_boulevard(k) else "일반"),
+			   l[0], l[1], l[2], l[3], groups,
 			   lane_width_px(b, sz), pf(b1), pf(b2), pf(b4)])
 	if use.is_empty():
 		return true                       # 미적용 — 호출자가 allow_no_block 으로 허용했다
@@ -725,9 +848,17 @@ func run_judge_3() -> void:
 	# 휘도의 상등이 아니라 "분류가 재현되는가"로 본다. 먼 블록은 서브픽셀 페이드로
 	# 노면표시가 정당하게 흐려지므로 휘도 상등을 요구하면 정상 빌드가 탈락한다.
 	var d3 := _blocks_ok.size() >= 2
-	var all_ok := ok and d3
-	print("JUDGE 3 D5=%s D3=%s blocks_ok=%s -> %s"
-		% [pf(ok), pf(d3), str(_blocks_ok.keys()), ("PASS" if all_ok else "FAIL")])
+	# D6: 도로 위계가 **판정에 실제로 걸렸는가**. probe_blocks 는 sz 를 [-1, +1] 순으로
+	# 시도해 처음 유효한 하나에서 멈추고 judge_city 는 거리순 상위 2개만 보므로,
+	# 대로를 한 번도 표본하지 않은 채 D1 이 PASS 할 수 있다. 그러면 위계에 관한 모든
+	# 고장 주입이 조건부가 된다. 이 기준은 오늘의 고장을 잡는 것이 아니라 **내일의
+	# 커버리지 소실을 막는 가드**다 — 카메라·아트·지점이 바뀌어 대로가 표본에서
+	# 빠지면 여기서 즉시 드러난다.
+	var d6 := _boul_ok
+	var all_ok := ok and d3 and d6
+	print("JUDGE 3 D5=%s D3=%s D6=%s blocks_ok=%s -> %s"
+		% [pf(ok), pf(d3), pf(d6), str(_blocks_ok.keys()),
+		   ("PASS" if all_ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if all_ok else "FAIL"))
 	get_tree().quit(0 if all_ok else 1)
 
@@ -836,15 +967,19 @@ func abs_range(lo: float, hi: float) -> Vector2:
 ## E2: 프롭이 도로·보도·블록 중 **한 구역 안에 온전히** 들어가는가.
 ## 구역 경계는 판정기의 SPEC_* 로만 계산한다 — 카탈로그를 읽지 않으므로
 ## 배치 규격을 바꾼 빌드가 자기 값끼리 일치해 통과하는 일이 없다.
-func zone_of(pts: PackedVector2Array) -> String:
+## 프롭 발자국을 가장 가까운 도로 중심선 기준으로 정리한다. zone_of 와 E7 이 함께 쓴다.
+## 오브젝트가 한 주기보다 작으므로 이 기준에서는 mod 의 접힘을 걱정할 필요가 없다.
+## 인덱스는 셰이더와 같은 식(floor(w/P + 0.5))으로 뽑는다 — round() 는 블록 정중앙의
+## 음수 쪽에서 한 칸 어긋나 등급 판정이 갈린다.
+func footprint(pts: PackedVector2Array) -> Dictionary:
 	var c := Vector2.ZERO
 	for p in pts:
 		c += p
 	c /= float(pts.size())
-	# 가장 가까운 도로 중심선을 기준으로 편차를 잰다. 오브젝트가 한 주기보다
-	# 작으므로 이 기준에서는 mod 의 접힘을 걱정할 필요가 없다.
-	var cx: float = round(c.x / SPEC_PITCH) * SPEC_PITCH
-	var cz: float = round(c.y / SPEC_PITCH) * SPEC_PITCH
+	var kx := spec_line_index(c.x)
+	var kz := spec_line_index(c.y)
+	var cx := float(kx) * SPEC_PITCH
+	var cz := float(kz) * SPEC_PITCH
 	var xlo := INF
 	var xhi := -INF
 	var zlo := INF
@@ -854,16 +989,69 @@ func zone_of(pts: PackedVector2Array) -> String:
 		xhi = maxf(xhi, p.x - cx)
 		zlo = minf(zlo, p.y - cz)
 		zhi = maxf(zhi, p.y - cz)
-	var ax := abs_range(xlo, xhi)
-	var az := abs_range(zlo, zhi)
-	if az.y <= SPEC_ROAD_HALF or ax.y <= SPEC_ROAD_HALF:
+	return { "kx": kx, "kz": kz, "xlo": xlo, "xhi": xhi, "zlo": zlo, "zhi": zhi,
+		"ax": abs_range(xlo, xhi), "az": abs_range(zlo, zhi) }
+
+
+## 블록 구간에 온전히 들어가는가. lo/hi 는 인덱스 k 의 중심선 기준 편차다.
+## 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로(8.5 대 6.0) 가장 가까운 중심선
+## 하나로만 재면 반대쪽(대로 쪽) 보도 침범을 놓친다 — 두 경계선을 각각 본다.
+func in_block_span(k: int, lo: float, hi: float) -> bool:
+	if lo >= 0.0:
+		return lo >= spec_curb_half(k) and hi <= SPEC_PITCH - spec_curb_half(k + 1)
+	if hi <= 0.0:
+		return -hi >= spec_curb_half(k) and -lo <= SPEC_PITCH - spec_curb_half(k - 1)
+	return false                               # 중심선을 걸쳤다
+
+
+func zone_of(pts: PackedVector2Array) -> String:
+	var fp := footprint(pts)
+	var kx: int = fp["kx"]
+	var kz: int = fp["kz"]
+	var ax: Vector2 = fp["ax"]
+	var az: Vector2 = fp["az"]
+	var rx := spec_road_half(kx)
+	var rz := spec_road_half(kz)
+	# 차도는 세 조건을 전부 만족해야 한다: 아스팔트 안 · 중앙 분리대 밖 ·
+	# 교차로와 그 바깥 횡단보도 밖. 뒤의 둘은 §18 에서 추가한 배치 규칙이고,
+	# 판정기가 이것을 안 들면 그 규칙을 지운 빌드를 아무도 안 잡는다.
+	if (az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W) \
+			or (ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W):
 		return "road"
-	if (az.x >= SPEC_ROAD_HALF and az.y <= SPEC_CURB_HALF and ax.x >= SPEC_ROAD_HALF) \
-			or (ax.x >= SPEC_ROAD_HALF and ax.y <= SPEC_CURB_HALF and az.x >= SPEC_ROAD_HALF):
+	if (az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx) \
+			or (ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz):
 		return "walk"
-	if ax.x >= SPEC_CURB_HALF and az.x >= SPEC_CURB_HALF:
+	if in_block_span(kx, fp["xlo"], fp["xhi"]) and in_block_span(kz, fp["zlo"], fp["zhi"]):
 		return "block"
 	return ""                                  # 어느 구역에도 온전히 안 들어간다
+
+
+## E7: 이 프롭이 **일반 도로 규격에서는 기하적으로 불가능한 자리**에 있는가.
+## 차도 |u| > 4.0 / 보도 |u| > 6.0 은 대로에서만 성립한다. 카탈로그를 읽지 않고
+## zone_of 와 같은 기하만 쓴다.
+## 돌려주는 것은 ["road"|"walk"|"", 대역] — 대역은 차량이 중앙 분리대 안쪽 띠에
+## 있으면 0, 바깥 띠면 1 이다(E7b 가 자리 다양성을 본다).
+func boulevard_slot(pts: PackedVector2Array) -> Array:
+	var fp := footprint(pts)
+	var kx: int = fp["kx"]
+	var kz: int = fp["kz"]
+	var ax: Vector2 = fp["ax"]
+	var az: Vector2 = fp["az"]
+	var rx := spec_road_half(kx)
+	var rz := spec_road_half(kz)
+	if az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W \
+			and spec_is_boulevard(kz) and az.y > SPEC_ROAD_HALF:
+		return ["road", 1 if az.x > SPEC_ROAD_HALF else 0]
+	if ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W \
+			and spec_is_boulevard(kx) and ax.y > SPEC_ROAD_HALF:
+		return ["road", 1 if ax.x > SPEC_ROAD_HALF else 0]
+	if az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx \
+			and spec_is_boulevard(kz) and az.y > SPEC_CURB_HALF:
+		return ["walk", 0]
+	if ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz \
+			and spec_is_boulevard(kx) and ax.y > SPEC_CURB_HALF:
+		return ["walk", 0]
+	return ["", 0]
 
 
 ## E1~E6. 도시 배치 자체를 판정한다.
@@ -926,6 +1114,8 @@ func run_judge_3b() -> void:
 	var e5_bad := 0
 	var e6_bad := 0
 	var zone_n := {"road": 0, "walk": 0, "block": 0}
+	var boul_n := {"road": 0, "walk": 0}
+	var boul_bands := {}
 	for o in props:
 		var n3 := o as Node3D
 		if n3 == null:
@@ -942,6 +1132,12 @@ func run_judge_3b() -> void:
 				print("JUDGE 3b E2 구역 이탈: %s at %s" % [n3.name, str(n3.position)])
 		else:
 			zone_n[z] += 1
+		# E7: 일반 도로 규격에서는 불가능한 자리에 선 프롭을 따로 센다.
+		var bs := boulevard_slot(bx["pts"])
+		if not str(bs[0]).is_empty():
+			boul_n[str(bs[0])] += 1
+			if str(bs[0]) == "road":
+				boul_bands[int(bs[1])] = true
 		# 접지는 **보이는 메시**로도 재야 한다. 콜라이더만 재면 피벗 보정을 지운
 		# 빌드가 통과한다 — 콜라이더는 제자리이고 모델만 뜨거나 박히기 때문이다.
 		var why5 := ""
@@ -1001,15 +1197,26 @@ func run_judge_3b() -> void:
 	var e3: bool = e3_bad == 0
 	# E5 는 정지 판정도 포함한다: 도시는 구멍이 닿기 전까지 스스로 움직이지 않는다.
 	var e5: bool = e5_bad == 0 and moved <= SETTLE_MOVE_TOL and tilted <= TILT_TOL
-	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6
+	# E7: 도로 위계가 **배치에도** 반영됐는가. zone_of 는 카탈로그 zone 을 안 읽으므로,
+	# walk_center_at·lane_slots 를 상수로 되돌린 빌드는 프롭이 규격 밖이 되어 add_slot 이
+	# 조용히 거절할 뿐 어떤 기준도 안 걸린다(총 프롭 수만 줄고 그건 RESTART_PROPS 갱신에
+	# 묻힌다). 개수 하한만으로도 부족하다 — 자리 하나를 빼는 정도의 회귀는 비율로 안 걸린다.
+	#   E7a: 일반 도로 규격에서 기하적으로 불가능한 자리(차도 |u|>4.0, 보도 |u|>6.0)에
+	#        프롭이 하한 이상 있는가. 위계를 지우면 0 이 된다.
+	#   E7b: 대로 차도 위 프롭이 중앙 분리대 안쪽 띠와 바깥 띠에 **둘 다** 있는가.
+	var e7: bool = boul_n["road"] >= MIN_BOUL_ROAD and boul_n["walk"] >= MIN_BOUL_WALK \
+		and boul_bands.size() >= 2
+	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7
 	print("JUDGE 3b props=%d catalog=%d albedos=%d zones road=%d walk=%d block=%d"
 		% [props.size(), cat.size(), albedos.size(),
 		   zone_n["road"], zone_n["walk"], zone_n["block"]])
+	print("JUDGE 3b E7 대로전용자리: road=%d(>=%d) walk=%d(>=%d) 대역=%d(>=2)"
+		% [boul_n["road"], MIN_BOUL_ROAD, boul_n["walk"], MIN_BOUL_WALK, boul_bands.size()])
 	print("JUDGE 3b bad: E1=%d E2=%d E3=%d E5=%d E6=%d judge_set=%d fp=%d/%d settle_move=%.4f settle_tilt=%.4f"
 		% [e1_bad, e2_bad, e3_bad, e5_bad, e6_bad, jset, f1.length(), f3.length(),
 		   moved, tilted])
-	print("JUDGE 3b E1=%s E2=%s E3=%s E4=%s E5=%s E6=%s -> %s"
-		% [pf(e1), pf(e2), pf(e3), pf(e4), pf(e5), pf(e6),
+	print("JUDGE 3b E1=%s E2=%s E3=%s E4=%s E5=%s E6=%s E7=%s -> %s"
+		% [pf(e1), pf(e2), pf(e3), pf(e4), pf(e5), pf(e6), pf(e7),
 		   ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)

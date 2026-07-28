@@ -40,8 +40,8 @@ $GODOT = "...\Godot_v4.7.1-stable_win64_console.exe"
 & $GODOT --path . -- --judge      # 1a  정지 구멍 착시 (H1~H10)
 & $GODOT --path . -- --judge1b    # 1b  이동 + 흡입 물리 (B1~B4)
 & $GODOT --path . -- --judge2     # 2   성장 · 크기 게이트 · 스코어 (C1~C4)
-& $GODOT --path . -- --judge3     # 3a  도로 셰이더 · 도시 격자 (D1~D5)
-& $GODOT --path . -- --judge3b    # 3b  절차적 배치 (E1~E6)
+& $GODOT --path . -- --judge3     # 3a  도로 셰이더 · 도시 격자 (D1~D6, 도로 위계 포함)
+& $GODOT --path . -- --judge3b    # 3b  절차적 배치 (E1~E7)
 & $GODOT --path . -- --judge3c    # 3c  성능 (F1~F2) — 단독으로 돌린다
 & $GODOT --path . -- --judge4     # 4a  AI 경쟁 · 포식 (G1~G7)
 & $GODOT --path . -- --judge5     # 4b  게임 루프 (T1~T6)
@@ -51,7 +51,7 @@ $GODOT = "...\Godot_v4.7.1-stable_win64_console.exe"
 
 **판정 기준은 만든 즉시 고장을 주입해 실제로 탈락하는지 확인한다.** 정상 빌드가 통과하는
 것만 본 기준은 위약이다 — 이 프로젝트에서 그 함정을 여러 번 밟았고 전부 PLAN.md 에 남겼다.
-누적 고장 주입 43종을 전부 검출한다.
+누적 고장 주입 54종을 전부 검출한다.
 
 **판정기는 구현체를 믿지 않는다.** 성장 계수·격자 주기·포식 규칙 같은 규격 값을 `SPEC_*`
 상수로 따로 들고 있다. 게임 값을 바꾸면 규격도 함께 고쳐야 하며, 그러지 않으면 판정이

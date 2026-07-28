@@ -13,14 +13,26 @@ const SWALLOWABLE := preload("res://scripts/swallowable.gd")
 const PITCH := 32.0
 const ROAD_HALF := 4.0
 const CURB_HALF := 6.0
+## 중앙선 반폭. 셰이더의 lane_half 와 같은 값 — 대로의 중앙 분리대 경계를 여기서 낸다.
+const LANE_HALF := 0.30
+## 횡단보도 띠 폭. 셰이더의 cross_w 와 같은 값 — 그 위에 차를 세우지 않으려고 쓴다.
+const CROSS_W := 1.6
 ## 건물·녹지는 커브에서 이만큼 물러난다. 판정기가 |u| = CURB_HALF + 1 에서
 ## 블록 지면을 표본하므로, 이 여백이 없으면 표본이 건물 위에 떨어진다.
 const BLOCK_SETBACK := 0.8
-## 보도 프롭의 중심선. 도로와 커브의 한가운데다.
-const WALK_U := (ROAD_HALF + CURB_HALF) * 0.5
-## 차선 중심. 도로 폭 8 의 2차선.
-const LANE_U := ROAD_HALF * 0.5
 const GROUND_HALF := 224.0
+
+# --- 도로 위계 (§18) -------------------------------------------------------
+## BOULEVARD_EVERY 번째 중심선(k mod 3 == 0)은 대로다. 지면 ±224(인덱스 -7..7)에서
+## x·z = 0, ±96, ±192 각 다섯 줄이다. 게임 시야가 구멍 기준 약 55m 이므로 96m 주기면
+## 이동 중에 대로가 규칙적으로 걸린다 — 128m(4번째)는 지도 절반에서 한 번도 안 보인다.
+const BOULEVARD_EVERY := 3
+const BOUL_HALF := 6.5
+## 보도 폭. 위계와 무관하게 일정하다 — 대로는 아스팔트만 넓어진다.
+const SIDEWALK_W := CURB_HALF - ROAD_HALF
+## 대로 이중 중앙선의 중심 오프셋. 두 줄 바깥 가장자리(LANE_GAP + LANE_HALF)가
+## 중앙 분리대의 경계이고 차량은 그 안으로 들어오지 못한다.
+const LANE_GAP := 0.75
 ## 판정 시나리오(1b·2단계의 흡입·성장)가 도는 영역. 여기에는 아무것도 생성하지 않는다.
 ## 이 광장이 없으면 도시 오브젝트가 시나리오에 섞여 들어 C1·C3 의 기대값이 깨진다.
 const PLAZA_R := 26.0
@@ -125,46 +137,137 @@ func block_centers() -> Array:
 	return out
 
 
+# --- 도로 위계 파생 (§18) ---------------------------------------------------
+# 반폭이 선 인덱스의 함수가 됐다. 셰이더·판정기가 같은 함수를 각자 들고 있다.
+
+## 좌표 → 가장 가까운 도로 중심선의 인덱스.
+## `roundi(w / PITCH)` 를 쓰면 안 된다 — 셰이더는 `floor((p + hp) / pitch)` 로 뽑는데
+## round 는 0.5 를 0에서 멀어지게 반올림해 블록 정중앙의 음수 쪽(w = -16, -48 …)에서
+## 한 칸 어긋난다. 그러면 두 규격이 **서로 다른 선을 대로로 그린다.**
+static func line_index(w: float) -> int:
+	return floori(w / PITCH + 0.5)
+
+
+static func is_boulevard(k: int) -> bool:
+	return posmod(k, BOULEVARD_EVERY) == 0
+
+
+static func road_half_at(k: int) -> float:
+	return BOUL_HALF if is_boulevard(k) else ROAD_HALF
+
+
+static func curb_half_at(k: int) -> float:
+	return road_half_at(k) + SIDEWALK_W
+
+
+## 보도 프롭의 중심선. 도로와 커브의 한가운데다.
+static func walk_center_at(k: int) -> float:
+	return (road_half_at(k) + curb_half_at(k)) * 0.5
+
+
+## 차량이 넘어설 수 없는 안쪽 경계. 일반 도로의 한 줄은 노면 위 표시일 뿐이라 0 이고,
+## 대로의 두 줄 사이는 중앙 분리대라 차량이 들어가면 안 된다.
+static func median_at(k: int) -> float:
+	return (LANE_GAP + LANE_HALF) if is_boulevard(k) else 0.0
+
+
+## 차선 자리 [오프셋, 최소 반extent]. **순서가 곧 우선순위다** — fits() 가 뒤에 오는
+## 자리를 막는다(이웃 간격 1.3625 는 승용차 두 대의 폭합보다 좁다).
+## 일반 도로는 편도 주행 띠 [0, 4.0] 을 2등분 → ±2.0 (옛 LANE_U 와 같은 값, 회귀 없음).
+## 대로는 띠 [1.05, 6.5](폭 5.45)를 4등분한 세 지점이다. 2차선으로 등분하면 차선 반폭이
+## 1.3625 로 **일반 도로의 유효 반폭 2.0 보다 좁아져** 버스(폭반값 1.71)·스쿨버스(1.73)·
+## 구급차(1.49)가 대로에서 전멸한다 — 가장 넓은 도로가 가장 큰 차를 거절하는 규격 오류다.
+## 가운데 자리는 띠의 한가운데라 반extent 2.725 까지 받는다. 그 자리를 **먼저** 시도하고
+## min_ext 를 걸어 큰 차 전용으로 둔다(plan_block 의 min_ext 3.5 와 같은 근거·같은 도구).
+## min_ext 는 긴 축과 비교되므로 2.5 는 Ambulance(3.00)·Bus(4.00)·SchoolBus(4.24)만 연다.
+## 가운데가 비면 안쪽 2.4125 와 바깥 5.1375 가 둘 다 들어간다(간격 2.725).
+static func lane_slots(k: int) -> Array:
+	var m := median_at(k)
+	var w := road_half_at(k) - m
+	if not is_boulevard(k):
+		return [[-(m + w * 0.5), 0.0], [m + w * 0.5, 0.0]]
+	return [[-(m + w * 0.5), 2.5], [m + w * 0.5, 2.5],
+		[-(m + w * 0.25), 0.0], [m + w * 0.25, 0.0],
+		[-(m + w * 0.75), 0.0], [m + w * 0.75, 0.0]]
+
+
+## 도로 축 방향의 정차 자리. 교차 도로가 넓어지면 교차로·횡단보도도 넓어지므로
+## 자리를 안쪽으로 당긴다. 실제 침범 여부는 in_zone 이 프롭의 extent 로 정확히 재고,
+## 이 목록은 "대부분의 차가 들어갈 수 있는 자리" 를 고르는 역할만 한다.
+##   일반 교차: 교차로+횡단보도 5.6 → t=±8 이면 여유 8.0 (승용차 반길이 2.11 통과)
+##   대로 교차: 8.1 → t=±5 이면 여유 11.0 (승용차·구급차 통과)
+## 옛 t=±10 은 여유가 6.0 뿐이라 버스(반길이 4.24)가 **일반 교차로 안에 서 있었다** —
+## 선재 결함이었고 어떤 기준도 잡지 않았다.
+static func road_slots(k_cross: int) -> Array:
+	if is_boulevard(k_cross) or is_boulevard(k_cross + 1):
+		return [-5.0, -2.5, 2.5, 5.0]
+	return [-8.0, -3.5, 3.5, 8.0]
+
+
+## 블록의 사용 가능 구간 [lo, hi]. 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로
+## (8.5 대 6.0) 가장 가까운 중심선 하나로 재면 대로 쪽 보도를 침범한다.
+static func block_span(w: float) -> Vector2:
+	var k := floori(w / PITCH)
+	return Vector2(float(k) * PITCH + curb_half_at(k) + BLOCK_SETBACK,
+		float(k + 1) * PITCH - curb_half_at(k + 1) - BLOCK_SETBACK)
+
+
 ## 블록 내부. 큰 건물 한 채를 먼저 시도하고 남는 자리를 작은 것으로 채운다.
 ## 자리가 되는지는 add_slot 이 판단한다 — 레이아웃마다 기하를 손으로 맞추지 않는다.
 func plan_block(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
 	# 블록 중앙 자리는 큰 것 전용이다. min_ext 를 안 걸면 이 한 번뿐인 기회를
 	# 덤불이 차지해 대형 건물이 도시 전체에서 한두 채로 줄어든다(실측).
+	# 대로가 한쪽에 붙은 블록은 격자 중앙과 사용 가능 구간의 중앙이 1.25m 어긋난다.
+	# 중앙 슬롯뿐 아니라 산포의 기준점도 함께 옮겨야 한다 — 중앙만 옮기면 나머지
+	# 16개가 대로 보도 쪽으로 편향된 채 전부 거절된다.
+	var sx := block_span(b.x)
+	var sz := block_span(b.z)
+	var c := Vector3((sx.x + sx.y) * 0.5, 0.0, (sz.x + sz.y) * 0.5)
 	if rng.randf() < 0.45:
-		add_slot(rng, b, "block", out, "", 3.5)
+		add_slot(rng, c, "block", out, "", 3.5)
 	for _i in 16:
-		add_slot(rng, b + Vector3(rng.randf_range(-8.5, 8.5), 0.0,
+		add_slot(rng, c + Vector3(rng.randf_range(-8.5, 8.5), 0.0,
 			rng.randf_range(-8.5, 8.5)), "block", out)
 
 
 ## 보도: 블록 네 변의 중앙선 위에 일정 간격으로 놓는다.
+## 변마다 인접 도로의 등급이 다를 수 있으므로 중심선을 변마다 계산한다.
 func plan_walk(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
-	var edge: float = PITCH * 0.5 - WALK_U                          # 11.0
+	var half: float = PITCH * 0.5
 	for side in [-1.0, 1.0]:
+		var wz: float = b.z + side * (half - walk_center_at(line_index(b.z + side * half)))
 		for t in [-8.0, -3.0, 3.0, 8.0]:
 			if rng.randf() < 0.55:
 				continue
-			add_slot(rng, b + Vector3(t, 0.0, side * edge), "walk", out)
+			add_slot(rng, Vector3(b.x + t, 0.0, wz), "walk", out)
+		var wx: float = b.x + side * (half - walk_center_at(line_index(b.x + side * half)))
 		for t in [-8.0, -3.0, 3.0, 8.0]:
 			if rng.randf() < 0.55:
 				continue
-			add_slot(rng, b + Vector3(side * edge, 0.0, t), "walk", out)
+			add_slot(rng, Vector3(wx, 0.0, b.z + t), "walk", out)
 
 
 ## 차도: 블록의 -x·-z 쪽 도로만 담당한다. 그래야 인접 블록과 중복 생성되지 않는다.
 ## 차량은 도로 축 방향으로 세운다 — 방향은 카탈로그에 적지 않고 모델 AABB 의
 ## 긴 축에서 유도한다(팩마다 모델이 X 로 눕기도, Z 로 눕기도 한다).
+## 차선 수와 정차 자리는 둘 다 도로 등급의 함수다 — 대로에는 차가 더 많이, 더 넓게 선다.
 func plan_road(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
 	var half: float = PITCH * 0.5
-	for t in [-10.0, -3.5, 3.5, 10.0]:
-		for lane in [-LANE_U, LANE_U]:
+	var kz := line_index(b.z - half)          # 블록 -z 쪽 동서 도로
+	var kx := line_index(b.x - half)          # 블록 -x 쪽 남북 도로
+	var tz := road_slots(kx)                  # 동서 도로를 가로지르는 것은 남북 도로다
+	var tx := road_slots(kz)
+	for i in 4:
+		for slot in lane_slots(kz):
 			if rng.randf() < 0.55:
 				continue
-			add_slot(rng, Vector3(b.x + t, 0.0, b.z - half + lane), "road", out, "x")
-		for lane in [-LANE_U, LANE_U]:
+			add_slot(rng, Vector3(b.x + float(tz[i]), 0.0, b.z - half + float(slot[0])),
+				"road", out, "x", float(slot[1]))
+		for slot in lane_slots(kx):
 			if rng.randf() < 0.55:
 				continue
-			add_slot(rng, Vector3(b.x - half + lane, 0.0, b.z + t), "road", out, "z")
+			add_slot(rng, Vector3(b.x - half + float(slot[0]), 0.0, b.z + float(tx[i])),
+				"road", out, "z", float(slot[1]))
 
 
 ## 한 자리에 들어갈 에셋을 고른다.
@@ -218,26 +321,40 @@ func axis_extent(h: Vector2, yaw: float) -> Vector2:
 
 
 ## pos 에 반extent ex 로 놓았을 때 구역 안에 온전히 들어가는가.
-## u = 가장 가까운 도로 중심선까지의 거리. 도로는 |u|<=ROAD_HALF, 보도는
-## [ROAD_HALF, CURB_HALF], 블록은 |u|>=CURB_HALF 다.
+## u = 가장 가까운 도로 중심선까지의 거리. 반폭은 그 선의 **등급**에 따라 다르다(§18).
 func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
-	var hp: float = PITCH * 0.5
-	var ux: float = absf(fmod(pos.x + hp + PITCH * 1000.0, PITCH) - hp)
-	var uz: float = absf(fmod(pos.z + hp + PITCH * 1000.0, PITCH) - hp)
+	var kx := line_index(pos.x)
+	var kz := line_index(pos.z)
+	var ux: float = absf(pos.x - float(kx) * PITCH)
+	var uz: float = absf(pos.z - float(kz) * PITCH)
+	var rx := road_half_at(kx)
+	var rz := road_half_at(kz)
 	match zone:
 		"road":
-			# 동서 도로 또는 남북 도로 중 한쪽에 온전히 들어가면 된다.
-			return (uz + ex.y <= ROAD_HALF) or (ux + ex.x <= ROAD_HALF)
+			# 동서 도로 또는 남북 도로 중 한쪽에 온전히 들어가면 된다. 세 조건이다:
+			#  ① 아스팔트 안   ② 중앙 분리대 밖   ③ 교차로·횡단보도 밖.
+			# ②가 없으면 대로 안쪽 자리의 차가 반extent 4.09 까지 허용되어 이중 중앙선을
+			#   넘어 반대 차선까지 뻗는다. 일반 도로는 median 이 0 이라 기존과 동일하다.
+			# ③은 자리 중심이 아니라 **프롭의 실제 길이**로 잰다. 중심만 빼는 방식은
+			#   버스(반길이 4.24)의 차체가 교차로 안에 남는 것을 못 막는다.
+			var on_z: bool = uz + ex.y <= rz and uz - ex.y >= median_at(kz) \
+				and ux - ex.x >= rx + CROSS_W
+			var on_x: bool = ux + ex.x <= rx and ux - ex.x >= median_at(kx) \
+				and uz - ex.y >= rz + CROSS_W
+			return on_z or on_x
 		"walk":
 			# 한 축은 보도 띠 안, 다른 축은 교차 도로를 침범하지 않아야 한다.
-			var on_z: bool = uz - ex.y >= ROAD_HALF and uz + ex.y <= CURB_HALF \
-				and ux - ex.x >= ROAD_HALF
-			var on_x: bool = ux - ex.x >= ROAD_HALF and ux + ex.x <= CURB_HALF \
-				and uz - ex.y >= ROAD_HALF
+			var on_z: bool = uz - ex.y >= rz and uz + ex.y <= curb_half_at(kz) \
+				and ux - ex.x >= rx
+			var on_x: bool = ux - ex.x >= rx and ux + ex.x <= curb_half_at(kx) \
+				and uz - ex.y >= rz
 			return on_z or on_x
 		_:
-			return ux - ex.x >= CURB_HALF + BLOCK_SETBACK \
-				and uz - ex.y >= CURB_HALF + BLOCK_SETBACK
+			# 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르다 — 구간으로 본다.
+			var sx := block_span(pos.x)
+			var sz := block_span(pos.z)
+			return pos.x - ex.x >= sx.x and pos.x + ex.x <= sx.y \
+				and pos.z - ex.y >= sz.x and pos.z + ex.y <= sz.y
 	return false
 
 
