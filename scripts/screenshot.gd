@@ -60,10 +60,12 @@ const SPEC_START_R := 1.5
 ## "시작 반경이 얼마인가" 가 아니므로, 픽스처를 고정하는 편이 옳다.
 const FIXTURE_R := 5.0
 const MIN_PROPS := 300                             # E1: 도시가 실제로 생성됐는가
-## E7: 대로 규격에서만 가능한 자리에 선 프롭의 하한. 실측값의 절반 언저리로 잡는다
-## (§18 의 계측표 참조). 위계를 배치에서 지운 빌드는 0 이 되므로 여유는 넉넉하다.
-const MIN_BOUL_ROAD := 230                         # 실측 472
-const MIN_BOUL_WALK := 320                         # 실측 645
+## E7a: 대로 규격에서만 가능한 자리에 선 프롭의 하한. 실측값의 절반이다.
+## **이 하한이 잡는 것은 "위계가 통째로 사라졌는가"(그때 0 이 된다) 하나뿐이다.**
+## 자리 하나를 지우는 정도의 부분 회귀는 비율로 안 걸린다 — 그것은 E7b(자리 구조)가
+## 본다. 두 기준의 역할을 섞어서 읽지 마라.
+const MIN_BOUL_ROAD := 230
+const MIN_BOUL_WALK := 320
 const MIN_ALBEDOS := 12                            # E1: 단색 팔레트가 실제로 다양한가
 const GROUND_TOL := 0.05                           # E5: 접지 허용 오차(월드 단위)
 const TILT_TOL := 0.02                             # E5: 직립 허용 기울기(라디안)
@@ -104,10 +106,18 @@ const RESTART_PROPS := 3804                        # T5: 재시작 후 도시 �
 const SPEC_GROWTH_K := 1.0
 
 # --- 3c 성능 예산 ---------------------------------------------------------
-## 도시가 빽빽한 지점. **대로에 접한** 블록 중앙이어야 한다 — 구 지점 (-48, -48) 은
-## 대로 선(0, ±96) 어디에도 안 접해서, 대로 주변에서 늘어난 차량 밀도·드로우콜을
-## 성능 판정이 한 번도 보지 못한다. (-48, -80) 은 z = -96 대로에 붙어 있다.
-const PERF_SPOT := Vector3(-48.0, 0.0, -80.0)
+## 성능을 재는 지점 **둘**. 하나로 갈아치우면 안 된다 — §17 이전의 계측과 비교할 수
+## 없게 되고(측정 지점이 동시에 바뀌면 증감 주장이 성립하지 않는다), 그 함정을
+## 실제로 밟았다(독립 감사가 실측으로 반증했다).
+##   dense — §14 부터 써 온 지점. 실측상 드로우콜·프리미티브가 가장 많다(2535 / 2.70M).
+##           역대 계측표와 like-for-like 비교를 위해 반드시 유지한다.
+##   boul  — z = -96 대로에 접한 블록 중앙. 드로우콜은 더 적지만(2510 / 2.29M)
+##           worst 프레임이 2배 나쁘다 — 대로 주변은 밀도가 아니라 **가려짐이 적어**
+##           그리기 부담이 몰리는 지점이다. 둘 다 예산 안이어야 통과다.
+const PERF_SPOTS := {
+	"dense": Vector3(-48.0, 0.0, -48.0),
+	"boul": Vector3(-48.0, 0.0, -80.0),
+}
 const PERF_FRAMES := 300
 const FRAME_BUDGET_MS := 16.67                     # 60fps
 const OVERLAP_EPS := 0.02                          # E3: SAT 수치 여유
@@ -669,6 +679,19 @@ func lane_lum(img: Image, b: Vector3, sz: float) -> float:
 	return best
 
 
+## 대로 중앙 분리대의 휘도 — 두 줄 **사이**(|u| = 0)를 읽는다.
+##
+## 이것이 없으면 "이중 중앙선" 이라는 규격의 정의가 검증되지 않는다. D1 은 |u| = 0.75 에
+## 도색이 있는지만 보므로, 대로 중앙을 **폭 2.1m 통짜 노란 띠**로 칠한 빌드
+## (`aa_band(ux, lane_gap + lane_half)`)가 판정 8종을 전부 통과했다 — 실측으로 확인했다.
+## 오히려 중앙선 휘도가 0.7203 → 0.8434 로 **올라가** D1 을 더 여유 있게 넘긴다.
+## 두 줄 사이가 아스팔트라는 것이 `median_at = 1.05`(차량이 넘지 못하는 경계)의
+## 렌더 근거이므로, 규격이 주장하는 것을 판정기가 직접 읽어야 한다.
+## |ux| = 16(블록 중앙)에서 재므로 중앙선이 끊기는 교차로에 걸리지 않는다.
+func median_gap_lum(img: Image, b: Vector3, sz: float) -> float:
+	return lum_at(img, Vector3(b.x, 0.0, b.z + sz * SPEC_PITCH * 0.5))
+
+
 ## 표본 지점이 쓸 수 있는지. 못 쓰면 이유 문자열, 쓸 수 있으면 "" 를 돌려준다.
 ## 이유를 남기지 않으면 "유효 블록 0개" 로 실패했을 때 원인을 짚을 단서가 없다.
 func probe_why(p: Vector3, holes: Array, img: Image) -> String:
@@ -769,6 +792,13 @@ func judge_city(prefix: String, shot: Image, blocks: Array) -> bool:
 		var b1: bool = absf(l[0] - l[1]) >= SURF_DIFF_MIN \
 			and absf(l[1] - l[2]) >= SURF_DIFF_MIN \
 			and absf(l[2] - l[3]) >= SURF_DIFF_MIN
+		# 대로만: 두 줄 사이가 아스팔트여야 한다 — 그것이 "이중" 의 정의다.
+		# 아스팔트와 같고(<) 중앙선과 달라야(>=) 한다. 통짜 띠는 둘 다 어긴다.
+		var lm := -1.0
+		if spec_is_boulevard(k):
+			lm = median_gap_lum(shot, b, sz)
+			b1 = b1 and absf(lm - l[2]) < SURF_DIFF_MIN \
+				and absf(lm - l[3]) >= SURF_DIFF_MIN
 		var b2 := groups >= CROSS_GROUPS_MIN
 		var b4: bool = l[1] > l[0] * 0.5 and l[2] > l[0] * 0.5 and l[3] > l[0] * 0.5
 		d1 = d1 and b1
@@ -778,10 +808,10 @@ func judge_city(prefix: String, shot: Image, blocks: Array) -> bool:
 			_blocks_ok[Vector2i(roundi(b.x), roundi(b.z))] = true
 			if spec_is_boulevard(k):
 				_boul_ok = true                                 # D6
-		print("JUDGE %scity b(%.0f,%.0f)s(%.0f,%.0f) k=%d %s block=%.4f curb=%.4f road=%.4f lane=%.4f cross=%d lanepx=%.1f D1=%s D2=%s D4=%s"
+		print("JUDGE %scity b(%.0f,%.0f)s(%.0f,%.0f) k=%d %s block=%.4f curb=%.4f road=%.4f lane=%.4f 분리대=%.4f cross=%d lanepx=%.1f D1=%s D2=%s D4=%s"
 			% [prefix, b.x, b.z, sx, sz, k,
 			   ("대로" if spec_is_boulevard(k) else "일반"),
-			   l[0], l[1], l[2], l[3], groups,
+			   l[0], l[1], l[2], l[3], lm, groups,
 			   lane_width_px(b, sz), pf(b1), pf(b2), pf(b4)])
 	if use.is_empty():
 		return true                       # 미적용 — 호출자가 allow_no_block 으로 허용했다
@@ -1026,11 +1056,39 @@ func zone_of(pts: PackedVector2Array) -> String:
 	return ""                                  # 어느 구역에도 온전히 안 들어간다
 
 
-## E7: 이 프롭이 **일반 도로 규격에서는 기하적으로 불가능한 자리**에 있는가.
-## 차도 |u| > 4.0 / 보도 |u| > 6.0 은 대로에서만 성립한다. 카탈로그를 읽지 않고
-## zone_of 와 같은 기하만 쓴다.
-## 돌려주는 것은 ["road"|"walk"|"", 대역] — 대역은 차량이 중앙 분리대 안쪽 띠에
-## 있으면 0, 바깥 띠면 1 이다(E7b 가 자리 다양성을 본다).
+## §18 의 대로 차선 자리 — 중앙선에서의 거리. 편도 주행 띠 [median, road_half] 를
+## 4등분한 1/4·2/4·3/4 지점이다. **구현체의 lane_slots 를 읽지 않는다** — 읽으면
+## 자리를 바꾼 빌드가 자기 값끼리 일치해 통과한다.
+func spec_lane_slots(k: int) -> Array:
+	var m := spec_median(k)
+	var w := spec_road_half(k) - m
+	return [m + w * 0.25, m + w * 0.5, m + w * 0.75]
+
+
+## |u| 가 어느 규격 자리에 가장 가까운가.
+func nearest_lane_slot(k: int, u: float) -> int:
+	var best := 0
+	var bd := INF
+	var slots := spec_lane_slots(k)
+	for i in slots.size():
+		var d: float = absf(u - float(slots[i]))
+		if d < bd:
+			bd = d
+			best = i
+	return best
+
+
+## E7: 이 프롭이 **대로 규격에서만 가능한 자리**에 있는가.
+## 돌려주는 것은 ["road"|"walk"|"", 자리 번호] — 자리는 차량 중심의 |u| 가 규격 자리
+## 셋 중 어느 것에 가장 가까운가이고(안쪽 0 / 가운데 1 / 바깥 2), E7b 가 그 다양성을 본다.
+##
+## 차도 조건에 `|u| > SPEC_ROAD_HALF` 를 걸면 안 된다. 안쪽 자리(2.4125)의 차량은
+## median 1.05 제약 때문에 반폭이 1.3625 를 못 넘어 최대 |u| 가 3.775 < 4.0 이다 —
+## 그 게이트를 두면 **안쪽 자리가 E7 에 아예 보이지 않아, 그 자리 두 줄을 통째로
+## 지워도 아무 기준이 안 걸린다**(독립 감사가 지적했고 산술로 확인했다).
+## "대로 위에 온전히 들어갔는가"(spec_is_boulevard + zone_of 와 같은 기하)면 충분하다.
+## 보도는 `az.x >= rz`(대로 6.5)가 이미 |u| > 6.0 을 함의하므로 별도 조건이 필요 없다.
+## 카탈로그는 읽지 않는다.
 func boulevard_slot(pts: PackedVector2Array) -> Array:
 	var fp := footprint(pts)
 	var kx: int = fp["kx"]
@@ -1039,19 +1097,19 @@ func boulevard_slot(pts: PackedVector2Array) -> Array:
 	var az: Vector2 = fp["az"]
 	var rx := spec_road_half(kx)
 	var rz := spec_road_half(kz)
-	if az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W \
-			and spec_is_boulevard(kz) and az.y > SPEC_ROAD_HALF:
-		return ["road", 1 if az.x > SPEC_ROAD_HALF else 0]
-	if ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W \
-			and spec_is_boulevard(kx) and ax.y > SPEC_ROAD_HALF:
-		return ["road", 1 if ax.x > SPEC_ROAD_HALF else 0]
-	if az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx \
-			and spec_is_boulevard(kz) and az.y > SPEC_CURB_HALF:
-		return ["walk", 0]
-	if ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz \
-			and spec_is_boulevard(kx) and ax.y > SPEC_CURB_HALF:
-		return ["walk", 0]
-	return ["", 0]
+	if spec_is_boulevard(kz) and az.y <= rz and az.x >= spec_median(kz) \
+			and ax.x >= rx + SPEC_CROSS_W:
+		return ["road", nearest_lane_slot(kz, (az.x + az.y) * 0.5)]
+	if spec_is_boulevard(kx) and ax.y <= rx and ax.x >= spec_median(kx) \
+			and az.x >= rz + SPEC_CROSS_W:
+		return ["road", nearest_lane_slot(kx, (ax.x + ax.y) * 0.5)]
+	if spec_is_boulevard(kz) and az.x >= rz and az.y <= spec_curb_half(kz) \
+			and ax.x >= rx:
+		return ["walk", -1]
+	if spec_is_boulevard(kx) and ax.x >= rx and ax.y <= spec_curb_half(kx) \
+			and az.x >= rz:
+		return ["walk", -1]
+	return ["", -1]
 
 
 ## E1~E6. 도시 배치 자체를 판정한다.
@@ -1203,15 +1261,18 @@ func run_judge_3b() -> void:
 	# 묻힌다). 개수 하한만으로도 부족하다 — 자리 하나를 빼는 정도의 회귀는 비율로 안 걸린다.
 	#   E7a: 일반 도로 규격에서 기하적으로 불가능한 자리(차도 |u|>4.0, 보도 |u|>6.0)에
 	#        프롭이 하한 이상 있는가. 위계를 지우면 0 이 된다.
-	#   E7b: 대로 차도 위 프롭이 중앙 분리대 안쪽 띠와 바깥 띠에 **둘 다** 있는가.
+	#   E7b: 대로 차도의 **규격 자리 셋(안쪽·가운데·바깥)이 전부 쓰였는가.**
+	#        자리 하나를 지우는 회귀는 개수 비율로는 안 걸린다(실측: 3자리 → 1자리
+	#        주입이 하한 230 대 223 으로 간신히 걸렸다) — 구조로 물어야 한다.
 	var e7: bool = boul_n["road"] >= MIN_BOUL_ROAD and boul_n["walk"] >= MIN_BOUL_WALK \
-		and boul_bands.size() >= 2
+		and boul_bands.size() >= 3
 	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7
 	print("JUDGE 3b props=%d catalog=%d albedos=%d zones road=%d walk=%d block=%d"
 		% [props.size(), cat.size(), albedos.size(),
 		   zone_n["road"], zone_n["walk"], zone_n["block"]])
-	print("JUDGE 3b E7 대로전용자리: road=%d(>=%d) walk=%d(>=%d) 대역=%d(>=2)"
-		% [boul_n["road"], MIN_BOUL_ROAD, boul_n["walk"], MIN_BOUL_WALK, boul_bands.size()])
+	print("JUDGE 3b E7 대로전용자리: road=%d(>=%d) walk=%d(>=%d) 차선자리=%s(3개 전부)"
+		% [boul_n["road"], MIN_BOUL_ROAD, boul_n["walk"], MIN_BOUL_WALK,
+		   str(boul_bands.keys())])
 	print("JUDGE 3b bad: E1=%d E2=%d E3=%d E5=%d E6=%d judge_set=%d fp=%d/%d settle_move=%.4f settle_tilt=%.4f"
 		% [e1_bad, e2_bad, e3_bad, e5_bad, e6_bad, jset, f1.length(), f3.length(),
 		   moved, tilted])
@@ -1657,34 +1718,39 @@ func run_judge_3c() -> void:
 	Engine.max_fps = 0
 
 	var hole: Node3D = _reg.holes()[0]
-	_main.set_hole_position(PERF_SPOT)
-	_reg.flush()
-	_cam.follow(hole, hole.radius, true)
-	for _i in WARMUP * 2:
-		await get_tree().process_frame
-
-	var t0 := Time.get_ticks_usec()
-	var prev := t0
-	var worst := 0.0
-	for _i in PERF_FRAMES:
-		await get_tree().process_frame
-		var now := Time.get_ticks_usec()
-		worst = maxf(worst, float(now - prev) / 1000.0)
-		prev = now
-	var avg := float(Time.get_ticks_usec() - t0) / 1000.0 / float(PERF_FRAMES)
-
-	var draws := Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
-	var prims := Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
-	var phys := Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)
 	var props: int = _main.get_node("City").get_child_count()
+	var f1 := true
+	var f2 := true
+	for key in PERF_SPOTS:
+		_main.set_hole_position(PERF_SPOTS[key])
+		_reg.flush()
+		_cam.follow(hole, hole.radius, true)
+		for _i in WARMUP * 2:
+			await get_tree().process_frame
 
-	var f1 := avg <= FRAME_BUDGET_MS
-	var f2 := worst <= FRAME_BUDGET_MS * 2.0
+		var t0 := Time.get_ticks_usec()
+		var prev := t0
+		var worst := 0.0
+		for _i in PERF_FRAMES:
+			await get_tree().process_frame
+			var now := Time.get_ticks_usec()
+			worst = maxf(worst, float(now - prev) / 1000.0)
+			prev = now
+		var avg := float(Time.get_ticks_usec() - t0) / 1000.0 / float(PERF_FRAMES)
+
+		var draws := Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
+		var prims := Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
+		var phys := Performance.get_monitor(Performance.PHYSICS_3D_ACTIVE_OBJECTS)
+		var s1 := avg <= FRAME_BUDGET_MS
+		var s2 := worst <= FRAME_BUDGET_MS * 2.0
+		f1 = f1 and s1
+		f2 = f2 and s2
+		print("JUDGE 3c [%s] props=%d draws=%d prims=%d active_bodies=%d"
+			% [key, props, int(draws), int(prims), int(phys)])
+		print("JUDGE 3c [%s] avg=%.2fms (%.0f fps) worst=%.2fms budget=%.2fms F1=%s F2=%s"
+			% [key, avg, 1000.0 / maxf(avg, 0.001), worst, FRAME_BUDGET_MS, pf(s1), pf(s2)])
+
 	var ok := f1 and f2
-	print("JUDGE 3c props=%d draws=%d prims=%d active_bodies=%d"
-		% [props, int(draws), int(prims), int(phys)])
-	print("JUDGE 3c avg=%.2fms (%.0f fps) worst=%.2fms budget=%.2fms"
-		% [avg, 1000.0 / maxf(avg, 0.001), worst, FRAME_BUDGET_MS])
 	print("JUDGE 3c F1=%s F2=%s -> %s" % [pf(f1), pf(f2), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
