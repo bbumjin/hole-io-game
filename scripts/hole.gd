@@ -1,0 +1,223 @@
+extends Node3D
+
+## 구멍 반경의 단일 진실 원천(SSOT). 우물의 반경과 깊이가 모두 여기서 파생된다.
+## 시작값 1.5 — 크기 게이트(R × 0.45 = 0.675)가 트래픽콘·덤불·표지판만 열어 준다.
+## 5.0 은 시작부터 나무가 걸림 없이 삼켜지고 90초에 지도를 비웠다(플레이 피드백).
+@export var radius := 1.5
+## 우물 벽 반경 배율. 1.02 가 이음새가 닫히는 최소값(V21), 1.03 은 여유분.
+@export var wall_scale := 1.03
+## 우물 벽 여유의 절대 하한(월드 단위). 배율만 쓰면 작은 반경에서 여유가
+## 서브픽셀로 줄어 이음새가 샌다(V23: radius 1.0 에서 림 전체에 마젠타 프린지).
+@export var wall_margin_min := 0.15
+## 우물 깊이 = radius * depth_ratio. 5.0 * 2.4 = 12.0 (실측 구성과 동일).
+## 근측 림 시선이 바닥에 닿지 않으려면 depth >= 2R*tan(카메라 앙각) 이어야 한다(H9).
+@export var depth_ratio := 2.4
+## 흡입력(중심 방향). 가장자리에서 덜덜 떨다 빨려드는 느낌을 만든다.
+@export var suction := 26.0
+## 낙하 오브젝트를 소멸시키는 깊이 = well_depth * kill_ratio.
+@export var kill_ratio := 0.8
+## 흡입 가능 상한: obj_radius <= radius * swallow_ratio 인 것만 반응한다.
+## 이 게이트가 없으면 구멍보다 큰 오브젝트가 통과 조건을 영원히 만족하지 못한 채
+## 림에서 계속 떤다(§4-D-2 의 한계).
+@export var swallow_ratio := 0.45
+## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
+## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
+@export var growth_k := 1.0
+## 지면 반폭. move_to() 가 구멍을 지면 안에 붙잡아 두는 데 쓴다.
+## main.gd 가 스폰 시 GROUND_HALF 를 넣어 준다 — 값의 진실 원천은 거기 하나다.
+@export var ground_half := 224.0
+## 다른 구멍을 삼키려면 이 배수만큼 커야 한다. 동률에서 서로 삼키는 것을 막는다.
+@export var hole_bite_ratio := 1.05
+## 상대가 이 비율만큼 내 원반 안으로 들어와야 삼킨다(0 = 중심만, 1 = 온전히 포함).
+## 중심 포함(0)은 서로 반쯤 걸친 상태에서 죽어 "접촉만 해도 사망" 으로 읽힌다.
+@export var bite_depth := 0.8
+## 리더보드 표시용 이름.
+@export var label := "P"
+
+## 이 구멍이 벌어들인 점수와 삼킨 개수. 4단계의 리더보드가 구멍별로 읽는다.
+var score := 0
+var swallowed_count := 0
+
+signal swallowed(node: Node3D)
+signal grew(from_radius: float, to_radius: float)
+
+@onready var well: MeshInstance3D = $Well
+@onready var area: Area3D = $Area
+@onready var area_shape: CollisionShape3D = $Area/Shape
+
+## Area3D 안에 있으나 아직 통과 조건을 만족하지 못한 후보.
+var _candidates: Array[RigidBody3D] = []
+## 통과 조건을 만족해 레이어를 전환한 낙하 중 오브젝트.
+var _falling: Array[RigidBody3D] = []
+
+
+func _ready() -> void:
+	# 공유 sub_resource 를 건드리지 않도록 한 번만 복제해 두고 이후로는 값만 바꾼다.
+	well.mesh = well.mesh.duplicate()
+	area_shape.shape = area_shape.shape.duplicate()
+	rebuild()
+	area.body_entered.connect(_on_body_entered)
+	area.body_exited.connect(_on_body_exited)
+
+
+## 반경이 바뀔 때마다 우물 메시·Area3D 셰이프를 SSOT 에서 다시 파생시킨다.
+## 하나라도 빠뜨리면 착시가 깨지거나(H7) 감지 범위가 어긋난다.
+func rebuild() -> void:
+	var m: CylinderMesh = well.mesh
+	m.top_radius = wall_radius()
+	m.bottom_radius = wall_radius()
+	m.height = well_depth()
+	well.position.y = -m.height * 0.5     # 상단이 지면 y=0 에 일치
+
+	# 반경 R 짜리 구를 지면 높이에 두면 지면 위에 얹힌 박스(중심 y>0)를 놓치므로
+	# 세로로 긴 원기둥을 쓴다. 치수도 전부 SSOT 파생이다.
+	var s: CylinderShape3D = area_shape.shape
+	s.radius = radius
+	s.height = radius * 1.6
+	area_shape.position.y = radius * 0.4
+
+
+func set_radius(r: float) -> void:
+	radius = r
+	rebuild()
+	# 자란 뒤에는 지면 여유가 줄어든다. 다시 붙잡아 두지 않으면 경계에 붙어 있던
+	# 구멍이 삼킬 때마다 조금씩 지면 밖으로 밀려난다(실측: G5 위반 1회).
+	if is_inside_tree():
+		move_to(global_position)
+
+
+## 면적 보존 성장. 삼킨 오브젝트의 단면적이 구멍 단면적에 더해진다.
+func grow_by(obj_radius: float) -> void:
+	var before := radius
+	set_radius(sqrt(radius * radius + growth_k * obj_radius * obj_radius))
+	grew.emit(before, radius)
+
+
+func can_swallow(obj_radius: float) -> bool:
+	return obj_radius <= radius * swallow_ratio
+
+
+## 구멍을 지면 안에 붙잡아 이동시킨다. 밖으로 나가면 우물이 허공에 뜨고
+## 판정 전제도 깨진다. 플레이어와 AI 가 같은 함수를 쓴다.
+func move_to(p: Vector3) -> void:
+	var lim: float = ground_half - radius * 1.15
+	global_position = Vector3(clampf(p.x, -lim, lim), 0.0, clampf(p.z, -lim, lim))
+
+
+## 다른 구멍을 삼킬 수 있는가 — 상대가 `bite_depth` 만큼 내 원반 안으로 들어와야 한다.
+##
+## 이 조건은 두 번 조정했다.
+##   ① `d + Rb <= Ra` (온전히 포함): 거의 성립하지 않아 자유 실행 900프레임에서
+##      포식이 0회였고, 비슷한 크기의 구멍들이 우물을 서로 파고든 채 공존했다.
+##   ② `d <= Ra` (중심 포함): 성립은 하지만, 비슷한 크기끼리는 중심이 닿는 순간
+##      상대의 절반이 아직 밖에 있어 **"접촉만 해도 죽었다"** 로 읽힌다(플레이 피드백).
+## 지금은 그 사이다: `d + Rb*0.8 <= Ra` — 상대가 8할쯤 들어와야 삼킨다.
+func can_bite(other: Node3D) -> bool:
+	if other == self or not is_instance_valid(other):
+		return false
+	if radius < float(other.radius) * hole_bite_ratio:
+		return false
+	var d := Vector2(global_position.x - other.global_position.x,
+		global_position.z - other.global_position.z).length()
+	return d + float(other.radius) * bite_depth <= radius
+
+
+## 다른 구멍을 흡수한다. 면적을 그대로 더한다 — 오브젝트 흡입의 growth_k 는
+## 체감 조정 계수이지만, 구멍끼리는 실제 단면적이므로 보정 없이 R' = sqrt(Ra^2 + Rb^2) 다.
+func bite(other: Node3D) -> void:
+	var before := radius
+	set_radius(sqrt(radius * radius + float(other.radius) * float(other.radius)))
+	score += int(other.score)
+	swallowed_count += int(other.swallowed_count)
+	grew.emit(before, radius)
+
+
+func _exit_tree() -> void:
+	get_node("/root/HoleRegistry").unregister(self)
+
+
+func wall_radius() -> float:
+	return radius + maxf(radius * (wall_scale - 1.0), wall_margin_min)
+
+
+## 1b 의 kill_depth 등이 참조한다.
+func well_depth() -> float:
+	return radius * depth_ratio
+
+
+func swallow_count() -> int:
+	return _falling.size()
+
+
+# --- 흡입 로직 -------------------------------------------------------------
+
+## body_entered 는 등록만 한다. 여기서 곧바로 레이어를 전환하면,
+## Area3D 반경 = 구멍 반경이라 중심이 구멍 밖인데 콜라이더만 걸친 오브젝트가
+## 지면 충돌을 잃고 구멍 옆 단단한 지면 속으로 가라앉는다.
+func _on_body_entered(body: Node3D) -> void:
+	if not (body is RigidBody3D) or not body.has_method("begin_fall"):
+		return
+	var rb := body as RigidBody3D
+	if rb.falling or _candidates.has(rb):
+		return
+	_candidates.append(rb)
+	rb.hold_awake(true)      # 지면에 놓인 바디는 수 초 뒤 잠든다(V19)
+
+
+## 레이어가 4 로 바뀌면 Area3D 가 더 이상 감지하지 않아 body_exited 가 반드시
+## 발화한다. 낙하 중인 오브젝트의 이탈 신호는 무시해야 한다.
+func _on_body_exited(body: Node3D) -> void:
+	if not (body is RigidBody3D):
+		return
+	var rb := body as RigidBody3D
+	if rb.falling:
+		return
+	_candidates.erase(rb)
+	if is_instance_valid(rb) and rb.has_method("hold_awake"):
+		rb.hold_awake(false)
+
+
+func _physics_process(_dt: float) -> void:
+	var here := global_position
+
+	for i in range(_candidates.size() - 1, -1, -1):
+		var rb := _candidates[i]
+		if not is_instance_valid(rb):
+			_candidates.remove_at(i)
+			continue
+		# 크기 게이트는 매 프레임 재평가한다 — 구멍이 자라면 전에 막혔던 것이 열린다.
+		# 막힌 오브젝트에는 흡입력도 주지 않는다(주면 림에서 영원히 떤다).
+		if not can_swallow(rb.radius):
+			continue
+		var d := Vector2(rb.global_position.x - here.x, rb.global_position.z - here.z)
+		if d.length() + rb.radius < radius:
+			# 완전히 구멍 안 → 지면·서로에 대한 충돌을 끊고 낙하시킨다
+			rb.begin_fall()
+			_candidates.remove_at(i)
+			_falling.append(rb)
+		else:
+			pull(rb, here)
+
+	var kill_y := -well_depth() * kill_ratio
+	for i in range(_falling.size() - 1, -1, -1):
+		var rb := _falling[i]
+		if not is_instance_valid(rb):
+			_falling.remove_at(i)
+			continue
+		if rb.global_position.y < kill_y:
+			_falling.remove_at(i)
+			grow_by(rb.radius)
+			score += int(rb.score_value)
+			swallowed_count += 1
+			swallowed.emit(rb)
+			rb.queue_free()
+			kill_y = -well_depth() * kill_ratio      # 성장으로 우물이 깊어졌다
+		else:
+			pull(rb, here)
+
+
+func pull(rb: RigidBody3D, here: Vector3) -> void:
+	var to_center := Vector3(here.x - rb.global_position.x, 0.0, here.z - rb.global_position.z)
+	if to_center.length_squared() < 1e-6:
+		return
+	rb.apply_central_force(to_center.normalized() * suction * rb.mass)

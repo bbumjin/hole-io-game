@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://cstwuenu1hicn"
+path="res://.godot/imported/Street_4Way.obj-35545fbed0c8065c10b2e09e2d6f04bd.mesh"
+
+[deps]
+
+files=["res://.godot/imported/Street_4Way.obj-35545fbed0c8065c10b2e09e2d6f04bd.mesh"]
+
+source_file="res://assets/streets/Street_4Way.obj"
+dest_files=["res://.godot/imported/Street_4Way.obj-35545fbed0c8065c10b2e09e2d6f04bd.mesh", "res://.godot/imported/Street_4Way.obj-35545fbed0c8065c10b2e09e2d6f04bd.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

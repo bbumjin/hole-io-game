@@ -1,0 +1,12 @@
+# Godot 임포트 캐시 — .obj/.png 원본에서 언제든 재생성된다
+.godot/
+
+# 판정 산출물. screenshot.gd 가 --judge* 실행 때마다 다시 만든다(§7).
+shots/
+
+# 웹 익스포트 결과물
+build/
+
+# 실행 로그
+run.log
+run.err

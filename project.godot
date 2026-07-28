@@ -1,0 +1,25 @@
+config_version=5
+
+[application]
+
+config/name="holeio"
+run/main_scene="res://scenes/main.tscn"
+config/features=PackedStringArray("4.7", "Forward Plus")
+
+[autoload]
+
+HoleRegistry="*res://scripts/hole_registry.gd"
+
+[display]
+
+window/size/viewport_width=1152
+window/size/viewport_height=648
+
+[physics]
+
+3d/physics_engine="Jolt Physics"
+
+[rendering]
+
+renderer/rendering_method="forward_plus"
+anti_aliasing/quality/msaa_3d=2

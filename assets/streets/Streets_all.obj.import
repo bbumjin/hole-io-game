@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://dfcvgo3e6yn8a"
+path="res://.godot/imported/Streets_all.obj-53e773699fb3caf484e370abd4c63557.mesh"
+
+[deps]
+
+files=["res://.godot/imported/Streets_all.obj-53e773699fb3caf484e370abd4c63557.mesh"]
+
+source_file="res://assets/streets/Streets_all.obj"
+dest_files=["res://.godot/imported/Streets_all.obj-53e773699fb3caf484e370abd4c63557.mesh", "res://.godot/imported/Streets_all.obj-53e773699fb3caf484e370abd4c63557.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false

@@ -1,0 +1,26 @@
+[gd_scene load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/swallowable.gd" id="1"]
+
+[sub_resource type="BoxMesh" id="Mesh_1"]
+size = Vector3(4, 4, 4)
+
+[sub_resource type="StandardMaterial3D" id="Mat_1"]
+albedo_color = Color(0.35, 0.55, 0.85, 1)
+roughness = 0.8
+
+[sub_resource type="BoxShape3D" id="Sh_1"]
+size = Vector3(4, 4, 4)
+
+[node name="SwallowableBig" type="RigidBody3D" groups=["judge_set", "swallowable"]]
+collision_layer = 2
+collision_mask = 3
+mass = 8.0
+script = ExtResource("1")
+
+[node name="Mesh" type="MeshInstance3D" parent="."]
+mesh = SubResource("Mesh_1")
+surface_material_override/0 = SubResource("Mat_1")
+
+[node name="Col" type="CollisionShape3D" parent="."]
+shape = SubResource("Sh_1")
