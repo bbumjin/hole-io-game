@@ -4,7 +4,13 @@ extends RigidBody3D
 ## 이 스크립트는 자기 크기와 낙하 상태만 안다.
 
 ## XZ 외접반경. 0 이하이면 _ready 에서 콜라이더 AABB 로 산출한다.
+## §17 이후 도시 프롭의 콜라이더는 **밑동**에서 따므로, 이 값은 곧 밑동 반경이다.
 @export var radius := 0.0
+## 수관(가지)까지 포함한 XZ 외접반경 — **보이는 메시** 기준. 0 이하이면 _ready 에서
+## 메시 AABB 로 산출한다. 나무처럼 위가 넓은 모델에서만 `radius` 보다 크고,
+## 그 차이가 §19 의 걸림(마찰) 모형이 쓰는 유일한 입력이다.
+## 둘이 같으면(상자·건물·차량) 걸림 모형은 통째로 무효화된다 — 회귀가 없다는 뜻이다.
+@export var snag_radius := 0.0
 ## 점수. 0 이하이면 단면적에 비례해 산출한다(큰 것을 삼킬수록 많이 받는다).
 @export var score_value := 0
 ## 구멍이 다가올 때까지 정적으로 세워 둘 것인가.
@@ -23,6 +29,11 @@ func _ready() -> void:
 	_can_sleep_default = can_sleep
 	if radius <= 0.0:
 		radius = auto_radius()
+	# 수관은 밑동보다 작을 수 없다. 메시가 없는 오브젝트(콜라이더만 있는 픽스처)는
+	# 여기서 radius 로 올라와 걸림 모형이 자동으로 무효가 된다.
+	if snag_radius <= 0.0:
+		snag_radius = auto_snag_radius()
+	snag_radius = maxf(snag_radius, radius)
 	if score_value <= 0:
 		score_value = int(round(radius * radius * 100.0))
 	if start_frozen:
@@ -45,6 +56,20 @@ func auto_radius() -> float:
 		if col.shape == null:
 			continue
 		var s := col.shape.get_debug_mesh().get_aabb().size
+		r = maxf(r, Vector2(s.x, s.z).length() * 0.5)
+	return r
+
+
+## 수관 반경을 **보이는 메시**에서 잰다. 밑동 반경(콜라이더)과 같은 척도여야 하므로
+## 여기서도 대각선의 절반을 쓴다. 메시의 XZ 중심 오프셋은 무시한다 — city.gd 가
+## 피벗을 모델의 XZ 중심으로 정규화하므로 오프셋은 이미 0 이다(E5 가 그것을 지킨다).
+func auto_snag_radius() -> float:
+	var r := 0.0
+	for m in find_children("", "MeshInstance3D", false, false):
+		var mi := m as MeshInstance3D
+		if mi.mesh == null:
+			continue
+		var s := mi.get_aabb().size * mi.scale.abs()
 		r = maxf(r, Vector2(s.x, s.z).length() * 0.5)
 	return r
 

@@ -20,6 +20,24 @@ extends Node3D
 ## 이 게이트가 없으면 구멍보다 큰 오브젝트가 통과 조건을 영원히 만족하지 못한 채
 ## 림에서 계속 떤다(§4-D-2 의 한계).
 @export var swallow_ratio := 0.45
+## --- §19. 수관 걸림 (마찰감) ---------------------------------------------
+## 밑동은 구멍 안에 들어왔는데 가지가 구멍보다 넓어 림에 얹힌 상태를 모형화한다.
+## 통과 조건에 반영되는 수관 초과분의 비율. 0 이면 걸림이 없다(§17 그대로).
+@export var snag_grip := 0.45
+## 유효 반경의 상한(구멍 반경 배수). **중심으로 오면 반드시 통과한다는 보장**이다 —
+## 이것이 없으면 게이트는 열렸는데 영원히 안 먹히는 오브젝트가 생긴다.
+@export var snag_cap := 0.85
+## 걸린 동안의 흡입력 배수. 지면 마찰(μ≈1 → 9.8m)보다는 커야 스스로 기어든다:
+## suction 26 × 0.6 = 15.6 > 9.8.
+@export var snag_drag := 0.6
+## 걸린 동안 허용하는 **수평 속력의 상한**(m/s). 힘만 줄이면 부족하다 —
+## 오브젝트는 구멍에 닿기 전에 이미 흡입으로 9~13 m/s 까지 가속돼 있어서,
+## 감속만으로는 관성으로 그대로 미끄러져 들어간다(실측: 감쇠 5.0 에서 걸린 시간이
+## 정지 시작 86프레임 대 관성 7프레임으로 갈렸다). 가지가 림에 걸린다는 것은
+## 힘의 문제가 아니라 **얼마나 빨리 들어갈 수 있는가의 상한**이므로 속력으로 건다.
+## 1.0 m/s — 실제 나무가 갈리는 거리가 0.2~0.5m 라 0.3~0.6초의 멈칫이 된다.
+@export var snag_speed := 1.0
+
 ## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
 ## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
 @export var growth_k := 1.0
@@ -95,6 +113,34 @@ func grow_by(obj_radius: float) -> void:
 
 func can_swallow(obj_radius: float) -> bool:
 	return obj_radius <= radius * swallow_ratio
+
+
+## 오브젝트의 수관 반경(밑동보다 작을 수 없다).
+func snag_of(rb: RigidBody3D) -> float:
+	return maxf(float(rb.snag_radius), float(rb.radius))
+
+
+## 걸림 상태인가 — **수관이 구멍보다 넓고**(가지가 림에 얹힐 수 있고),
+## **밑동은 이미 구멍 안에 들어와 있다**(옛 규격이라면 벌써 삼켜졌을 자리다).
+## 수관 = 밑동인 오브젝트에서는 두 조건이 서로 모순이라 절대 참이 되지 않는다 —
+## 상자·건물·차량의 거동이 §17 과 완전히 같다는 것이 이 정의에서 바로 나온다.
+func is_snagged(rb: RigidBody3D, d: float) -> bool:
+	return snag_of(rb) > radius and d + float(rb.radius) < radius
+
+
+## 통과 조건에 쓰는 유효 반경. 밑동과 수관 사이 어딘가다.
+##
+## 걸림의 세기는 **수관이 림 밖으로 얼마나 나가 있는가**에 비례해야 한다. 절대량으로
+## 두면(= grip 만 곱하면) 구멍이 아무리 커져도 같은 거리만큼 갈리고, 원작에서 큰
+## 구멍이 나무를 즉시 삼키는 것과 어긋난다. 구멍이 수관보다 넓어지면 ov = 0 이 되어
+## 걸림이 스스로 사라진다.
+func pass_radius(rb: RigidBody3D) -> float:
+	var s := snag_of(rb)
+	if s <= radius:
+		return float(rb.radius)               # 구멍이 수관보다 넓다 — 걸릴 것이 없다
+	var ov: float = (s - radius) / s          # 수관의 림 밖 초과분 (0..1)
+	var eff: float = float(rb.radius) + (s - float(rb.radius)) * snag_grip * ov
+	return maxf(float(rb.radius), minf(eff, radius * snag_cap))
 
 
 ## 구멍을 지면 안에 붙잡아 이동시킨다. 밖으로 나가면 우물이 허공에 뜨고
@@ -190,13 +236,17 @@ func _physics_process(_dt: float) -> void:
 		if not can_swallow(rb.radius):
 			continue
 		var d := Vector2(rb.global_position.x - here.x, rb.global_position.z - here.z)
-		if d.length() + rb.radius < radius:
+		var dl := d.length()
+		var snag := is_snagged(rb, dl)
+		if snag:
+			brake(rb)
+		if dl + pass_radius(rb) < radius:
 			# 완전히 구멍 안 → 지면·서로에 대한 충돌을 끊고 낙하시킨다
 			rb.begin_fall()
 			_candidates.remove_at(i)
 			_falling.append(rb)
 		else:
-			pull(rb, here)
+			pull(rb, here, snag_drag if snag else 1.0)
 
 	var kill_y := -well_depth() * kill_ratio
 	for i in range(_falling.size() - 1, -1, -1):
@@ -216,8 +266,18 @@ func _physics_process(_dt: float) -> void:
 			pull(rb, here)
 
 
-func pull(rb: RigidBody3D, here: Vector3) -> void:
+## 걸린 동안 수평 속력을 상한으로 깎는다. 수직 성분(중력)은 건드리지 않는다 —
+## 가지가 막는 것은 구멍 쪽으로 미끄러져 들어가는 것이지 떨어지는 것이 아니다.
+func brake(rb: RigidBody3D) -> void:
+	var v := rb.linear_velocity
+	var vxz := Vector2(v.x, v.z)
+	if vxz.length() > snag_speed:
+		vxz = vxz.normalized() * snag_speed
+		rb.linear_velocity = Vector3(vxz.x, v.y, vxz.y)
+
+
+func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 	var to_center := Vector3(here.x - rb.global_position.x, 0.0, here.z - rb.global_position.z)
 	if to_center.length_squared() < 1e-6:
 		return
-	rb.apply_central_force(to_center.normalized() * suction * rb.mass)
+	rb.apply_central_force(to_center.normalized() * suction * scale * rb.mass)
