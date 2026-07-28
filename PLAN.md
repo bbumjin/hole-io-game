@@ -936,10 +936,15 @@ extends Camera3D
 @export var base_offset := Vector3(0.0, 22.0, 26.0)
 @export var base_radius := 5.0
 @export var smooth := 6.0
+## 카메라 최저 높이. 반경에 정비례만 시키면 시작 반경 1.5 에서 높이가 6.6m 로
+## 내려가 12~14m 짜리 건물이 시야를 막는다. 배율을 통째로 clamp 하므로
+## 앙각(40.2°)은 그대로 유지된다 — H9·판정 전제가 반경과 무관해진다.
+@export var min_height := 14.0
 
 
 func follow(target: Node3D, radius: float, snap: bool, dt := 0.0) -> void:
-	var want := target.global_position + base_offset * (radius / base_radius)
+	var k: float = maxf(radius / base_radius, min_height / base_offset.y)
+	var want := target.global_position + base_offset * k
 	if snap:
 		global_position = want
 	else:
@@ -1394,6 +1399,11 @@ window/size/viewport_height=648
 [rendering]
 
 renderer/rendering_method="forward_plus"
+; 웹은 Forward+ 를 지원하지 않는다(WebGL2 = Compatibility 뿐).
+; 이 오버라이드가 없으면 브라우저에서 렌더러 초기화가 실패한다.
+; 실측: Compatibility 에서도 착시는 성립한다 — `--rendering-driver opengl3` 로
+; 1a 판정을 돌려 H1·H2·H7·H8(rim_aa=16/32)·H9 가 전부 통과했다.
+renderer/rendering_method.web="gl_compatibility"
 anti_aliasing/quality/msaa_3d=2
 ```
 

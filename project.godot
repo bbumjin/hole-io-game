@@ -22,4 +22,9 @@ window/size/viewport_height=648
 [rendering]
 
 renderer/rendering_method="forward_plus"
+; 웹은 Forward+ 를 지원하지 않는다(WebGL2 = Compatibility 뿐).
+; 이 오버라이드가 없으면 브라우저에서 렌더러 초기화가 실패한다.
+; 실측: Compatibility 에서도 착시는 성립한다 — `--rendering-driver opengl3` 로
+; 1a 판정을 돌려 H1·H2·H7·H8(rim_aa=16/32)·H9 가 전부 통과했다.
+renderer/rendering_method.web="gl_compatibility"
 anti_aliasing/quality/msaa_3d=2
