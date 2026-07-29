@@ -85,7 +85,8 @@ func _ready() -> void:
 	registry.set_target_material(gmat)
 	# 존 지도를 셰이더로 넘긴다(§25). City._ready 가 먼저 도는 것과 무관하게
 	# 지도는 상수라 언제든 구울 수 있다. 판정 모드에서도 반드시 걸어야 한다 —
-	# 안 걸면 셰이더가 빈 텍스처를 읽어 지도 전체가 도심색이 된다.
+	# 안 걸면 미할당 sampler2D 의 기본값(흰색)이 읽혀 복호값이 존 코드 범위를 벗어나고,
+	# 셰이더의 마지막 분기로 떨어져 **지도 전체가 공원색**이 된다.
 	gmat.set_shader_parameter("zone_tex", CITY.zone_texture())
 	gmat.set_shader_parameter("ground_half", GROUND_HALF)
 	hole.ground_half = GROUND_HALF

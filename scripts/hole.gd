@@ -189,6 +189,13 @@ func bite(other: Node3D) -> void:
 
 func _exit_tree() -> void:
 	get_node("/root/HoleRegistry").unregister(self)
+	# 이 구멍이 사라질 때 우물 안에서 떨어지던 것들을 함께 정리한다.
+	# 그러지 않으면 레이어 4·마스크 0 인 채로 **아무와도 부딪히지 않고 영원히 낙하하는**
+	# 개체가 남는다 — 아무도 인수하지 않으므로 해제되지도, 점수가 되지도 않는다.
+	# (_candidates 쪽은 Area3D 가 사라질 때 body_exited 가 발화해 exit_rim 이 돌므로 안전하다.)
+	for rb in _falling:
+		if is_instance_valid(rb):
+			rb.queue_free()
 
 
 func flat_dist(a: Vector3, b: Vector3) -> float:

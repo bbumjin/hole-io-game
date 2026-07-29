@@ -1060,7 +1060,7 @@ func probe_blocks(holes: Array, img: Image) -> Array:
 			for sz in [-1.0, 1.0]:
 				# 그 변의 동서 도로가 실제로 존재해야 표본이 의미를 갖는다.
 				if not spec_seg_ew(spec_line_index(b.z + sz * half), kc):
-					why.append("(%.0f,%.0f)sz%.0f:도로없음" % [b.x, b.z, sz])
+					why.append("(%.0f,%.0f)sz%.0f:동서도로없음" % [b.x, b.z, sz])
 					continue
 				if lane_width_px(b, sz) < LANE_MIN_PX:
 					why.append("(%.0f,%.0f)sz%.0f:중앙선%.1fpx" % [b.x, b.z, sz, lane_width_px(b, sz)])
@@ -1075,7 +1075,10 @@ func probe_blocks(holes: Array, img: Image) -> Array:
 				var picked := false
 				for sx in [-1.0, 1.0]:
 					# 횡단보도는 **가로지르는 남북 도로**가 있어야 존재한다.
+					# 사유를 남긴다 — 후보가 전부 이 이유로 죽으면 "후보 전부 탈락: "
+					# 뒤가 비어 원인을 못 읽는다.
 					if not spec_seg_ns(spec_line_index(b.x + sx * half), jc):
+						why.append("(%.0f,%.0f)s(%.0f,%.0f):남북도로없음" % [b.x, b.z, sx, sz])
 						continue
 					var seg_bad := ""
 					for p in cross_segment(b, sx, sz):
@@ -2713,9 +2716,21 @@ const ZONE_CAM_Y := 60.0
 ## 여기에 아스팔트가 보이면 수퍼블록이 성립하지 않은 것이다.
 const PARK_INNER := [Vector3(-160.0, 0.0, 32.0), Vector3(-160.0, 0.0, 20.0),
 	Vector3(-160.0, 0.0, 44.0), Vector3(-172.0, 0.0, 32.0), Vector3(-148.0, 0.0, 32.0)]
-## Z4: 교량 위 표본. 강 셀(k=2, x ∈ [64,96]) 한가운데를 지나는 동서 대로 z = 0·96 이다.
-const BRIDGE_ON := [Vector3(72.0, 0.0, 0.0), Vector3(88.0, 0.0, 0.0),
-	Vector3(72.0, 0.0, 96.0), Vector3(88.0, 0.0, 96.0)]
+## Z4: 교량 위 표본. **손으로 적지 않고 SPEC_BRIDGES 를 순회해 만든다.**
+## 처음에는 z = 0·96 두 곳만 적었는데, 그 상태에서 셋째 교량(z = -96)을 city.gd 와
+## 셰이더에서 동시에 지워도 judge7·3b·5 가 전부 통과했다(주입으로 실증) — 수역 셀에는
+## 원래 프롭이 없어 T5 의 개수 트립와이어에도 안 걸린다. 규격이 "BRIDGES 전부" 라면
+## 표본도 전부여야 한다. 목록에서 유도하면 교량을 더해도 판정이 저절로 따라온다.
+func bridge_on_points() -> Array:
+	var out := []
+	for b in SPEC_BRIDGES:
+		var z := float(int(b[0])) * SPEC_PITCH
+		var cx := float(int(b[1])) * SPEC_PITCH
+		out.append(Vector3(cx + 8.0, 0.0, z))                  # 셀 서쪽 1/4
+		out.append(Vector3(cx + SPEC_PITCH - 8.0, 0.0, z))     # 셀 동쪽 1/4
+	return out
+
+
 ## Z4: 교량이 아닌 강 위. 여기에도 도로가 있으면 강을 통째로 덮은 것이다.
 const BRIDGE_OFF := [Vector3(72.0, 0.0, 32.0), Vector3(88.0, 0.0, 64.0),
 	Vector3(72.0, 0.0, -64.0)]
@@ -2725,6 +2740,20 @@ const BRIDGE_OFF := [Vector3(72.0, 0.0, 32.0), Vector3(88.0, 0.0, 64.0),
 ## (잔디는 파랗지 않다). 아스팔트는 무채색이라 두 우세도가 모두 0 근처여야 한다.
 const ROAD_B_MAX := 0.14
 const ROAD_G_MAX := 0.06
+## 무채색 조건만으로는 부족하다 — **커브(0.72,0.72,0.70)와 도심 지면도 무채색이라
+## 그대로 통과한다.** 교량 자리를 보도로만 칠하거나 도심 지면색으로 칠한 빌드가
+## Z4 를 빠져나간다. 휘도 조건을 AND 로 더해 막는다.
+##
+## 절대 휘도 대신 **관계**로 적는다: 아스팔트는 어느 지구 지면보다 어둡고 물보다 밝다.
+## Z1 이 같은 실행에서 다섯 지면을 이미 재므로 기준점이 공짜로 있고, 팔레트를 다시
+## 잡거나 조명을 바꿔도 규격이 그대로 성립한다(실측 톱다운: 물 0.315 < 아스팔트 0.416
+## < 도심 0.493 < 공원 0.515 < 상업 0.556 < 주거 0.574).
+const ROAD_LUM_MARGIN := 0.02
+## Z2 의 잔디 기준점이 실제로 잔디인지 묻는 하한.
+## **기준점 자체를 단언하지 않으면 단방향 비교는 위약이다** — 존 텍스처를 한 칸 민
+## 주입에서 기준점이 -0.0294(무채색)로 떨어졌는데도 "그보다 낮지 않다" 는 조건은
+## 그대로 참이라 Z2 가 통과했다(주입으로 실증). 공원을 통째로 아스팔트로 칠해도 같다.
+const PARK_G_MIN := 0.25
 
 
 ## 카메라를 지정 지점 바로 위에서 수직으로 내려다보게 세운다.
@@ -2764,6 +2793,7 @@ func run_judge_7() -> void:
 	# 존 텍스처를 한 칸 밀면 대표 셀이 이웃 지구를 읽어 순서가 깨진다.
 	var gd := {}
 	var bd := {}
+	var ld := {}
 	for spot in ZONE_SPOTS:
 		top_down(spot[2])
 		for _i in 3:
@@ -2772,9 +2802,10 @@ func run_judge_7() -> void:
 		var ch := chroma(shot, spot[2])
 		gd[int(spot[1])] = ch.x
 		bd[int(spot[1])] = ch.y
-		print("JUDGE 7 존 %s at (%.0f,%.0f) 초록우세=%.4f 파랑우세=%.4f"
+		ld[int(spot[1])] = lum_at(shot, spot[2])       # Z4 의 아스팔트 기준점
+		print("JUDGE 7 존 %s at (%.0f,%.0f) 초록우세=%.4f 파랑우세=%.4f 휘도=%.4f"
 			% [spot[0], float((spot[2] as Vector3).x), float((spot[2] as Vector3).z),
-			   ch.x, ch.y])
+			   ch.x, ch.y, ld[int(spot[1])]])
 	var z1: bool = float(gd[SPEC_Z_PARK]) - float(gd[SPEC_Z_RESIDENTIAL]) >= ZONE_G_MARGIN \
 		and float(gd[SPEC_Z_RESIDENTIAL]) - float(gd[SPEC_Z_COMMERCIAL]) >= ZONE_G_MARGIN \
 		and float(gd[SPEC_Z_COMMERCIAL]) - float(gd[SPEC_Z_DOWNTOWN]) >= ZONE_G_MARGIN \
@@ -2787,8 +2818,12 @@ func run_judge_7() -> void:
 	for _i in 3:
 		await get_tree().process_frame
 	var park := await capture("zone_park_inner")
-	var z2 := true
-	var park_ref := chroma(park, Vector3(-176.0, 0.0, 16.0)).x
+	# 기준점부터 단언한다 — 이것이 잔디가 아니면 아래의 단방향 비교는 아무것도 안 묻는다.
+	var park_ref: float = float(gd[SPEC_Z_PARK])
+	var z2: bool = park_ref >= PARK_G_MIN
+	if not z2:
+		print("JUDGE 7 Z2 기준점이 잔디가 아니다: 공원 초록우세=%.4f (>= %.2f 이어야 한다)"
+			% [park_ref, PARK_G_MIN])
 	for p in PARK_INNER:
 		# 아스팔트·보도는 무채색이라 초록 우세도가 잔디보다 확 낮다.
 		var gg := chroma(park, p).x
@@ -2799,16 +2834,24 @@ func run_judge_7() -> void:
 
 	# --- Z4: 교량은 있고, 교량이 아닌 강 위에는 도로가 없다 -------------------
 	var z4 := true
-	for p in BRIDGE_ON:
+	# 아스팔트의 휘도 기준점: 어느 지구 지면보다 어둡고 물보다 밝아야 한다.
+	var land_min := INF
+	for z in [SPEC_Z_DOWNTOWN, SPEC_Z_COMMERCIAL, SPEC_Z_RESIDENTIAL, SPEC_Z_PARK]:
+		land_min = minf(land_min, float(ld[z]))
+	var water_lum: float = float(ld[SPEC_Z_WATER])
+	for p in bridge_on_points():
 		top_down(p)
 		for _i in 3:
 			await get_tree().process_frame
 		var img := await capture("zone_bridge_%d_%d" % [int((p as Vector3).x), int((p as Vector3).z)])
 		var ch := chroma(img, p)
-		var ok: bool = ch.y < ROAD_B_MAX and absf(ch.x) < ROAD_G_MAX   # 무채색 아스팔트다
+		var lm := lum_at(img, p)
+		# 무채색이고(커브·잔디·물이 아니다) 어느 지면보다 어둡다(도심 지면·보도가 아니다).
+		var ok: bool = ch.y < ROAD_B_MAX and absf(ch.x) < ROAD_G_MAX \
+			and lm + ROAD_LUM_MARGIN <= land_min and lm >= water_lum + ROAD_LUM_MARGIN
 		z4 = z4 and ok
-		print("JUDGE 7 교량위 (%.0f,%.0f) 파랑우세=%.4f 초록우세=%.4f %s"
-			% [(p as Vector3).x, (p as Vector3).z, ch.y, ch.x, pf(ok)])
+		print("JUDGE 7 교량위 (%.0f,%.0f) 파랑우세=%.4f 초록우세=%.4f 휘도=%.4f (물 %.4f < ? < 지면 %.4f) %s"
+			% [(p as Vector3).x, (p as Vector3).z, ch.y, ch.x, lm, water_lum, land_min, pf(ok)])
 	for p in BRIDGE_OFF:
 		top_down(p)
 		for _i in 3:
@@ -2851,9 +2894,13 @@ func run_judge_7() -> void:
 		["강 한가운데", Vector3(80.0, 0.0, 32.0), false],
 		["강 상류", Vector3(80.0, 0.0, -64.0), false],
 		["바다 테두리", Vector3(-208.0, 0.0, 0.0), false],
-		["교량 z=0", Vector3(80.0, 0.0, 0.0), true],
-		["교량 z=96", Vector3(80.0, 0.0, 96.0), true],
 	]
+	# 교량은 **전부** 시험한다(Z4 와 같은 이유 — 손으로 둘만 적었더니 셋째를 지운
+	# 주입이 모든 판정을 통과했다). 목록에서 유도하면 교량을 더해도 따라온다.
+	for b in SPEC_BRIDGES:
+		var z := float(int(b[0])) * SPEC_PITCH
+		var cx := float(int(b[1])) * SPEC_PITCH + SPEC_PITCH * 0.5
+		probes.append(["교량 z=%.0f" % z, Vector3(cx, 0.0, z), true])
 	for pr in probes:
 		var goal: Vector3 = pr[1]
 		hole.move_to(Vector3(48.0, 0.0, goal.z))          # 목표 옆 육지에서 출발
@@ -2867,9 +2914,47 @@ func run_judge_7() -> void:
 			% [pr[0], goal.x, goal.z, landed.x, landed.z,
 			   pf(dry), pf(reached), pf(bool(pr[2])), pf(ok)])
 
-	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s (수역프롭=%d)"
-		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), in_water])
-	var ok := z1 and z2 and z3 and z4 and z5
+	# --- Z6: 공원 영역은 직사각형이어야 한다 --------------------------------
+	# 병합(merge_k·merge_j)이 축별 확장이라 L자·계단형 공원에서는 대표 셀이 여럿 나오거나
+	# 구간이 실제 영역을 넘어선다 — 같은 자리에 밀도가 겹치고 프롭이 비-공원 셀을 침범한다.
+	# 지도는 "사람이 읽고 고치라" 고 만든 표이므로 이 회귀는 언젠가 반드시 일어난다.
+	# 주석으로만 적어 둔 전제를 기계가 지키게 한다.
+	var z6 := true
+	var seen := {}
+	for j0 in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+		for k0 in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_zone(k0, j0) != SPEC_Z_PARK or seen.has(Vector2i(k0, j0)):
+				continue
+			# 4방 연결성분을 훑는다.
+			var comp := []
+			var stack := [Vector2i(k0, j0)]
+			seen[Vector2i(k0, j0)] = true
+			while not stack.is_empty():
+				var c: Vector2i = stack.pop_back()
+				comp.append(c)
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var n: Vector2i = c + d
+					if n.x < SPEC_CELL_MIN or n.x > SPEC_CELL_MAX \
+							or n.y < SPEC_CELL_MIN or n.y > SPEC_CELL_MAX:
+						continue
+					if seen.has(n) or spec_zone(n.x, n.y) != SPEC_Z_PARK:
+						continue
+					seen[n] = true
+					stack.append(n)
+			var lo := Vector2i(comp[0])
+			var hi := Vector2i(comp[0])
+			for c in comp:
+				lo = Vector2i(mini(lo.x, c.x), mini(lo.y, c.y))
+				hi = Vector2i(maxi(hi.x, c.x), maxi(hi.y, c.y))
+			var area := (hi.x - lo.x + 1) * (hi.y - lo.y + 1)
+			var rect := comp.size() == area
+			z6 = z6 and rect
+			print("JUDGE 7 Z6 공원 연결성분 k[%d..%d] j[%d..%d] 셀=%d 외접=%d %s"
+				% [lo.x, hi.x, lo.y, hi.y, comp.size(), area, pf(rect)])
+
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s (수역프롭=%d)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), in_water])
+	var ok := z1 and z2 and z3 and z4 and z5 and z6
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
