@@ -42,64 +42,157 @@ const GAP := 0.3
 ## 이 값으로 자른다(§22 — plan_block 참조).
 const SPREAD_MAX := 8.5
 
+# --- 지구 지도 (§25) -------------------------------------------------------
+## 셀은 블록과 1:1 이다. 셀 (k, j) 는 x ∈ [32k, 32k+32], z ∈ [32j, 32j+32] 를 덮고
+## 그 중앙이 블록 중앙이다. k·j 는 둘 다 [-7, 6] 이다 (14x14 = 196 셀).
+##
+## **행·열 ↔ 월드 대응식** — 셰이더·판정기가 같은 식을 각자 들고 있어야 한다:
+##     행 r = j + 7   (r=0 이 최소 z, r=13 이 최대 z)
+##     열 c = k + 7   (c=0 이 최소 x, c=13 이 최대 x)
+##     zone_at(k, j) = ZONE_ROWS[j + 7][k + 7]
+##
+## 지도는 **시드 난수가 아니라 손으로 저작한 고정 상수**다. 이유 셋:
+##   ① 판정기가 독립 구현으로 같은 표를 들 수 있다
+##   ② 강·공원·도심을 의도적으로 디자인할 수 있다
+##   ③ E4 재현성이 시드와 무관하게 자동으로 성립한다
+##
+## 글자: D 도심 · C 상업 · R 주거 · P 공원 · W 수역
+##
+## **바다는 지면 메시를 키워서 만들지 않는다.** 테두리 한 줄을 W 로 둔다.
+## 지면을 448 → 4000 으로 키우면 화면에서 하늘이 사라져 H 계열 판정이 배경 기준점을
+## 잃고 통째로 무너진다(주입으로 실증). 지도 밖은 지금처럼 배경으로 남긴다.
+##
+## 설계 제약 — 어기면 판정이 깨진다:
+##   · 중앙 2x2(k,j ∈ {-1,0})는 D 고정. 판정 광장(반경 26)이 그 안에 있다.
+##   · 판정 지점(CITY_SPOTS·PERF_SPOTS)이 떨어지는 셀은 P·W 가 아니다.
+##   · AI 스폰 링(반경 128 격자 스냅)이 닿는 네 셀도 P·W 가 아니다 —
+##     스폰은 move_to 를 거치지 않으므로 W 위에서 태어나면 Z5 가 스폰 순간 깨진다.
+##   · P 영역은 **직사각형**이어야 한다. 병합 구간을 축별 확장으로 구하기 때문이다.
+const ZONE_ROWS := [
+	"WWWWWWWWWWWWWW",   # j = -7   바다 테두리
+	"WRRRRRRRRWRRRW",   # j = -6
+	"WRRRRRRRRWRRRW",   # j = -5
+	"WRRCCCCCCWCRRW",   # j = -4
+	"WRRCCCCCCWCRRW",   # j = -3
+	"WRRCCDDDDWCRRW",   # j = -2
+	"WRRCCDDDDWCRRW",   # j = -1
+	"WPPCCDDDDWCRRW",   # j =  0   서쪽 공원(2x2, k=-6..-5)
+	"WPPCCDDDDWCRRW",   # j =  1
+	"WRRCCCCCCWCRRW",   # j =  2
+	"WRRCCCCCCWCPPW",   # j =  3   동쪽 공원(2x2, k=4..5)
+	"WRRPPRRRRWRPPW",   # j =  4   북서 공원(1x2, k=-4..-3)
+	"WRRRRRRRRWRRRW",   # j =  5
+	"WWWWWWWWWWWWWW",   # j =  6   바다 테두리
+]
+const CELL_MIN := -7
+const CELL_MAX := 6
+const CELL_COUNT := 14
+
+const Z_DOWNTOWN := 0
+const Z_COMMERCIAL := 1
+const Z_RESIDENTIAL := 2
+const Z_PARK := 3
+const Z_WATER := 4
+const ZONE_CODE := { "D": 0, "C": 1, "R": 2, "P": 3, "W": 4 }
+
+## 교량 = 수역을 건너는 **동서 도로 세그먼트** [중심선 인덱스 jl, 셀 인덱스 kc].
+## 강이 남북(열 k=2)으로 흐르므로 이를 건너는 것은 동서 도로다.
+## **세그먼트 단위로 적는다.** 선 전체를 여는 방식은 같은 z 의 바다 테두리(k=-7·6)까지
+## 뚫어 구멍이 지도 밖 물 위로 나간다.
+## 셋 다 대로(인덱스 mod 3 == 0)라 아스팔트 폭이 13m 다.
+const BRIDGES := [[-3, 2], [0, 2], [3, 2]]
+
+## 존별 배치 규격. kinds 는 **블록 내부**에 놓을 수 있는 카탈로그 종류다
+## (보도·차도 프롭은 존과 무관하게 같은 목록을 쓰고 밀도만 달라진다).
+## scale_mul 은 블록 내부 프롭에만 곱한다 — 가로등·차는 실제 치수가 규격이다.
+## 배열 순서가 곧 존 코드다.
+const ZONE_PROFILE := [
+	# D 도심 — 고층이 빽빽하고 녹지가 없다
+	{ "kinds": ["tower"], "scale_mul": 1.35, "center": 0.85, "center_ext": 4.0,
+		"tries": 12, "spread": 8.5, "walk_skip": 0.35, "road_skip": 0.40 },
+	# C 상업 — 중저층 상가, 가로 시설물이 많다
+	{ "kinds": ["shop", "tower"], "scale_mul": 1.0, "center": 0.55, "center_ext": 3.5,
+		"tries": 16, "spread": 8.5, "walk_skip": 0.40, "road_skip": 0.45 },
+	# R 주거 — 주택과 마당 녹지, 밀도가 낮다
+	{ "kinds": ["house", "tree", "rock"], "scale_mul": 0.95, "center": 0.25,
+		"center_ext": 3.0, "tries": 14, "spread": 8.5, "walk_skip": 0.60, "road_skip": 0.60 },
+	# P 공원 — 수퍼블록 하나를 통째로 쓴다. 시행 수·산포가 병합 구간에 맞춰 크다
+	{ "kinds": ["tree", "rock", "bush"], "scale_mul": 1.0, "center": 0.0, "center_ext": 0.0,
+		"tries": 64, "spread": 40.0, "walk_skip": 0.70, "road_skip": 0.75 },
+	# W 수역 — 아무것도 놓지 않는다(add_slot 이 셀 존으로 먼저 거절한다)
+	{ "kinds": [], "scale_mul": 1.0, "center": 0.0, "center_ext": 0.0,
+		"tries": 0, "spread": 0.0, "walk_skip": 1.0, "road_skip": 1.0 },
+]
+
+## 셰이더로 넘길 존 지도의 채널 간격. zone_code * 51 을 R8 한 채널에 담는다.
+## 51/255 = 0.2 는 8비트 양자화·필터 오차보다 압도적으로 커서 복호가 견고하다.
+const ZONE_TEX_STEP := 51
+
 @export var city_seed := 20260728
 @export var enabled := true
 
 ## 카탈로그. scale 은 팩마다 제각각인 모델 치수를 실측(§13)에서 실제 크기로 맞춘 값이다.
-## zone: "block"(블록 내부) / "walk"(보도) / "road"(차도)
+## zone: "block"(블록 내부) / "walk"(보도) / "road"(차도) — **자리의 종류**다.
+## kind: 지구제(§25)가 쓰는 **에셋의 종류**다. 블록 내부 자리에서만 걸러진다
+##       (tower 고층 · shop 상가 · house 주택 · tree · rock · bush).
 const CATALOG := [
 	# --- 건물: 블록 내부 ---
-	{ "path": "res://assets/buildings/Building1_Large.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building1_Small.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building2_Large.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building2_Small.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building3_Big.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building3_Small.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building4.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/House1.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/House2.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Bank.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Flat.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Flat2.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Hospital.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House2.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House3.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House4.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House5.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Shop.obj", "scale": 3.0, "zone": "block" },
+	{ "path": "res://assets/buildings/Building1_Large.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/Building1_Small.obj", "scale": 2.0, "zone": "block", "kind": "shop" },
+	{ "path": "res://assets/buildings/Building2_Large.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/Building2_Small.obj", "scale": 2.0, "zone": "block", "kind": "shop" },
+	{ "path": "res://assets/buildings/Building3_Big.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/Building3_Small.obj", "scale": 2.0, "zone": "block", "kind": "shop" },
+	{ "path": "res://assets/buildings/Building4.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/House1.obj", "scale": 2.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/buildings/House2.obj", "scale": 2.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/Bank.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/Flat.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/Flat2.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/Hospital.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/House.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House2.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House3.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House4.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House5.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/Shop.obj", "scale": 3.0, "zone": "block", "kind": "shop" },
 	# --- 녹지: 블록 내부 ---
-	{ "path": "res://assets/nature/Tree1.obj", "scale": 1.5, "zone": "block" },
-	{ "path": "res://assets/nature/Tree2.obj", "scale": 1.2, "zone": "block" },
-	{ "path": "res://assets/nature/Tree3.obj", "scale": 1.5, "zone": "block" },
-	{ "path": "res://assets/nature/Tree4.obj", "scale": 1.0, "zone": "block" },
-	{ "path": "res://assets/nature/Rock1.obj", "scale": 1.0, "zone": "block" },
-	{ "path": "res://assets/nature/Rock2.obj", "scale": 1.0, "zone": "block" },
-	{ "path": "res://assets/nature/Rock3.obj", "scale": 1.0, "zone": "block" },
+	{ "path": "res://assets/nature/Tree1.obj", "scale": 1.5, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Tree2.obj", "scale": 1.2, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Tree3.obj", "scale": 1.5, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Tree4.obj", "scale": 1.0, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Rock1.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
+	{ "path": "res://assets/nature/Rock2.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
+	{ "path": "res://assets/nature/Rock3.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
+	# 공원 전용 덤불. 같은 에셋이 보도에도 있지만 자리의 종류가 다르다 —
+	# "bush" 는 P 의 kinds 에만 있으므로 D·C·R 블록에는 나타나지 않는다.
+	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
 	# --- 가로 시설물: 보도 ---
-	{ "path": "res://assets/streets/Streetlight_Single.obj", "scale": 7.3, "zone": "walk" },
-	{ "path": "res://assets/streets/Streetlight_Double.obj", "scale": 7.3, "zone": "walk" },
-	{ "path": "res://assets/streets/TrafficLight.obj", "scale": 5.2, "zone": "walk" },
-	{ "path": "res://assets/streets/Sign_Stop.obj", "scale": 4.4, "zone": "walk" },
-	{ "path": "res://assets/streets/Sign_NoParking.obj", "scale": 4.4, "zone": "walk" },
-	{ "path": "res://assets/streets/Sign_Triangle.obj", "scale": 4.4, "zone": "walk" },
-	{ "path": "res://assets/transport/TrafficSign1.obj", "scale": 1.6, "zone": "walk" },
-	{ "path": "res://assets/transport/TrafficSign2.obj", "scale": 1.6, "zone": "walk" },
-	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "walk" },
-	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "walk" },
-	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "walk" },
+	{ "path": "res://assets/streets/Streetlight_Single.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Streetlight_Double.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/TrafficLight.obj", "scale": 5.2, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Sign_Stop.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Sign_NoParking.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Sign_Triangle.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/transport/TrafficSign1.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/transport/TrafficSign2.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
 	# --- 차량: 차도 ---
-	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/NormalCar1.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/NormalCar2.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/SUV.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/SportsCar.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/SportsCar2.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/transport/Ambulance.obj", "scale": 1.05, "zone": "road" },
-	{ "path": "res://assets/transport/Bus.obj", "scale": 1.96, "zone": "road" },
-	{ "path": "res://assets/transport/SchoolBus.obj", "scale": 1.84, "zone": "road" },
-	{ "path": "res://assets/transport/TrafficCone.obj", "scale": 0.6, "zone": "road" },
+	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/NormalCar1.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/NormalCar2.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/SUV.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/SportsCar.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/SportsCar2.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/Ambulance.obj", "scale": 1.05, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/Bus.obj", "scale": 1.96, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/SchoolBus.obj", "scale": 1.84, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/TrafficCone.obj", "scale": 0.6, "zone": "road", "kind": "car" },
 ]
 
 ## 콜라이더 XZ 를 딸 밑동의 높이 비율. 아래 35% 는 밑동 셰이프, 나머지는 수관 셰이프다.
@@ -123,22 +216,11 @@ func plan(s: int) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = s
 	var out := []
-	for b in block_centers():
-		plan_block(rng, b, out)
-		plan_walk(rng, b, out)
-		plan_road(rng, b, out)
-	return out
-
-
-## 블록 중앙 목록. 도로 중심선이 PITCH 의 배수이므로 블록 중앙은 그 중간이다.
-## 순서를 고정해야 시드가 같을 때 결과가 같다.
-func block_centers() -> Array:
-	var out := []
-	var n := int(GROUND_HALF / PITCH)          # 224/32 = 7
-	for k in range(-n, n):
-		for j in range(-n, n):
-			out.append(Vector3(float(k) * PITCH + PITCH * 0.5, 0.0,
-				float(j) * PITCH + PITCH * 0.5))
+	for k in range(CELL_MIN, CELL_MAX + 1):
+		for j in range(CELL_MIN, CELL_MAX + 1):
+			plan_block(rng, k, j, out)
+			plan_walk(rng, k, j, out)
+			plan_road(rng, k, j, out)
 	return out
 
 
@@ -209,82 +291,204 @@ static func road_slots(k_cross: int) -> Array:
 	return [-8.0, -3.5, 3.5, 8.0]
 
 
-## 블록의 사용 가능 구간 [lo, hi]. 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로
-## (8.5 대 6.0) 가장 가까운 중심선 하나로 재면 대로 쪽 보도를 침범한다.
-static func block_span(w: float) -> Vector2:
-	var k := floori(w / PITCH)
-	return Vector2(float(k) * PITCH + curb_half_at(k) + BLOCK_SETBACK,
-		float(k + 1) * PITCH - curb_half_at(k + 1) - BLOCK_SETBACK)
+# --- 지구 지도 파생 (§25) ---------------------------------------------------
+
+## 좌표 → 그 좌표를 품는 셀 인덱스. 지도 밖은 테두리 셀로 자른다(테두리는 W 다).
+static func cell_of(w: float) -> int:
+	return clampi(floori(w / PITCH), CELL_MIN, CELL_MAX)
+
+
+static func zone_at(k: int, j: int) -> int:
+	var c := clampi(k - CELL_MIN, 0, CELL_COUNT - 1)
+	var r := clampi(j - CELL_MIN, 0, CELL_COUNT - 1)
+	return int(ZONE_CODE[(ZONE_ROWS[r] as String)[c]])
+
+
+static func zone_at_pos(p: Vector3) -> int:
+	return zone_at(cell_of(p.x), cell_of(p.z))
+
+
+static func is_bridge_ew(jl: int, kc: int) -> bool:
+	for b in BRIDGES:
+		if int(b[0]) == jl and int(b[1]) == kc:
+			return true
+	return false
+
+
+## 도로 세그먼트가 존재하는가. **존 지도에서 파생되는 순수 함수**이고 별도 데이터가 없다.
+##   · 어느 한쪽이 수역이면 → 교량 목록에 있을 때만 존재한다.
+##   · 양쪽이 모두 공원이면 → 없다(수퍼블록 내부 관통 도로를 걷어낸다).
+##     한쪽만 공원이면 남는다 — 공원은 도로로 둘러싸인 것이 자연스럽다.
+static func seg_rule(a: int, b: int, bridge: bool) -> bool:
+	if a == Z_WATER or b == Z_WATER:
+		return bridge
+	return not (a == Z_PARK and b == Z_PARK)
+
+
+## 동서 도로(중심선 z = PITCH*jl)의, x 가 셀 kc 에 걸친 구간.
+static func seg_ew(jl: int, kc: int) -> bool:
+	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc))
+
+
+## 남북 도로(중심선 x = PITCH*kl)의, z 가 셀 jc 에 걸친 구간.
+## 강이 남북이라 이를 건너는 교량은 없다 — 남북 도로는 수역을 만나면 항상 끊긴다.
+static func seg_ns(kl: int, jc: int) -> bool:
+	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false)
+
+
+## 구멍이 이 자리에 있을 수 있는가(§25). 수역은 막고, 교량 아스팔트 위는 연다.
+## 판정하는 것은 **구멍 중심** 하나다 — 원반 절반이 물 위에 걸치는 것은 허용이다
+## ("강기슭이 파인" 연출이고, 반경 마진으로 막으면 교량 진입로까지 막힌다).
+static func passable(p: Vector3) -> bool:
+	var k := cell_of(p.x)
+	if zone_at(k, cell_of(p.z)) != Z_WATER:
+		return true
+	var jl := line_index(p.z)
+	return is_bridge_ew(jl, k) and absf(p.z - float(jl) * PITCH) <= road_half_at(jl)
+
+
+## P 수퍼블록의 축별 병합 범위 [최소 셀, 최대 셀]. 공원이 아니면 자기 셀 하나다.
+## 경계에서 멈추지 않으면 zone_at 이 테두리를 잘라 같은 값을 돌려주어 무한 루프가 된다.
+static func merge_k(k: int, j: int) -> Vector2i:
+	if zone_at(k, j) != Z_PARK:
+		return Vector2i(k, k)
+	var k0 := k
+	while k0 > CELL_MIN and zone_at(k0 - 1, j) == Z_PARK:
+		k0 -= 1
+	var k1 := k
+	while k1 < CELL_MAX and zone_at(k1 + 1, j) == Z_PARK:
+		k1 += 1
+	return Vector2i(k0, k1)
+
+
+static func merge_j(k: int, j: int) -> Vector2i:
+	if zone_at(k, j) != Z_PARK:
+		return Vector2i(j, j)
+	var j0 := j
+	while j0 > CELL_MIN and zone_at(k, j0 - 1) == Z_PARK:
+		j0 -= 1
+	var j1 := j
+	while j1 < CELL_MAX and zone_at(k, j1 + 1) == Z_PARK:
+		j1 += 1
+	return Vector2i(j0, j1)
+
+
+## 수퍼블록의 대표 셀인가 — (k, j) 사전순 최소. 배치는 여기서 **한 번만** 돈다.
+## 셀마다 돌리면 같은 병합 구간에 밀도가 셀 수 배로 겹친다.
+static func is_super_root(k: int, j: int) -> bool:
+	return merge_k(k, j).x == k and merge_j(k, j).x == j
+
+
+## 셀 (k, j) 의 배치 가능 구간. 공원이면 **병합 구간**이다 — 셰이더에서 내부 도로를
+## 지우기만 하고 이 구간을 셀 단위로 두면, 프롭이 옛 도로 띠를 계속 피해
+## "도로만 지워진 블록 넷" 이 되지 "수퍼블록" 이 되지 않는다.
+## 병합 구간은 첫 비-공원 인접 중심선의 커브에서 멈추므로, 지워진 내부 도로 자리는
+## 구간에 포함되어 그 위에도 나무가 선다.
+static func span_x(k: int, j: int) -> Vector2:
+	var m := merge_k(k, j)
+	return Vector2(float(m.x) * PITCH + curb_half_at(m.x) + BLOCK_SETBACK,
+		float(m.y + 1) * PITCH - curb_half_at(m.y + 1) - BLOCK_SETBACK)
+
+
+static func span_z(k: int, j: int) -> Vector2:
+	var m := merge_j(k, j)
+	return Vector2(float(m.x) * PITCH + curb_half_at(m.x) + BLOCK_SETBACK,
+		float(m.y + 1) * PITCH - curb_half_at(m.y + 1) - BLOCK_SETBACK)
+
+
+## 셰이더로 넘길 존 지도 텍스처. 여기가 지도의 단일 원천이고 셰이더는 이것을 읽는다
+## (판정기는 읽지 않는다 — 자기 사본을 든다).
+static func zone_texture() -> ImageTexture:
+	var img := Image.create(CELL_COUNT, CELL_COUNT, false, Image.FORMAT_R8)
+	for j in range(CELL_MIN, CELL_MAX + 1):
+		for k in range(CELL_MIN, CELL_MAX + 1):
+			var v := float(zone_at(k, j) * ZONE_TEX_STEP) / 255.0
+			img.set_pixel(k - CELL_MIN, j - CELL_MIN, Color(v, v, v))
+	return ImageTexture.create_from_image(img)
+
+
+static func block_center(k: int, j: int) -> Vector3:
+	return Vector3(float(k) * PITCH + PITCH * 0.5, 0.0, float(j) * PITCH + PITCH * 0.5)
 
 
 ## 블록 내부. 큰 건물 한 채를 먼저 시도하고 남는 자리를 작은 것으로 채운다.
 ## 자리가 되는지는 add_slot 이 판단한다 — 레이아웃마다 기하를 손으로 맞추지 않는다.
-func plan_block(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
+## §25: 무엇이·얼마나 들어가는지는 그 셀의 **지구(zone)** 가 정한다.
+func plan_block(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
+	var dz := zone_at(k, j)
+	if dz == Z_WATER:
+		return
+	# 공원은 수퍼블록 하나를 통째로 쓴다 — 대표 셀에서 한 번만 돈다.
+	if dz == Z_PARK and not is_super_root(k, j):
+		return
+	var prof: Dictionary = ZONE_PROFILE[dz]
 	# 블록 중앙 자리는 큰 것 전용이다. min_ext 를 안 걸면 이 한 번뿐인 기회를
 	# 덤불이 차지해 대형 건물이 도시 전체에서 한두 채로 줄어든다(실측).
 	# 대로가 한쪽에 붙은 블록은 격자 중앙과 사용 가능 구간의 중앙이 1.25m 어긋난다.
-	# 중앙 슬롯뿐 아니라 산포의 기준점도 함께 옮겨야 한다 — 중앙만 옮기면 나머지
-	# 16개가 대로 보도 쪽으로 편향된 채 전부 거절된다.
-	var sx := block_span(b.x)
-	var sz := block_span(b.z)
+	# 중앙 슬롯뿐 아니라 산포의 기준점도 함께 옮겨야 한다 — 중앙만 옮기면 나머지가
+	# 대로 보도 쪽으로 편향된 채 전부 거절된다.
+	var sx := span_x(k, j)
+	var sz := span_z(k, j)
 	var c := Vector3((sx.x + sx.y) * 0.5, 0.0, (sz.x + sz.y) * 0.5)
-	if rng.randf() < 0.45:
-		add_slot(rng, c, "block", out, "", 3.5)
-	# 산포 반경을 **사용 가능 구간에서 유도한다**(§22). 상수 8.5 를 그대로 쓰면 대로가
+	if rng.randf() < float(prof["center"]):
+		add_slot(rng, c, "block", out, "", float(prof["center_ext"]), dz)
+	# 산포 반경을 **사용 가능 구간에서 유도한다**(§22). 상수를 그대로 쓰면 대로가
 	# 붙은 블록(반폭 7.95)에서 축당 6.5% 의 시도가 구간 밖으로 나가 add_slot 이 조용히
-	# 거절한다 — 지도의 92%(196블록 중 180)가 그런 블록이라 그만큼 덜 찬다.
-	# 구간 반폭을 그대로 쓰지 않고 상한을 씌우는 이유: 이 값은 **중심**의 범위이고
-	# 에셋에는 폭이 있어서, 구간 끝까지 벌리면 가장자리 시도가 폭만큼 거절된다.
-	#
-	# **이 변경은 도시 전체를 다시 흔든다.** 산포 반경이 달라진 블록에서 add_slot 이
-	# 고르는 후보가 달라지고, 후보 수에 따라 난수 소비량이 달라져 그 뒤의 시드 흐름이
-	# 통째로 어긋나기 때문이다. 대로가 안 붙은 블록(16개)의 산포 반경은 8.5 그대로인데도
-	# 블록당 프롭이 6.38 → 5.69 로 바뀐 것이 그 증거다(실측). 계측 결과는 §22 에 있다.
-	var spread := Vector2(minf(SPREAD_MAX, (sx.y - sx.x) * 0.5),
-		minf(SPREAD_MAX, (sz.y - sz.x) * 0.5))
-	for _i in 16:
+	# 거절한다. 구간 반폭을 그대로 쓰지 않고 상한을 씌우는 이유: 이 값은 **중심**의
+	# 범위이고 에셋에는 폭이 있어서, 구간 끝까지 벌리면 가장자리 시도가 폭만큼 거절된다.
+	# 공원은 병합 구간이 넓으므로 상한도 넓다(ZONE_PROFILE).
+	var lim: float = float(prof["spread"])
+	var spread := Vector2(minf(lim, (sx.y - sx.x) * 0.5), minf(lim, (sz.y - sz.x) * 0.5))
+	for _i in int(prof["tries"]):
 		add_slot(rng, c + Vector3(rng.randf_range(-spread.x, spread.x), 0.0,
-			rng.randf_range(-spread.y, spread.y)), "block", out)
+			rng.randf_range(-spread.y, spread.y)), "block", out, "", 0.0, dz)
 
 
 ## 보도: 블록 네 변의 중앙선 위에 일정 간격으로 놓는다.
 ## 변마다 인접 도로의 등급이 다를 수 있으므로 중심선을 변마다 계산한다.
-func plan_walk(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
+## 밀도는 그 셀의 지구가 정한다. 도로가 걷힌 자리의 보도는 in_zone 이 거절한다.
+func plan_walk(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
+	var b := block_center(k, j)
+	var dz := zone_at(k, j)
+	var skip: float = float(ZONE_PROFILE[dz]["walk_skip"])
 	var half: float = PITCH * 0.5
 	for side in [-1.0, 1.0]:
 		var wz: float = b.z + side * (half - walk_center_at(line_index(b.z + side * half)))
 		for t in [-8.0, -3.0, 3.0, 8.0]:
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
-			add_slot(rng, Vector3(b.x + t, 0.0, wz), "walk", out)
+			add_slot(rng, Vector3(b.x + t, 0.0, wz), "walk", out, "", 0.0, dz)
 		var wx: float = b.x + side * (half - walk_center_at(line_index(b.x + side * half)))
 		for t in [-8.0, -3.0, 3.0, 8.0]:
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
-			add_slot(rng, Vector3(wx, 0.0, b.z + t), "walk", out)
+			add_slot(rng, Vector3(wx, 0.0, b.z + t), "walk", out, "", 0.0, dz)
 
 
 ## 차도: 블록의 -x·-z 쪽 도로만 담당한다. 그래야 인접 블록과 중복 생성되지 않는다.
 ## 차량은 도로 축 방향으로 세운다 — 방향은 카탈로그에 적지 않고 모델 AABB 의
 ## 긴 축에서 유도한다(팩마다 모델이 X 로 눕기도, Z 로 눕기도 한다).
 ## 차선 수와 정차 자리는 둘 다 도로 등급의 함수다 — 대로에는 차가 더 많이, 더 넓게 선다.
-func plan_road(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
+func plan_road(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
+	var b := block_center(k, j)
+	var dz := zone_at(k, j)
+	var skip: float = float(ZONE_PROFILE[dz]["road_skip"])
 	var half: float = PITCH * 0.5
-	var kz := line_index(b.z - half)          # 블록 -z 쪽 동서 도로
-	var kx := line_index(b.x - half)          # 블록 -x 쪽 남북 도로
+	var kz := j                               # 블록 -z 쪽 동서 도로의 중심선 인덱스
+	var kx := k                               # 블록 -x 쪽 남북 도로의 중심선 인덱스
 	var tz := road_slots(kx)                  # 동서 도로를 가로지르는 것은 남북 도로다
 	var tx := road_slots(kz)
 	for i in 4:
 		for slot in lane_slots(kz):
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
 			add_slot(rng, Vector3(b.x + float(tz[i]), 0.0, b.z - half + float(slot[0])),
-				"road", out, "x", float(slot[1]))
+				"road", out, "x", float(slot[1]), dz)
 		for slot in lane_slots(kx):
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
 			add_slot(rng, Vector3(b.x - half + float(slot[0]), 0.0, b.z + float(tx[i])),
-				"road", out, "z", float(slot[1]))
+				"road", out, "z", float(slot[1]), dz)
 
 
 ## 한 자리에 들어갈 에셋을 고른다.
@@ -296,18 +500,29 @@ func plan_road(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
 ## 차선(폭 4m)에 들어가는 차가 전부 탈락한다 — 실측: 승용차 7종 중 1종만 남고
 ## 버스·구급차는 전멸했다. 회전이 90° 단위이므로 축방향 반extent 로 정확히 잰다.
 func add_slot(rng: RandomNumberGenerator, pos: Vector3, zone: String, out: Array,
-		road_axis := "", min_ext := 0.0) -> void:
+		road_axis := "", min_ext := 0.0, dz := Z_RESIDENTIAL) -> void:
 	if Vector2(pos.x, pos.z).length() < PLAZA_R:
 		return                                                      # 판정 광장
 	if absf(pos.x) > GROUND_HALF - 2.0 or absf(pos.z) > GROUND_HALF - 2.0:
 		return
+	# 수역 셀 안에는 **자리의 종류를 가리지 않고** 아무것도 놓지 않는다(§25).
+	# 교량 위도 비운다 — 그래야 Z3 가 "수역 셀 안에 프롭 0개" 라는 예외 없는 단언이 된다.
+	if zone_at(cell_of(pos.x), cell_of(pos.z)) == Z_WATER:
+		return
+	var prof: Dictionary = ZONE_PROFILE[dz]
+	var kinds: Array = prof["kinds"]
+	var mul: float = float(prof["scale_mul"]) if zone == "block" else 1.0
 	# 회전 후보를 먼저 정한다. 차량은 도로 축에 맞춰 두 방향, 나머지는 90° 네 방향.
 	var spin := rng.randi_range(0, 3)
 	var cands := []
 	for e in CATALOG:
 		if e["zone"] != zone:
 			continue
-		var h := half_extent(e)
+		# 블록 내부만 지구제로 거른다 — 보도·차도 프롭은 어느 지구에서나 같다.
+		if zone == "block" and not kinds.has(e["kind"]):
+			continue
+		var s: float = float(e["scale"]) * mul
+		var h := half_extent(e["path"], s)
 		if maxf(h.x, h.y) < min_ext:
 			continue
 		var yaw: float
@@ -320,14 +535,16 @@ func add_slot(rng: RandomNumberGenerator, pos: Vector3, zone: String, out: Array
 			yaw = (0.0 if long_is_z == want_z else PI * 0.5) + float(spin % 2) * PI
 		var ex := axis_extent(h, yaw)
 		if in_zone(pos, ex, zone):
-			cands.append({ "e": e, "yaw": yaw, "ex": ex })
+			cands.append({ "e": e, "yaw": yaw, "ex": ex, "s": s })
 	if cands.is_empty():
 		return
 	var pick: Dictionary = cands[rng.randi_range(0, cands.size() - 1)]
 	if not fits(pos, pick["ex"], out):
 		return
 	var e: Dictionary = pick["e"]
-	out.append({ "path": e["path"], "scale": e["scale"], "zone": zone,
+	# scale 은 **지구 배수를 곱한 실효값**을 싣는다. make_prop·지문·판정이 전부
+	# 이 값을 쓰므로, 여기서 확정하지 않으면 도심 고층이 배치만 크고 렌더는 원래 크기가 된다.
+	out.append({ "path": e["path"], "scale": pick["s"], "zone": zone,
 		"pos": pos, "ex": pick["ex"], "yaw": pick["yaw"] })
 
 
@@ -346,6 +563,11 @@ func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
 	var uz: float = absf(pos.z - float(kz) * PITCH)
 	var rx := road_half_at(kx)
 	var rz := road_half_at(kz)
+	# §25: 그려지지 않는 도로 위에는 프롭도 서지 않는다. 기하 조건만 보면 공원 내부의
+	# 걷힌 도로 자리에 가로등이 서고 강기슭의 걷힌 차선에 차가 맨땅 위에 선다 —
+	# in_zone 의 띠 검사는 도로가 **있는지**를 묻지 않기 때문이다.
+	var kc := cell_of(pos.x)
+	var jc := cell_of(pos.z)
 	match zone:
 		"road":
 			# 동서 도로 또는 남북 도로 중 한쪽에 온전히 들어가면 된다. 세 조건이다:
@@ -355,21 +577,24 @@ func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
 			# ③은 자리 중심이 아니라 **프롭의 실제 길이**로 잰다. 중심만 빼는 방식은
 			#   버스(반길이 4.24)의 차체가 교차로 안에 남는 것을 못 막는다.
 			var on_z: bool = uz + ex.y <= rz and uz - ex.y >= median_at(kz) \
-				and ux - ex.x >= rx + CROSS_W
+				and ux - ex.x >= rx + CROSS_W and seg_ew(kz, kc)
 			var on_x: bool = ux + ex.x <= rx and ux - ex.x >= median_at(kx) \
-				and uz - ex.y >= rz + CROSS_W
+				and uz - ex.y >= rz + CROSS_W and seg_ns(kx, jc)
 			return on_z or on_x
 		"walk":
 			# 한 축은 보도 띠 안, 다른 축은 교차 도로를 침범하지 않아야 한다.
 			var on_z: bool = uz - ex.y >= rz and uz + ex.y <= curb_half_at(kz) \
-				and ux - ex.x >= rx
+				and ux - ex.x >= rx and seg_ew(kz, kc)
 			var on_x: bool = ux - ex.x >= rx and ux + ex.x <= curb_half_at(kx) \
-				and uz - ex.y >= rz
+				and uz - ex.y >= rz and seg_ns(kx, jc)
 			return on_z or on_x
 		_:
 			# 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르다 — 구간으로 본다.
-			var sx := block_span(pos.x)
-			var sz := block_span(pos.z)
+			# 공원이면 span_* 이 **병합 구간**을 돌려주므로 걷힌 내부 도로 자리까지 찬다.
+			if zone_at(kc, jc) == Z_WATER:
+				return false
+			var sx := span_x(kc, jc)
+			var sz := span_z(kc, jc)
 			return pos.x - ex.x >= sx.x and pos.x + ex.x <= sx.y \
 				and pos.z - ex.y >= sz.x and pos.z + ex.y <= sz.y
 	return false
@@ -387,12 +612,12 @@ func fits(pos: Vector3, ex: Vector2, out: Array) -> bool:
 
 
 ## 에셋의 XZ 반extent(스케일 반영). 메시 AABB 에서 직접 잰다.
-func half_extent(e: Dictionary) -> Vector2:
-	var key: String = e["path"]
-	if not _r_cache.has(key):
-		var s: Vector3 = mesh_of(key).get_aabb().size
-		_r_cache[key] = Vector2(s.x, s.z) * 0.5
-	return (_r_cache[key] as Vector2) * float(e["scale"])
+## 스케일을 인자로 받는다 — 지구 배수(§25)가 붙으면 카탈로그의 값과 다르기 때문이다.
+func half_extent(path: String, scale: float) -> Vector2:
+	if not _r_cache.has(path):
+		var s: Vector3 = mesh_of(path).get_aabb().size
+		_r_cache[path] = Vector2(s.x, s.z) * 0.5
+	return (_r_cache[path] as Vector2) * scale
 
 
 ## 모델 밑동(아래 BASE_FRAC 높이)의 XZ 반extent와, 메시 XZ 중심 대비 그 중심의

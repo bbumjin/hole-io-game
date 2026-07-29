@@ -1,5 +1,7 @@
 extends Node3D
 
+const CITY := preload("res://scripts/city.gd")
+
 ## 구멍 반경의 단일 진실 원천(SSOT). 우물의 반경과 깊이가 모두 여기서 파생된다.
 ## 시작값 1.5 — 크기 게이트(R × 0.45 = 0.675)가 트래픽콘·덤불·표지판만 열어 준다.
 ## 5.0 은 시작부터 나무가 걸림 없이 삼켜지고 90초에 지도를 비웠다(플레이 피드백).
@@ -138,9 +140,23 @@ func can_swallow(obj_fit_radius: float) -> bool:
 
 ## 구멍을 지면 안에 붙잡아 이동시킨다. 밖으로 나가면 우물이 허공에 뜨고
 ## 판정 전제도 깨진다. 플레이어와 AI 가 같은 함수를 쓴다.
+##
+## §25: 수역도 같은 방식으로 막는다. 막을 때는 **축별로 미끄러뜨린다** — 두 축을 함께
+## 거절하면 강기슭에 대각으로 다가간 구멍이 그 자리에 못 박힌다. 한 축씩 시도하면
+## 둑을 따라 흐르듯 움직여, 교량 진입로까지 자연스럽게 미끄러져 간다.
 func move_to(p: Vector3) -> void:
 	var lim: float = ground_half - radius * 1.15
-	global_position = Vector3(clampf(p.x, -lim, lim), 0.0, clampf(p.z, -lim, lim))
+	var t := Vector3(clampf(p.x, -lim, lim), 0.0, clampf(p.z, -lim, lim))
+	if CITY.passable(t):
+		global_position = t
+		return
+	var sx := Vector3(t.x, 0.0, global_position.z)
+	if CITY.passable(sx):
+		global_position = sx
+		return
+	var sz := Vector3(global_position.x, 0.0, t.z)
+	if CITY.passable(sz):
+		global_position = sz
 
 
 ## 다른 구멍을 삼킬 수 있는가 — 상대가 `bite_depth` 만큼 내 원반 안으로 들어와야 한다.
@@ -254,6 +270,12 @@ func _physics_process(_dt: float) -> void:
 		if rb.global_position.y < kill_y \
 				and flat_dist(rb.global_position, here) < radius:
 			_falling.remove_at(i)
+			# 구멍 둘이 겹쳐 있으면 같은 개체가 양쪽의 _falling 에 들어 있다.
+			# 먼저 삼킨 쪽만 세고, 늦은 쪽은 조용히 넘긴다 — 소멸을 기다리면
+			# `queue_free` 가 프레임 끝에 도는 사이에 양쪽이 다 세어 버린다.
+			if rb.consumed:
+				continue
+			rb.consumed = true
 			grow_by(rb.radius)
 			score += int(rb.score_value)
 			swallowed_count += 1

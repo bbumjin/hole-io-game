@@ -4,6 +4,7 @@ const MOVE_SPEED := 14.0
 const GROUND_HALF := 224.0           # PlaneMesh size 448 의 절반 (14x14 도시 블록)
 const HOLE_SCENE := preload("res://scenes/hole.tscn")
 const HOLE_AI := preload("res://scripts/hole_ai.gd")
+const CITY := preload("res://scripts/city.gd")
 
 ## 4a: 경쟁 구멍 수. 0 이면 1단계~3단계와 같은 단독 구멍 씬이다.
 @export var ai_count := 5
@@ -80,7 +81,13 @@ var swallowed_total: int:
 
 
 func _ready() -> void:
-	registry.set_target_material(ground.get_surface_override_material(0))
+	var gmat: ShaderMaterial = ground.get_surface_override_material(0)
+	registry.set_target_material(gmat)
+	# 존 지도를 셰이더로 넘긴다(§25). City._ready 가 먼저 도는 것과 무관하게
+	# 지도는 상수라 언제든 구울 수 있다. 판정 모드에서도 반드시 걸어야 한다 —
+	# 안 걸면 셰이더가 빈 텍스처를 읽어 지도 전체가 도심색이 된다.
+	gmat.set_shader_parameter("zone_tex", CITY.zone_texture())
+	gmat.set_shader_parameter("ground_half", GROUND_HALF)
 	hole.ground_half = GROUND_HALF
 	hole.label = "P"
 	# 포식 해소는 그 프레임의 이동이 **끝난 뒤** 돌아야 한다. 기본 순서(부모 먼저)

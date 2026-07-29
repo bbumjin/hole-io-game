@@ -1,4 +1,4 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 (rev.23)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 (rev.24)
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
 >
@@ -460,7 +460,7 @@ shape = SubResource("Rim_1")
 
 ## §4. 구성 요소
 
-### A. 지면 셰이더 (`shaders/ground_hole.gdshader`)
+### A. 지면 셰이더 — `shaders/ground_hole.gdshader` (전문)
 
 ```glsl
 shader_type spatial;
@@ -492,11 +492,62 @@ uniform float boul_half   = 6.5;    // 대로 아스팔트 반폭
 uniform float lane_gap    = 0.75;   // 대로 이중 중앙선의 중심 오프셋.
                                     // 선 반폭 0.30 이므로 두 줄 사이 빈 간격은 0.9 다
 
-uniform vec3 ground_color : source_color = vec3(0.45, 0.65, 0.35);
 uniform vec3 road_color   : source_color = vec3(0.36, 0.37, 0.40);
 uniform vec3 curb_color   : source_color = vec3(0.72, 0.72, 0.70);
 uniform vec3 lane_color   : source_color = vec3(0.88, 0.80, 0.25);
 uniform vec3 cross_color  : source_color = vec3(0.90, 0.90, 0.87);
+
+// --- 지구제·수계 (§25) -----------------------------------------------------
+// 존 지도는 city.gd 가 구운 14x14 R8 텍스처 하나가 원천이다. 셀당 zone_code*51 이
+// 들어 있고 51/255 = 0.2 간격이라 복호가 8비트 양자화·필터 오차에 견고하다.
+// **판정기는 이 텍스처를 읽지 않는다** — 자기 사본을 들고 같은 지도를 독립으로 계산한다.
+uniform sampler2D zone_tex : filter_nearest, repeat_disable;
+uniform float ground_half = 224.0;
+
+// 존별 지면색. 휘도는 전부 [아스팔트 0.37 + 여유, 커브 0.72 - 여유] 안에 둔다 —
+// 벗어나면 D1(인접 표면 휘도차)·D4(우물보다 밝다)가 무너진다. 아래 값은 렌더 후에도
+// 어느 채널도 1.0 에 붙지 않도록 낮춰 잡았다(클리핑되면 채널 차가 뭉개져 Z1 이 흐려진다).
+uniform vec3 zone_d_color : source_color = vec3(0.46, 0.44, 0.42);   // 도심: 무채색 콘크리트
+uniform vec3 zone_c_color : source_color = vec3(0.47, 0.53, 0.38);   // 상업: 약한 녹조
+uniform vec3 zone_r_color : source_color = vec3(0.39, 0.58, 0.31);   // 주거: 잔디
+uniform vec3 zone_p_color : source_color = vec3(0.26, 0.55, 0.19);   // 공원: 짙은 녹지
+uniform vec3 water_color  : source_color = vec3(0.13, 0.28, 0.47);   // 강
+uniform vec3 ocean_color  : source_color = vec3(0.08, 0.19, 0.36);   // 지도 테두리 바다
+uniform vec3 bank_color   : source_color = vec3(0.62, 0.58, 0.42);   // 기슭
+uniform float bank_w = 2.4;
+
+// 존 지도의 규격 상수. city.gd 의 CELL_MIN·CELL_COUNT·ZONE_TEX_STEP 과 같은 값이다.
+const int ZMIN = -7;
+const int ZN = 14;
+const float ZSTEP = 51.0;
+const int Z_D = 0;
+const int Z_C = 1;
+const int Z_R = 2;
+const int Z_P = 3;
+const int Z_W = 4;
+
+int zone_at(int k, int j) {
+	ivec2 t = ivec2(clamp(k - ZMIN, 0, ZN - 1), clamp(j - ZMIN, 0, ZN - 1));
+	return int(texelFetch(zone_tex, t, 0).r * 255.0 / ZSTEP + 0.5);
+}
+
+// 교량. city.gd 의 BRIDGES 와 **같은 집합**이어야 한다 — 여기만 고치면 도로는 그려지는데
+// 구멍이 못 지나가고, 저기만 고치면 그 반대가 된다. 강이 열 k=2 라 셀 인덱스는 2 다.
+bool is_bridge_ew(int jl, int kc) {
+	return kc == 2 && (jl == -3 || jl == 0 || jl == 3);
+}
+
+// 도로 세그먼트가 존재하는가. city.gd 의 seg_rule 과 같은 규칙이다.
+float seg_rule(int a, int b, bool bridge) {
+	if (a == Z_W || b == Z_W) { return bridge ? 1.0 : 0.0; }
+	return (a == Z_P && b == Z_P) ? 0.0 : 1.0;
+}
+float seg_ew(int jl, int kc) {
+	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc));
+}
+float seg_ns(int kl, int jc) {
+	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false);
+}
 
 varying vec3 world_pos;
 
@@ -549,28 +600,66 @@ void fragment() {
 	float cx = rx + walk_w;
 	float cz = rz + walk_w;
 
-	vec3 col = ground_color;
-	col = mix(col, curb_color, max(aa_band(ux, cx), aa_band(uz, cz)));
-	col = mix(col, road_color, max(aa_band(ux, rx), aa_band(uz, rz)));
+	// --- 지구 지면색과 수계 (§25) -----------------------------------------
+	// 프래그먼트를 **품는 셀**(중심선이 아니라 칸)의 존이 지면색을 정한다.
+	int kc = int(floor(p.x / block_pitch));
+	int jc = int(floor(p.y / block_pitch));
+	int zc = zone_at(kc, jc);
+
+	vec3 base;
+	if (zc == Z_W) {
+		// 기슭 띠는 **물 쪽에만** 그린다. 그러면 육지 픽셀(지도의 대부분)은
+		// 이 네 번의 texelFetch 를 아예 건너뛴다.
+		float ex = p.x - float(kc) * block_pitch;
+		float ez = p.y - float(jc) * block_pitch;
+		float bank = 0.0;
+		if (zone_at(kc - 1, jc) != Z_W) { bank = max(bank, 1.0 - smoothstep(0.0, bank_w, ex)); }
+		if (zone_at(kc + 1, jc) != Z_W) { bank = max(bank, 1.0 - smoothstep(0.0, bank_w, block_pitch - ex)); }
+		if (zone_at(kc, jc - 1) != Z_W) { bank = max(bank, 1.0 - smoothstep(0.0, bank_w, ez)); }
+		if (zone_at(kc, jc + 1) != Z_W) { bank = max(bank, 1.0 - smoothstep(0.0, bank_w, block_pitch - ez)); }
+		// 지도 가장자리로 갈수록 깊어진다 — 강과 바다를 한 장의 지도로 잇는다.
+		float deep = smoothstep(0.72, 1.0, max(abs(p.x), abs(p.y)) / ground_half);
+		base = mix(mix(water_color, ocean_color, deep), bank_color, bank);
+	} else if (zc == Z_D) {
+		base = zone_d_color;
+	} else if (zc == Z_C) {
+		base = zone_c_color;
+	} else if (zc == Z_R) {
+		base = zone_r_color;
+	} else {
+		base = zone_p_color;
+	}
+
+	// 도로 마스크. 남북 도로는 자기가 걸친 z-셀로, 동서 도로는 x-셀로 존재를 묻는다.
+	// 마스크가 0 인 자리에서는 아스팔트·보도·중앙선·횡단보도가 전부 사라지고
+	// 그 자리의 존 지면색이 그대로 드러난다.
+	float ens = seg_ns(int(kx), jc);
+	float enw = seg_ew(int(kz), kc);
+
+	vec3 col = base;
+	col = mix(col, curb_color, max(aa_band(ux, cx) * ens, aa_band(uz, cz) * enw));
+	col = mix(col, road_color, max(aa_band(ux, rx) * ens, aa_band(uz, rz) * enw));
 
 	// 중앙선은 도로 중심선 위에 그리되 교차로에서는 끊는다.
 	// 대로는 한 줄이 아니라 ±lane_gap 두 줄이다. abs(ux) 를 aa_band 에 넘기면 그
 	// 꺾임점(= 대로 한가운데)에서 fwidth 가 튀어 1픽셀 얼룩이 생긴다 — 부호 있는
 	// 인자 두 개의 max 로 푼다. aa_band 주석의 경고와 같은 이유다.
-	float inter = step(abs(ux), rx) * step(abs(uz), rz);
+	// 한쪽 도로가 없으면 교차로도 없다(inter=0) — 남은 도로의 중앙선이 이어져야 한다.
+	float inter = step(abs(ux), rx) * step(abs(uz), rz) * ens * enw;
 	float lx = mix(aa_band(ux, lane_half),
-		max(aa_band(ux - lane_gap, lane_half), aa_band(ux + lane_gap, lane_half)), bx);
+		max(aa_band(ux - lane_gap, lane_half), aa_band(ux + lane_gap, lane_half)), bx) * ens;
 	float lz = mix(aa_band(uz, lane_half),
-		max(aa_band(uz - lane_gap, lane_half), aa_band(uz + lane_gap, lane_half)), bz);
+		max(aa_band(uz - lane_gap, lane_half), aa_band(uz + lane_gap, lane_half)), bz) * enw;
 	col = mix(col, lane_color, max(lx, lz) * (1.0 - inter));
 
 	// 횡단보도: 교차로 바로 바깥의 도로 위 줄무늬. 중앙선 위에 덮인다.
 	// 축이 섞인다 — "자기 도로 안(자기 축의 반폭)" × "교차로 밖~띠 안(교차 축의 반폭)".
 	// 띠는 보도를 넘지 않는다: 대로 [6.5, 8.1] < 8.5, 일반 [4.0, 5.6] < 6.0.
+	// 건널 상대가 없으면(교차 도로가 걷혔으면) 횡단보도도 그리지 않는다 — ens*enw.
 	float cw_x = step(abs(ux), rx)
-		* step(rz, abs(uz)) * step(abs(uz), rz + cross_w);
+		* step(rz, abs(uz)) * step(abs(uz), rz + cross_w) * ens * enw;
 	float cw_z = step(abs(uz), rz)
-		* step(rx, abs(ux)) * step(abs(ux), rx + cross_w);
+		* step(rx, abs(ux)) * step(abs(ux), rx + cross_w) * ens * enw;
 	float cw_fade = 1.0 - smoothstep(0.15 * cross_pitch, 0.5 * cross_pitch,
 		max(fwidth(p.x), fwidth(p.y)));
 	float stripe = cw_x * step(fract(p.x / cross_pitch), 0.55)
@@ -594,10 +683,12 @@ void fragment() {
 - **주입 타입**: 엔진이 `holes`를 `PackedVector4Array`로 선언하므로(V5b) 이를 1순위로 쓴다. 무타입 `Array`도 동작하지만(V4) 엔진 선언 타입과 어긋난다.
 - **내용만 바꾸면 GPU에 반영되지 않는다 — 매번 `set_shader_parameter`를 다시 호출해야 한다.** (버퍼를 멤버로 두는 것은 `PackedVector4Array`가 값 타입이라 호출마다 어차피 복사되므로 할당 회피 효과가 크지 않다. 코드 단순성 때문에 유지한다.)
 
-### B. 우물 (`scenes/hole.tscn`의 `Well`) / `scripts/hole.gd`
+### B. 우물 — `scripts/hole.gd` (전문). 우물 메시는 `scenes/hole.tscn` 의 `Well` 노드다
 
 ```gdscript
 extends Node3D
+
+const CITY := preload("res://scripts/city.gd")
 
 ## 구멍 반경의 단일 진실 원천(SSOT). 우물의 반경과 깊이가 모두 여기서 파생된다.
 ## 시작값 1.5 — 크기 게이트(R × 0.45 = 0.675)가 트래픽콘·덤불·표지판만 열어 준다.
@@ -615,10 +706,21 @@ extends Node3D
 @export var suction := 26.0
 ## 낙하 오브젝트를 소멸시키는 깊이 = well_depth * kill_ratio.
 @export var kill_ratio := 0.8
-## 흡입 가능 상한: obj_radius <= radius * swallow_ratio 인 것만 반응한다.
-## 이 게이트가 없으면 구멍보다 큰 오브젝트가 통과 조건을 영원히 만족하지 못한 채
-## 림에서 계속 떤다(§4-D-2 의 한계).
-@export var swallow_ratio := 0.45
+## AI 목표 선정용 상한(§23). 흡입을 막는 게이트가 **아니다** — 무엇이 들어가는지는
+## 이제 물리가 정한다. AI 가 자기보다 큰 것을 쫓느라 굳지 않게 하는 조언일 뿐이다.
+## 척도는 물체의 **좁은 쪽 반폭**(fit_radius)이다: 원형 구멍을 통과하는 데 필요한
+## 것은 대각선이 아니라 좁은 쪽이다(실측: 택시는 외접반경 2.27 이지만 폭은 0.85).
+@export var swallow_ratio := 0.9
+## 림 바닥판의 바깥 반경 = radius + 이 값. 구멍 둘레에서 지면을 대신하는 판이므로,
+## 감지 범위에 걸친 가장 큰 프롭(반extent 8.2)을 덮고도 남아야 한다.
+@export var rim_outer := 30.0
+## 림 바닥판의 분할 수. 48 은 우물 메시(radial_segments 48)와 같은 값이라
+## 물리 경계와 그려지는 림이 어긋나 보이지 않는다.
+@export var rim_segments := 48
+## 이 깊이보다 내려가면 "구멍에 빠졌다" 로 본다. 지면 아래로 확실히 내려간 값이어야
+## 한다 — 0 으로 두면 림 위에서 덜컹이는 것도 낙하로 오인한다.
+@export var fall_depth := 0.6
+
 ## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
 ## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
 @export var growth_k := 1.0
@@ -643,6 +745,10 @@ signal grew(from_radius: float, to_radius: float)
 @onready var well: MeshInstance3D = $Well
 @onready var area: Area3D = $Area
 @onready var area_shape: CollisionShape3D = $Area/Shape
+## §23. 구멍 둘레의 **물리적 바닥판**(가운데가 뚫린 원판). 감지 범위에 들어온
+## 오브젝트는 지면 대신 이것을 딛는다 — 구멍 위에는 바닥이 없으므로 물체가
+## 스스로 기울고 빠진다. 통과 조건을 기하로 흉내내지 않는 이유가 이것이다.
+@onready var rim_shape: CollisionShape3D = $Rim/Shape
 
 ## Area3D 안에 있으나 아직 통과 조건을 만족하지 못한 후보.
 var _candidates: Array[RigidBody3D] = []
@@ -675,6 +781,29 @@ func rebuild() -> void:
 	s.height = radius * 1.6
 	area_shape.position.y = radius * 0.4
 
+	rim_shape.shape.set_faces(rim_faces())
+
+
+## 림 바닥판의 삼각형들. 안쪽 반경 = 구멍 반경(그려지는 림과 같은 자리),
+## 바깥 반경 = radius + rim_outer. 지면(y=0)과 같은 높이라 딛는 면이 이어진다.
+##
+## 안쪽을 구멍 반경보다 **넓게** 잡으면 물체가 림에 얹히기 전에 빠지고, **좁게**
+## 잡으면 눈에 보이는 구멍 위에 투명한 바닥이 생긴다. 시각과 물리의 경계는 같아야 한다.
+func rim_faces() -> PackedVector3Array:
+	var f := PackedVector3Array()
+	var ro: float = radius + rim_outer
+	for i in rim_segments:
+		var a0: float = TAU * float(i) / float(rim_segments)
+		var a1: float = TAU * float(i + 1) / float(rim_segments)
+		var i0 := Vector3(cos(a0) * radius, 0.0, sin(a0) * radius)
+		var i1 := Vector3(cos(a1) * radius, 0.0, sin(a1) * radius)
+		var o0 := Vector3(cos(a0) * ro, 0.0, sin(a0) * ro)
+		var o1 := Vector3(cos(a1) * ro, 0.0, sin(a1) * ro)
+		# 반시계 방향(위에서 볼 때)으로 감아 법선이 +Y 를 향하게 한다.
+		f.append_array([i0, o0, o1])
+		f.append_array([i0, o1, i1])
+	return f
+
 
 func set_radius(r: float) -> void:
 	radius = r
@@ -692,15 +821,30 @@ func grow_by(obj_radius: float) -> void:
 	grew.emit(before, radius)
 
 
-func can_swallow(obj_radius: float) -> bool:
-	return obj_radius <= radius * swallow_ratio
+## AI 조언용. 흡입을 막지 않는다(§23) — 무엇이 들어가는지는 물리가 정한다.
+func can_swallow(obj_fit_radius: float) -> bool:
+	return obj_fit_radius <= radius * swallow_ratio
 
 
 ## 구멍을 지면 안에 붙잡아 이동시킨다. 밖으로 나가면 우물이 허공에 뜨고
 ## 판정 전제도 깨진다. 플레이어와 AI 가 같은 함수를 쓴다.
+##
+## §25: 수역도 같은 방식으로 막는다. 막을 때는 **축별로 미끄러뜨린다** — 두 축을 함께
+## 거절하면 강기슭에 대각으로 다가간 구멍이 그 자리에 못 박힌다. 한 축씩 시도하면
+## 둑을 따라 흐르듯 움직여, 교량 진입로까지 자연스럽게 미끄러져 간다.
 func move_to(p: Vector3) -> void:
 	var lim: float = ground_half - radius * 1.15
-	global_position = Vector3(clampf(p.x, -lim, lim), 0.0, clampf(p.z, -lim, lim))
+	var t := Vector3(clampf(p.x, -lim, lim), 0.0, clampf(p.z, -lim, lim))
+	if CITY.passable(t):
+		global_position = t
+		return
+	var sx := Vector3(t.x, 0.0, global_position.z)
+	if CITY.passable(sx):
+		global_position = sx
+		return
+	var sz := Vector3(global_position.x, 0.0, t.z)
+	if CITY.passable(sz):
+		global_position = sz
 
 
 ## 다른 구멍을 삼킬 수 있는가 — 상대가 `bite_depth` 만큼 내 원반 안으로 들어와야 한다.
@@ -735,6 +879,10 @@ func _exit_tree() -> void:
 	get_node("/root/HoleRegistry").unregister(self)
 
 
+func flat_dist(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.z - b.z).length()
+
+
 func wall_radius() -> float:
 	return radius + maxf(radius * (wall_scale - 1.0), wall_margin_min)
 
@@ -761,6 +909,7 @@ func _on_body_entered(body: Node3D) -> void:
 		return
 	_candidates.append(rb)
 	rb.hold_awake(true)      # 지면에 놓인 바디는 수 초 뒤 잠든다(V19)
+	rb.enter_rim()           # 지면 대신 림 바닥판을 딛는다(§23)
 
 
 ## 레이어가 4 로 바뀌면 Area3D 가 더 이상 감지하지 않아 body_exited 가 반드시
@@ -774,24 +923,24 @@ func _on_body_exited(body: Node3D) -> void:
 	_candidates.erase(rb)
 	if is_instance_valid(rb) and rb.has_method("hold_awake"):
 		rb.hold_awake(false)
+		rb.exit_rim()        # 다시 지면을 딛는다
 
 
 func _physics_process(_dt: float) -> void:
 	var here := global_position
 
+	# 후보: 림 바닥판을 딛고 있는 것들. 통과 여부를 기하로 판단하지 않는다 —
+	# **지면 아래로 내려갔는가**만 본다. 기울어 빠지는 것도, 걸쳐서 안 빠지는 것도
+	# 물리가 정한다(§23).
 	for i in range(_candidates.size() - 1, -1, -1):
 		var rb := _candidates[i]
 		if not is_instance_valid(rb):
 			_candidates.remove_at(i)
 			continue
-		# 크기 게이트는 매 프레임 재평가한다 — 구멍이 자라면 전에 막혔던 것이 열린다.
-		# 막힌 오브젝트에는 흡입력도 주지 않는다(주면 림에서 영원히 떤다).
-		if not can_swallow(rb.radius):
-			continue
-		var d := Vector2(rb.global_position.x - here.x, rb.global_position.z - here.z)
-		if d.length() + rb.radius < radius:
-			# 완전히 구멍 안 → 지면·서로에 대한 충돌을 끊고 낙하시킨다
-			rb.begin_fall()
+		# **꼭대기까지** 지면 아래로 내려갔을 때만 낙하로 본다. 원점만 보면 키 큰
+		# 물체가 가지도 림에 닿기 전에 충돌을 잃고 그대로 빠진다(실측).
+		if rb.global_position.y + float(rb.top_height) < -fall_depth:
+			rb.begin_fall()          # 확실히 구멍 안 → 서로에 대한 충돌만 끊는다
 			_candidates.remove_at(i)
 			_falling.append(rb)
 		else:
@@ -803,8 +952,18 @@ func _physics_process(_dt: float) -> void:
 		if not is_instance_valid(rb):
 			_falling.remove_at(i)
 			continue
-		if rb.global_position.y < kill_y:
+		# 소멸은 **우물 안에서만** 일어난다. 구멍이 떠나 버려 우물 밖에 있는 낙하물은
+		# 흡입으로 다시 끌어온 뒤에 사라진다 — 지면 아래 아무 데서나 없어지면
+		# "먹지도 않았는데 점수가 오른다" 가 된다.
+		if rb.global_position.y < kill_y \
+				and flat_dist(rb.global_position, here) < radius:
 			_falling.remove_at(i)
+			# 구멍 둘이 겹쳐 있으면 같은 개체가 양쪽의 _falling 에 들어 있다.
+			# 먼저 삼킨 쪽만 세고, 늦은 쪽은 조용히 넘긴다 — 소멸을 기다리면
+			# `queue_free` 가 프레임 끝에 도는 사이에 양쪽이 다 세어 버린다.
+			if rb.consumed:
+				continue
+			rb.consumed = true
 			grow_by(rb.radius)
 			score += int(rb.score_value)
 			swallowed_count += 1
@@ -815,11 +974,11 @@ func _physics_process(_dt: float) -> void:
 			pull(rb, here)
 
 
-func pull(rb: RigidBody3D, here: Vector3) -> void:
+func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 	var to_center := Vector3(here.x - rb.global_position.x, 0.0, here.z - rb.global_position.z)
 	if to_center.length_squared() < 1e-6:
 		return
-	rb.apply_central_force(to_center.normalized() * suction * rb.mass)
+	rb.apply_central_force(to_center.normalized() * suction * scale * rb.mass)
 ```
 
 **깊이도 SSOT에서 파생시킨다.** rev.5는 `height = 12.0`을 `.tscn` 리터럴로 두었는데, 2단계에서 반경이 자라면(R=20이면 폭 41에 깊이 12) 현재 카메라 앙각에서 `cap_bottom` 바닥면이 그대로 보여 §4-B가 막으려던 "바닥이 보이면 착시가 깨진다"가 그대로 발생한다. `kill_depth`(§4-D-7)도 함께 무의미해진다.
@@ -913,6 +1072,12 @@ extends RigidBody3D
 @export var start_frozen := false
 
 var falling := false
+## 이미 어떤 구멍이 삼켜서 점수·성장에 반영한 개체인가.
+## `queue_free()` 는 프레임 끝에 실행되고 그때까지 `is_instance_valid` 가 참이라,
+## 구멍 둘이 겹친 자리에서는 **같은 프레임에 두 구멍이 같은 개체를 각각 삼킨다** —
+## 면적이 공짜로 두 배 늘어난다(실측: G2 가 성장 14.18 대 기대 7.37 로 잡았다).
+## 소멸에 기대지 않고 여기서 한 번만 세도록 못을 박는다.
+var consumed := false
 ## 콜라이더의 가장 높은 점(원점 기준). "구멍 안으로 들어갔다" 를 이 값으로 판단한다 —
 ## 원점만 보면 **키 큰 물체가 가지도 닿기 전에 낙하로 전환된다**(실측: 수관 픽스처가
 ## 밑동 0.6m 만 잠기고도 충돌을 잃어 그대로 통과했다).
@@ -1127,6 +1292,7 @@ const MOVE_SPEED := 14.0
 const GROUND_HALF := 224.0           # PlaneMesh size 448 의 절반 (14x14 도시 블록)
 const HOLE_SCENE := preload("res://scenes/hole.tscn")
 const HOLE_AI := preload("res://scripts/hole_ai.gd")
+const CITY := preload("res://scripts/city.gd")
 
 ## 4a: 경쟁 구멍 수. 0 이면 1단계~3단계와 같은 단독 구멍 씬이다.
 @export var ai_count := 5
@@ -1203,7 +1369,13 @@ var swallowed_total: int:
 
 
 func _ready() -> void:
-	registry.set_target_material(ground.get_surface_override_material(0))
+	var gmat: ShaderMaterial = ground.get_surface_override_material(0)
+	registry.set_target_material(gmat)
+	# 존 지도를 셰이더로 넘긴다(§25). City._ready 가 먼저 도는 것과 무관하게
+	# 지도는 상수라 언제든 구울 수 있다. 판정 모드에서도 반드시 걸어야 한다 —
+	# 안 걸면 셰이더가 빈 텍스처를 읽어 지도 전체가 도심색이 된다.
+	gmat.set_shader_parameter("zone_tex", CITY.zone_texture())
+	gmat.set_shader_parameter("ground_half", GROUND_HALF)
 	hole.ground_half = GROUND_HALF
 	hole.label = "P"
 	# 포식 해소는 그 프레임의 이동이 **끝난 뒤** 돌아야 한다. 기본 순서(부모 먼저)
@@ -1632,6 +1804,45 @@ const SPEC_CROSS_PITCH := 1.2                      # 횡단보도 줄무늬 주�
 const SPEC_BOUL_EVERY := 3                         # k mod 3 == 0 인 중심선이 대로
 const SPEC_BOUL_HALF := 6.5                        # 대로 아스팔트 반폭
 const SPEC_LANE_GAP := 0.75                        # 대로 이중 중앙선의 중심 오프셋
+# --- 지구 지도 규격 (§25) --------------------------------------------------
+# **city.gd 의 ZONE_ROWS 를 읽지 않는다.** 읽으면 지도를 바꾼 빌드가 자기 값끼리
+# 일치해 그대로 통과한다 — 셰이더의 uniform 을 안 읽는 것과 정확히 같은 이유다.
+# 여기가 판정기의 사본이고, 사본이 어긋나는 것 자체가 탈락 사유다.
+#     행 r = j + 7,  열 c = k + 7,  spec_zone(k, j) = SPEC_ZONE_ROWS[j+7][k+7]
+const SPEC_ZONE_ROWS := [
+	"WWWWWWWWWWWWWW",   # j = -7
+	"WRRRRRRRRWRRRW",   # j = -6
+	"WRRRRRRRRWRRRW",   # j = -5
+	"WRRCCCCCCWCRRW",   # j = -4
+	"WRRCCCCCCWCRRW",   # j = -3
+	"WRRCCDDDDWCRRW",   # j = -2
+	"WRRCCDDDDWCRRW",   # j = -1
+	"WPPCCDDDDWCRRW",   # j =  0
+	"WPPCCDDDDWCRRW",   # j =  1
+	"WRRCCCCCCWCRRW",   # j =  2
+	"WRRCCCCCCWCPPW",   # j =  3
+	"WRRPPRRRRWRPPW",   # j =  4
+	"WRRRRRRRRWRRRW",   # j =  5
+	"WWWWWWWWWWWWWW",   # j =  6
+]
+const SPEC_CELL_MIN := -7
+const SPEC_CELL_MAX := 6
+const SPEC_CELL_COUNT := 14
+const SPEC_ZONE_CODE := { "D": 0, "C": 1, "R": 2, "P": 3, "W": 4 }
+const SPEC_Z_DOWNTOWN := 0
+const SPEC_Z_COMMERCIAL := 1
+const SPEC_Z_RESIDENTIAL := 2
+const SPEC_Z_PARK := 3
+const SPEC_Z_WATER := 4
+## 수역을 건너는 동서 도로 세그먼트 [중심선 인덱스, 셀 인덱스].
+const SPEC_BRIDGES := [[-3, 2], [0, 2], [3, 2]]
+
+## Z1: 존별 지면색을 **휘도**로 가르면 안 된다 — 네 지구가 전부 [아스팔트, 커브] 사이
+## 좁은 띠 안에 있어야 D1·D4 가 성립하므로 휘도만으로는 서로 붙는다. 대신 조명 배율에
+## 불변인 **채널 우세도**로 판정한다: 초록 우세 g = G - (R+B)/2, 파랑 우세 b = B - (R+G)/2.
+## 규격은 순서다 — 공원이 가장 푸르고 도심이 가장 무채색이며 물만 파랗다.
+const ZONE_G_MARGIN := 0.02                        # 이웃 지구 사이 초록 우세도 최소 차
+const ZONE_W_MARGIN := 0.05                        # 물의 파랑 우세도 하한
 const SURF_DIFF_MIN := 0.05                        # D1: 인접 표면 휘도차 하한
 const PERIOD_TOL := 0.05                           # D3: 다른 블록에서 같은 표면의 휘도 허용 편차
 const CROSS_GROUPS_MIN := 3                        # D2: 횡단보도 띠에서 세어야 할 엣지 그룹 수
@@ -1668,8 +1879,11 @@ const MIN_PROPS := 300                             # E1: 도시가 실제로 생
 ## **이 하한이 잡는 것은 "위계가 통째로 사라졌는가"(그때 0 이 된다) 하나뿐이다.**
 ## 자리 하나를 지우는 정도의 부분 회귀는 비율로 안 걸린다 — 그것은 E7b(자리 구조)가
 ## 본다. 두 기준의 역할을 섞어서 읽지 마라.
-const MIN_BOUL_ROAD := 230
-const MIN_BOUL_WALK := 320
+## §25 재유도: 지구제·수계·수퍼블록이 들어오며 실측이 통째로 달라졌다.
+## 대로 세그먼트 일부가 사라졌기 때문이다(강 횡단 중 교량 셋만 남고, 공원 내부가
+## 걷히고, 바다 테두리에 도로가 없다). 실측 460/640 → 329/304, 하한은 그 절반이다.
+const MIN_BOUL_ROAD := 164
+const MIN_BOUL_WALK := 152
 const MIN_ALBEDOS := 12                            # E1: 단색 팔레트가 실제로 다양한가
 const GROUND_TOL := 0.05                           # E5: 접지 허용 오차(월드 단위)
 const TILT_TOL := 0.02                             # E5: 직립 허용 기울기(라디안)
@@ -1708,10 +1922,11 @@ const ROUND_TEST_FRAMES := 600                     # T1: 그 라운드를 덮고
 const TIMER_TOL := 0.25                            # T1: 판정기 시계와의 허용 오차(초)
 const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고정을 확인하는 프레임
 const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 수 (플레이어 + AI 5)
-## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 산포 반경을 구간에서 유도하며
-## 3804 → 3876 로 늘었다 — 대로가 붙은 블록에서 구간 밖으로 나가 거절되던 시도가
-## 자리를 찾은 만큼이다.
-const RESTART_PROPS := 3876
+## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 3804 → 3876 이었고,
+## §25 에서 3876 → 2236 으로 줄었다. 줄어든 것이 규격이다 — 바다 테두리(52셀)와
+## 강(14셀)에는 아무것도 놓지 않고, 공원 9셀은 수퍼블록 셋으로 합쳐 한 번만 채우며,
+## 걷힌 도로 위의 보도·차도 프롭이 사라졌다.
+const RESTART_PROPS := 2236
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -1733,9 +1948,10 @@ const FALL_FRAMES := 240
 ## E8: 메시 반폭이 밑동 셰이프 반폭의 이 배 이상이면 "가지가 있는 프롭" 이다.
 ## city.gd 의 CANOPY_RATIO 와 같은 값을 판정기가 따로 든다.
 const CANOPY_RATIO := 1.5
-## E8: 그런 프롭의 하한. 실측 955 의 절반이다. 이 하한이 잡는 것은
-## "밑동 셰이프가 다시 메시 전체가 되어 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
-const MIN_CANOPY_PROPS := 475
+## E8: 그런 프롭의 하한. 이 하한이 잡는 것은 "밑동 셰이프가 다시 메시 전체가 되어
+## 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
+## §25 재유도: 실측 955 → 687(도시 총량이 줄었다). 하한은 그 절반이다.
+const MIN_CANOPY_PROPS := 343
 
 # --- §21 한글 HUD 판정 -----------------------------------------------------
 ## 번들 폰트의 경로. 라벨이 이것을 쓰지 않으면 데스크톱에서는 시스템 폴백으로
@@ -1836,12 +2052,75 @@ func spec_lane_mark_u(k: int) -> float:
 	return SPEC_LANE_GAP if spec_is_boulevard(k) else 0.0
 
 
+# --- 지구 지도 파생 (§25) — 전부 판정기의 사본에서만 계산한다 ------------------
+
+func spec_cell_of(w: float) -> int:
+	return clampi(floori(w / SPEC_PITCH), SPEC_CELL_MIN, SPEC_CELL_MAX)
+
+
+func spec_zone(k: int, j: int) -> int:
+	var c := clampi(k - SPEC_CELL_MIN, 0, SPEC_CELL_COUNT - 1)
+	var r := clampi(j - SPEC_CELL_MIN, 0, SPEC_CELL_COUNT - 1)
+	return int(SPEC_ZONE_CODE[(SPEC_ZONE_ROWS[r] as String)[c]])
+
+
+func spec_zone_at(p: Vector3) -> int:
+	return spec_zone(spec_cell_of(p.x), spec_cell_of(p.z))
+
+
+func spec_is_bridge_ew(jl: int, kc: int) -> bool:
+	for b in SPEC_BRIDGES:
+		if int(b[0]) == jl and int(b[1]) == kc:
+			return true
+	return false
+
+
+func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
+	if a == SPEC_Z_WATER or b == SPEC_Z_WATER:
+		return bridge
+	return not (a == SPEC_Z_PARK and b == SPEC_Z_PARK)
+
+
+func spec_seg_ew(jl: int, kc: int) -> bool:
+	return spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc))
+
+
+func spec_seg_ns(kl: int, jc: int) -> bool:
+	return spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false)
+
+
+## 구멍이 이 자리에 있을 수 있는가 — Z5 의 규격이다.
+func spec_passable(p: Vector3) -> bool:
+	var k := spec_cell_of(p.x)
+	if spec_zone(k, spec_cell_of(p.z)) != SPEC_Z_WATER:
+		return true
+	var jl := spec_line_index(p.z)
+	return spec_is_bridge_ew(jl, k) \
+		and absf(p.z - float(jl) * SPEC_PITCH) <= spec_road_half(jl)
+
+
+## 공원 수퍼블록의 축별 병합 범위. E2 가 "블록 구간 안인가" 를 물을 때 쓴다.
+func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
+	var v := k if along_k else j
+	if spec_zone(k, j) != SPEC_Z_PARK:
+		return Vector2i(v, v)
+	var lo := v
+	while lo > SPEC_CELL_MIN \
+			and spec_zone(lo - 1 if along_k else k, j if along_k else lo - 1) == SPEC_Z_PARK:
+		lo -= 1
+	var hi := v
+	while hi < SPEC_CELL_MAX \
+			and spec_zone(hi + 1 if along_k else k, j if along_k else hi + 1) == SPEC_Z_PARK:
+		hi += 1
+	return Vector2i(lo, hi)
+
+
 ## 판정 인자의 전체 목록이자 **고르는 우선순위**다. 웹 쿼리는 외부 입력이라 이
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge6", "--judge5", "--judge4", "--judge3c", "--judge3b",
-	"--judge3", "--judge2", "--judge1b", "--judge"]
+const JUDGE_ORDER := ["--judge7", "--judge6", "--judge5", "--judge4", "--judge3c",
+	"--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
 
 
 ## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
@@ -1924,6 +2203,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--judge7": await run_judge_7()
 		"--judge6": await run_judge_6()
 		"--judge5": await run_judge_5()
 		"--judge4": await run_judge_4()
@@ -2034,7 +2314,7 @@ func judge_static(prefix: String, allow_no_block := false, props_hidden := false
 	# 고정 좌표 (4,4) 는 지면이 넓어지면 배경이 아니게 되어 H6 가 무의미해진다.
 	var bg_px := background_pixel(probe)
 	if bg_px.x < 0:
-		print("JUDGE %sbg FAIL: 탐침 프레임의 네 모서리가 모두 배경이 아니다" % prefix)
+		print("JUDGE %sbg FAIL: 탐침 프레임 위쪽 절반에 배경(마젠타)이 없다" % prefix)
 		return false
 	var lum_bg := shot.get_pixel(bg_px.x, bg_px.y).get_luminance()
 
@@ -2535,9 +2815,22 @@ func probe_blocks(holes: Array, img: Image) -> Array:
 	var why := []
 	for dk in range(-2, 3):
 		for dj in range(-2, 3):
-			var b := Vector3(float(k0 + dk) * SPEC_PITCH + half, 0.0,
-				float(j0 + dj) * SPEC_PITCH + half)
+			var kc := k0 + dk
+			var jc := j0 + dj
+			var b := Vector3(float(kc) * SPEC_PITCH + half, 0.0,
+				float(jc) * SPEC_PITCH + half)
+			# §25: D 계열 표본은 "블록 지면 + 보도 + 아스팔트 + 중앙선" 넷을 전제한다.
+			# 공원·수역 셀에는 그 넷이 없다 — 표본을 옮긴다(건너뛴다).
+			# 존을 안 거르면 정상 빌드가 공원 잔디를 아스팔트로 알고 D1 에서 탈락한다.
+			var dz := spec_zone(kc, jc)
+			if dz == SPEC_Z_PARK or dz == SPEC_Z_WATER:
+				why.append("(%.0f,%.0f):존%d" % [b.x, b.z, dz])
+				continue
 			for sz in [-1.0, 1.0]:
+				# 그 변의 동서 도로가 실제로 존재해야 표본이 의미를 갖는다.
+				if not spec_seg_ew(spec_line_index(b.z + sz * half), kc):
+					why.append("(%.0f,%.0f)sz%.0f:도로없음" % [b.x, b.z, sz])
+					continue
 				if lane_width_px(b, sz) < LANE_MIN_PX:
 					why.append("(%.0f,%.0f)sz%.0f:중앙선%.1fpx" % [b.x, b.z, sz, lane_width_px(b, sz)])
 					continue
@@ -2550,6 +2843,9 @@ func probe_blocks(holes: Array, img: Image) -> Array:
 					continue
 				var picked := false
 				for sx in [-1.0, 1.0]:
+					# 횡단보도는 **가로지르는 남북 도로**가 있어야 존재한다.
+					if not spec_seg_ns(spec_line_index(b.x + sx * half), jc):
+						continue
 					var seg_bad := ""
 					for p in cross_segment(b, sx, sz):
 						if seg_bad.is_empty():
@@ -2634,11 +2930,20 @@ func lum_at(img: Image, p: Vector3) -> float:
 ## 네 모서리만 보는 것도 부족하다 — 카메라를 당기고 도시를 채우자 모서리마다
 ## 원경의 건물이 걸려 "네 모서리가 모두 배경이 아니다" 로 판정이 무효화됐다(실측).
 ## 배경은 화면 위쪽에만 남으므로, 위에서부터 아래로 훑으며 처음 만나는 것을 쓴다.
+##
+## **성기게 훑으면 안 된다.** 옛 격자(y 4칸·x 16칸)는 화면의 1/64 만 봤는데, 이 배경
+## 띠는 원경에서 **최상단 몇 픽셀**로 눌린 활 모양이라(shots/boul_far_probe.png) 캔버스
+## 크기가 조금만 달라져도 격자가 통째로 비켜간다 — 데스크톱 1152x648 은 통과하고
+## 브라우저는 창 크기 셋(1568x779·1160x760·900x900)에서 전부 "배경이 없다" 로 떨어졌다.
+## 그것은 렌더 결함이 아니라 **판정이 증거를 못 찾은 것**이고, 그대로 두면 브라우저
+## 게이트가 창 크기에 따라 뒤집히는 위약이 된다.
+## 요구하는 증거는 그대로다(마젠타 우세 픽셀이 실제로 있어야 한다) — 탐색만 촘촘히 한다.
+## 보통 첫 몇 행에서 찾고 곧장 빠져나오므로 비용도 거의 없다.
 func background_pixel(probe: Image) -> Vector2i:
 	var w := probe.get_width()
 	var h := probe.get_height()
-	for y in range(2, h / 2, 4):
-		for x in range(2, w, 16):
+	for y in range(0, h / 2):
+		for x in range(0, w, 2):
 			var c := probe.get_pixel(x, y)
 			if minf(c.r, c.b) - c.g > MAGENTA_TH:
 				return Vector2i(x, y)
@@ -2826,15 +3131,12 @@ func footprint(pts: PackedVector2Array) -> Dictionary:
 		"ax": abs_range(xlo, xhi), "az": abs_range(zlo, zhi) }
 
 
-## 블록 구간에 온전히 들어가는가. lo/hi 는 인덱스 k 의 중심선 기준 편차다.
-## 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로(8.5 대 6.0) 가장 가까운 중심선
-## 하나로만 재면 반대쪽(대로 쪽) 보도 침범을 놓친다 — 두 경계선을 각각 본다.
-func in_block_span(k: int, lo: float, hi: float) -> bool:
-	if lo >= 0.0:
-		return lo >= spec_curb_half(k) and hi <= SPEC_PITCH - spec_curb_half(k + 1)
-	if hi <= 0.0:
-		return -hi >= spec_curb_half(k) and -lo <= SPEC_PITCH - spec_curb_half(k - 1)
-	return false                               # 중심선을 걸쳤다
+## 셀 (k, j) 의 블록 구간(월드 절대 좌표). 공원이면 **병합 구간**이다.
+## 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로(8.5 대 6.0) 두 경계선을 각각 본다.
+func spec_block_span(k: int, j: int, along_k: bool) -> Vector2:
+	var m := spec_merge(k, j, along_k)
+	return Vector2(float(m.x) * SPEC_PITCH + spec_curb_half(m.x),
+		float(m.y + 1) * SPEC_PITCH - spec_curb_half(m.y + 1))
 
 
 func zone_of(pts: PackedVector2Array) -> String:
@@ -2845,16 +3147,41 @@ func zone_of(pts: PackedVector2Array) -> String:
 	var az: Vector2 = fp["az"]
 	var rx := spec_road_half(kx)
 	var rz := spec_road_half(kz)
+	# 발자국 중심이 속한 셀. 존 판정과 도로 존재 판정이 둘 다 이것을 쓴다.
+	var cc := Vector2.ZERO
+	for p in pts:
+		cc += p
+	cc /= float(pts.size())
+	var kc := spec_cell_of(cc.x)
+	var jc := spec_cell_of(cc.y)
+	# §25: 수역 셀 안에는 아무것도 없어야 한다 — 교량 위도 예외가 아니다.
+	if spec_zone(kc, jc) == SPEC_Z_WATER:
+		return ""
 	# 차도는 세 조건을 전부 만족해야 한다: 아스팔트 안 · 중앙 분리대 밖 ·
 	# 교차로와 그 바깥 횡단보도 밖. 뒤의 둘은 §18 에서 추가한 배치 규칙이고,
 	# 판정기가 이것을 안 들면 그 규칙을 지운 빌드를 아무도 안 잡는다.
-	if (az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W) \
-			or (ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W):
+	# §25 는 넷째를 더한다: **그 도로가 실제로 존재하는가**. 없으면 그 위의 프롭은
+	# 맨땅에 선 것이고, 기하 띠만 재는 옛 판정은 그것을 정상으로 통과시킨다.
+	if (az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W \
+				and spec_seg_ew(kz, kc)) \
+			or (ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W \
+				and spec_seg_ns(kx, jc)):
 		return "road"
-	if (az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx) \
-			or (ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz):
+	if (az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx and spec_seg_ew(kz, kc)) \
+			or (ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz \
+				and spec_seg_ns(kx, jc)):
 		return "walk"
-	if in_block_span(kx, fp["xlo"], fp["xhi"]) and in_block_span(kz, fp["zlo"], fp["zhi"]):
+	# 블록 구간은 **셀 좌표**로 묻는다. 공원 수퍼블록은 여러 셀이 한 구간으로 병합되고
+	# 걷힌 내부 도로 자리까지 프롭이 들어가는 것이 규격이라, 중심선 기준 편차만 보던
+	# 옛 판정은 그 배치를 전부 "구역 이탈" 로 잡는다.
+	var sx := spec_block_span(kc, jc, true)
+	var sz := spec_block_span(kc, jc, false)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for p in pts:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	if lo.x >= sx.x and hi.x <= sx.y and lo.y >= sz.x and hi.y <= sz.y:
 		return "block"
 	return ""                                  # 어느 구역에도 온전히 안 들어간다
 
@@ -4128,6 +4455,186 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 		y += size.y
 	return body
 
+# --- §25: 지구제·수계 판정 --------------------------------------------------
+
+## 존 대표 셀. 좌표는 판정기의 사본에서 고른 것이고 구현체를 읽지 않는다.
+const ZONE_SPOTS := [
+	["도심", SPEC_Z_DOWNTOWN, Vector3(-16.0, 0.0, -16.0)],      # 셀 (-1,-1)
+	["상업", SPEC_Z_COMMERCIAL, Vector3(-80.0, 0.0, -80.0)],    # 셀 (-3,-3)
+	["주거", SPEC_Z_RESIDENTIAL, Vector3(-144.0, 0.0, -144.0)], # 셀 (-5,-5)
+	["공원", SPEC_Z_PARK, Vector3(-176.0, 0.0, 16.0)],          # 셀 (-6, 0) 서쪽 공원
+	["수역", SPEC_Z_WATER, Vector3(80.0, 0.0, 16.0)],           # 셀 ( 2, 0) 강
+]
+## 톱다운 표본 카메라의 높이. FOV 75 에서 세로 약 92m — 셀 세 칸이 들어온다.
+## 톱다운으로 보는 이유: 표본이 화면 한가운데로 떨어져 투영·가림·거리 페이드를
+## 걱정할 필요가 없다. D 계열이 게임 카메라에서 겪은 문제(서브픽셀 중앙선 등)를
+## 여기서는 처음부터 피한다.
+const ZONE_CAM_Y := 60.0
+## Z2: 서쪽 공원(k=-6..-5, j=0..1)의 **걷힌 내부 중심선** 위 표본.
+## 여기에 아스팔트가 보이면 수퍼블록이 성립하지 않은 것이다.
+const PARK_INNER := [Vector3(-160.0, 0.0, 32.0), Vector3(-160.0, 0.0, 20.0),
+	Vector3(-160.0, 0.0, 44.0), Vector3(-172.0, 0.0, 32.0), Vector3(-148.0, 0.0, 32.0)]
+## Z4: 교량 위 표본. 강 셀(k=2, x ∈ [64,96]) 한가운데를 지나는 동서 대로 z = 0·96 이다.
+const BRIDGE_ON := [Vector3(72.0, 0.0, 0.0), Vector3(88.0, 0.0, 0.0),
+	Vector3(72.0, 0.0, 96.0), Vector3(88.0, 0.0, 96.0)]
+## Z4: 교량이 아닌 강 위. 여기에도 도로가 있으면 강을 통째로 덮은 것이다.
+const BRIDGE_OFF := [Vector3(72.0, 0.0, 32.0), Vector3(88.0, 0.0, 64.0),
+	Vector3(72.0, 0.0, -64.0)]
+## 아스팔트로 인정할 상한 둘. 물과 아스팔트를 가르는 것은 휘도가 아니라 색이다 —
+## 둘 다 어둡지만 물만 파랗다(실측: 물 0.255 / 아스팔트 0.035). 임계는 그 중간이다.
+## 초록 쪽도 함께 막는다: 파랑만 보면 **교량 자리가 잔디로 바뀐 빌드**가 통과한다
+## (잔디는 파랗지 않다). 아스팔트는 무채색이라 두 우세도가 모두 0 근처여야 한다.
+const ROAD_B_MAX := 0.14
+const ROAD_G_MAX := 0.06
+
+
+## 카메라를 지정 지점 바로 위에서 수직으로 내려다보게 세운다.
+func top_down(at: Vector3) -> void:
+	_cam.global_position = Vector3(at.x, ZONE_CAM_Y, at.z)
+	_cam.global_rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+
+
+## 그 픽셀의 초록 우세도와 파랑 우세도. **조명 배율에 불변인 양**이다
+## (모든 채널이 같은 배율로 곱해지면 차도 같은 배율로 곱해진다).
+## 휘도를 쓰지 않는 이유: 네 지구의 지면은 D1·D4 때문에 [아스팔트, 커브] 사이 좁은
+## 휘도 띠 안에 들어가야 해서, 휘도만으로는 서로 갈리지 않는다.
+func chroma(img: Image, p: Vector3) -> Vector2:
+	var c := img.get_pixelv(px(p, img))
+	return Vector2(c.g - (c.r + c.b) * 0.5, c.b - (c.r + c.g) * 0.5)
+
+
+## Z1~Z5. 지구제·수계·수퍼블록이 규격대로 그려지고 막히는가.
+func run_judge_7() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	# Judge._ready 는 Main._ready 보다 먼저 돈다 — _main.hole 은 아직 Nil 이다.
+	# 한 프레임 뒤 레지스트리에서 받는다(다른 판정과 같은 방식).
+	await get_tree().process_frame
+	var hole: Node3D = _reg.holes()[0]
+	_main.hud_root.visible = false
+	# 구멍을 표본에서 먼 구석으로 치운다. 톱다운이라 구멍이 표본 셀 위에 있으면
+	# 우물이 그대로 표본 픽셀에 찍힌다.
+	hole.move_to(Vector3(-176.0, 0.0, -176.0))
+	_reg.flush()
+	var saved := hide_props()
+	await get_tree().process_frame
+
+	# --- Z1: 존별 지면색 -----------------------------------------------------
+	# 규격은 **순서**다: 공원이 가장 푸르고 도심이 가장 무채색이며 물만 파랗다.
+	# 존 텍스처를 한 칸 밀면 대표 셀이 이웃 지구를 읽어 순서가 깨진다.
+	var gd := {}
+	var bd := {}
+	for spot in ZONE_SPOTS:
+		top_down(spot[2])
+		for _i in 3:
+			await get_tree().process_frame
+		var shot := await capture("zone_%s" % spot[0])
+		var ch := chroma(shot, spot[2])
+		gd[int(spot[1])] = ch.x
+		bd[int(spot[1])] = ch.y
+		print("JUDGE 7 존 %s at (%.0f,%.0f) 초록우세=%.4f 파랑우세=%.4f"
+			% [spot[0], float((spot[2] as Vector3).x), float((spot[2] as Vector3).z),
+			   ch.x, ch.y])
+	var z1: bool = float(gd[SPEC_Z_PARK]) - float(gd[SPEC_Z_RESIDENTIAL]) >= ZONE_G_MARGIN \
+		and float(gd[SPEC_Z_RESIDENTIAL]) - float(gd[SPEC_Z_COMMERCIAL]) >= ZONE_G_MARGIN \
+		and float(gd[SPEC_Z_COMMERCIAL]) - float(gd[SPEC_Z_DOWNTOWN]) >= ZONE_G_MARGIN \
+		and float(bd[SPEC_Z_WATER]) >= ZONE_W_MARGIN
+	for z in [SPEC_Z_DOWNTOWN, SPEC_Z_COMMERCIAL, SPEC_Z_RESIDENTIAL, SPEC_Z_PARK]:
+		z1 = z1 and float(bd[z]) < ZONE_W_MARGIN          # 물만 파랗다
+
+	# --- Z2: 공원 수퍼블록 안에 도로가 없다 ----------------------------------
+	top_down(Vector3(-160.0, 0.0, 32.0))
+	for _i in 3:
+		await get_tree().process_frame
+	var park := await capture("zone_park_inner")
+	var z2 := true
+	var park_ref := chroma(park, Vector3(-176.0, 0.0, 16.0)).x
+	for p in PARK_INNER:
+		# 아스팔트·보도는 무채색이라 초록 우세도가 잔디보다 확 낮다.
+		var gg := chroma(park, p).x
+		var ok := gg >= park_ref - ZONE_G_MARGIN * 2.0
+		z2 = z2 and ok
+		print("JUDGE 7 공원내부 (%.0f,%.0f) 초록우세=%.4f (잔디 %.4f) %s"
+			% [(p as Vector3).x, (p as Vector3).z, gg, park_ref, pf(ok)])
+
+	# --- Z4: 교량은 있고, 교량이 아닌 강 위에는 도로가 없다 -------------------
+	var z4 := true
+	for p in BRIDGE_ON:
+		top_down(p)
+		for _i in 3:
+			await get_tree().process_frame
+		var img := await capture("zone_bridge_%d_%d" % [int((p as Vector3).x), int((p as Vector3).z)])
+		var ch := chroma(img, p)
+		var ok: bool = ch.y < ROAD_B_MAX and absf(ch.x) < ROAD_G_MAX   # 무채색 아스팔트다
+		z4 = z4 and ok
+		print("JUDGE 7 교량위 (%.0f,%.0f) 파랑우세=%.4f 초록우세=%.4f %s"
+			% [(p as Vector3).x, (p as Vector3).z, ch.y, ch.x, pf(ok)])
+	for p in BRIDGE_OFF:
+		top_down(p)
+		for _i in 3:
+			await get_tree().process_frame
+		var img := await capture("zone_river_%d_%d" % [int((p as Vector3).x), int((p as Vector3).z)])
+		var ch := chroma(img, p)
+		var ok := ch.y >= ZONE_W_MARGIN                   # 물이다
+		z4 = z4 and ok
+		print("JUDGE 7 교량아님 (%.0f,%.0f) 파랑우세=%.4f %s"
+			% [(p as Vector3).x, (p as Vector3).z, ch.y, pf(ok)])
+	restore_props(saved)
+
+	# 항공 뷰 두 장. **판정이 아니라 휴먼 검수용**이다 — 지구·강·공원·바다가 사람 눈에
+	# 도시로 읽히는가는 기계가 답할 질문이 아니다(전역 원칙 §1).
+	top_down(Vector3.ZERO)
+	_cam.global_position = Vector3(0.0, 430.0, 0.0)
+	for _i in 3:
+		await get_tree().process_frame
+	await capture("aerial_zones")
+	await get_tree().process_frame
+	await capture("aerial_city")
+
+	# --- Z3: 수역 셀 안에 프롭이 하나도 없다 ---------------------------------
+	var city: Node3D = _main.get_node("City")
+	var items: Array = city.plan(city.city_seed)
+	var in_water := 0
+	for it in items:
+		var p: Vector3 = it["pos"]
+		if spec_zone(spec_cell_of(p.x), spec_cell_of(p.z)) == SPEC_Z_WATER:
+			if in_water < 5:
+				print("JUDGE 7 Z3 수역 위 프롭: %s at (%.1f, %.1f)" % [it["path"], p.x, p.z])
+			in_water += 1
+	var z3 := in_water == 0
+
+	# --- Z5: 수역은 못 지나가고 교량은 지나간다 -------------------------------
+	# 구현체의 passable 을 부르지 않는다. **구멍을 실제로 그리로 보내고** 어디에
+	# 도착했는지 판정기의 사본으로 본다 — move_to 의 가드를 지우면 그대로 걸린다.
+	var z5 := true
+	var probes := [
+		["강 한가운데", Vector3(80.0, 0.0, 32.0), false],
+		["강 상류", Vector3(80.0, 0.0, -64.0), false],
+		["바다 테두리", Vector3(-208.0, 0.0, 0.0), false],
+		["교량 z=0", Vector3(80.0, 0.0, 0.0), true],
+		["교량 z=96", Vector3(80.0, 0.0, 96.0), true],
+	]
+	for pr in probes:
+		var goal: Vector3 = pr[1]
+		hole.move_to(Vector3(48.0, 0.0, goal.z))          # 목표 옆 육지에서 출발
+		hole.move_to(goal)
+		var landed := hole.global_position
+		var dry := spec_passable(landed)
+		var reached := landed.distance_to(goal) < 0.5
+		var ok: bool = dry and reached == bool(pr[2])
+		z5 = z5 and ok
+		print("JUDGE 7 Z5 %s 목표(%.0f,%.0f) 도착(%.1f,%.1f) 육지=%s 도달=%s 기대=%s %s"
+			% [pr[0], goal.x, goal.z, landed.x, landed.z,
+			   pf(dry), pf(reached), pf(bool(pr[2])), pf(ok)])
+
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s (수역프롭=%d)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), in_water])
+	var ok := z1 and z2 and z3 and z4 and z5
+	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
+	get_tree().quit(0 if ok else 1)
+
+
 # --- §21: 한글 HUD 판정 ----------------------------------------------------
 
 ## T8. 세 가지를 함께 묻는다.
@@ -4666,64 +5173,157 @@ const GAP := 0.3
 ## 이 값으로 자른다(§22 — plan_block 참조).
 const SPREAD_MAX := 8.5
 
+# --- 지구 지도 (§25) -------------------------------------------------------
+## 셀은 블록과 1:1 이다. 셀 (k, j) 는 x ∈ [32k, 32k+32], z ∈ [32j, 32j+32] 를 덮고
+## 그 중앙이 블록 중앙이다. k·j 는 둘 다 [-7, 6] 이다 (14x14 = 196 셀).
+##
+## **행·열 ↔ 월드 대응식** — 셰이더·판정기가 같은 식을 각자 들고 있어야 한다:
+##     행 r = j + 7   (r=0 이 최소 z, r=13 이 최대 z)
+##     열 c = k + 7   (c=0 이 최소 x, c=13 이 최대 x)
+##     zone_at(k, j) = ZONE_ROWS[j + 7][k + 7]
+##
+## 지도는 **시드 난수가 아니라 손으로 저작한 고정 상수**다. 이유 셋:
+##   ① 판정기가 독립 구현으로 같은 표를 들 수 있다
+##   ② 강·공원·도심을 의도적으로 디자인할 수 있다
+##   ③ E4 재현성이 시드와 무관하게 자동으로 성립한다
+##
+## 글자: D 도심 · C 상업 · R 주거 · P 공원 · W 수역
+##
+## **바다는 지면 메시를 키워서 만들지 않는다.** 테두리 한 줄을 W 로 둔다.
+## 지면을 448 → 4000 으로 키우면 화면에서 하늘이 사라져 H 계열 판정이 배경 기준점을
+## 잃고 통째로 무너진다(주입으로 실증). 지도 밖은 지금처럼 배경으로 남긴다.
+##
+## 설계 제약 — 어기면 판정이 깨진다:
+##   · 중앙 2x2(k,j ∈ {-1,0})는 D 고정. 판정 광장(반경 26)이 그 안에 있다.
+##   · 판정 지점(CITY_SPOTS·PERF_SPOTS)이 떨어지는 셀은 P·W 가 아니다.
+##   · AI 스폰 링(반경 128 격자 스냅)이 닿는 네 셀도 P·W 가 아니다 —
+##     스폰은 move_to 를 거치지 않으므로 W 위에서 태어나면 Z5 가 스폰 순간 깨진다.
+##   · P 영역은 **직사각형**이어야 한다. 병합 구간을 축별 확장으로 구하기 때문이다.
+const ZONE_ROWS := [
+	"WWWWWWWWWWWWWW",   # j = -7   바다 테두리
+	"WRRRRRRRRWRRRW",   # j = -6
+	"WRRRRRRRRWRRRW",   # j = -5
+	"WRRCCCCCCWCRRW",   # j = -4
+	"WRRCCCCCCWCRRW",   # j = -3
+	"WRRCCDDDDWCRRW",   # j = -2
+	"WRRCCDDDDWCRRW",   # j = -1
+	"WPPCCDDDDWCRRW",   # j =  0   서쪽 공원(2x2, k=-6..-5)
+	"WPPCCDDDDWCRRW",   # j =  1
+	"WRRCCCCCCWCRRW",   # j =  2
+	"WRRCCCCCCWCPPW",   # j =  3   동쪽 공원(2x2, k=4..5)
+	"WRRPPRRRRWRPPW",   # j =  4   북서 공원(1x2, k=-4..-3)
+	"WRRRRRRRRWRRRW",   # j =  5
+	"WWWWWWWWWWWWWW",   # j =  6   바다 테두리
+]
+const CELL_MIN := -7
+const CELL_MAX := 6
+const CELL_COUNT := 14
+
+const Z_DOWNTOWN := 0
+const Z_COMMERCIAL := 1
+const Z_RESIDENTIAL := 2
+const Z_PARK := 3
+const Z_WATER := 4
+const ZONE_CODE := { "D": 0, "C": 1, "R": 2, "P": 3, "W": 4 }
+
+## 교량 = 수역을 건너는 **동서 도로 세그먼트** [중심선 인덱스 jl, 셀 인덱스 kc].
+## 강이 남북(열 k=2)으로 흐르므로 이를 건너는 것은 동서 도로다.
+## **세그먼트 단위로 적는다.** 선 전체를 여는 방식은 같은 z 의 바다 테두리(k=-7·6)까지
+## 뚫어 구멍이 지도 밖 물 위로 나간다.
+## 셋 다 대로(인덱스 mod 3 == 0)라 아스팔트 폭이 13m 다.
+const BRIDGES := [[-3, 2], [0, 2], [3, 2]]
+
+## 존별 배치 규격. kinds 는 **블록 내부**에 놓을 수 있는 카탈로그 종류다
+## (보도·차도 프롭은 존과 무관하게 같은 목록을 쓰고 밀도만 달라진다).
+## scale_mul 은 블록 내부 프롭에만 곱한다 — 가로등·차는 실제 치수가 규격이다.
+## 배열 순서가 곧 존 코드다.
+const ZONE_PROFILE := [
+	# D 도심 — 고층이 빽빽하고 녹지가 없다
+	{ "kinds": ["tower"], "scale_mul": 1.35, "center": 0.85, "center_ext": 4.0,
+		"tries": 12, "spread": 8.5, "walk_skip": 0.35, "road_skip": 0.40 },
+	# C 상업 — 중저층 상가, 가로 시설물이 많다
+	{ "kinds": ["shop", "tower"], "scale_mul": 1.0, "center": 0.55, "center_ext": 3.5,
+		"tries": 16, "spread": 8.5, "walk_skip": 0.40, "road_skip": 0.45 },
+	# R 주거 — 주택과 마당 녹지, 밀도가 낮다
+	{ "kinds": ["house", "tree", "rock"], "scale_mul": 0.95, "center": 0.25,
+		"center_ext": 3.0, "tries": 14, "spread": 8.5, "walk_skip": 0.60, "road_skip": 0.60 },
+	# P 공원 — 수퍼블록 하나를 통째로 쓴다. 시행 수·산포가 병합 구간에 맞춰 크다
+	{ "kinds": ["tree", "rock", "bush"], "scale_mul": 1.0, "center": 0.0, "center_ext": 0.0,
+		"tries": 64, "spread": 40.0, "walk_skip": 0.70, "road_skip": 0.75 },
+	# W 수역 — 아무것도 놓지 않는다(add_slot 이 셀 존으로 먼저 거절한다)
+	{ "kinds": [], "scale_mul": 1.0, "center": 0.0, "center_ext": 0.0,
+		"tries": 0, "spread": 0.0, "walk_skip": 1.0, "road_skip": 1.0 },
+]
+
+## 셰이더로 넘길 존 지도의 채널 간격. zone_code * 51 을 R8 한 채널에 담는다.
+## 51/255 = 0.2 는 8비트 양자화·필터 오차보다 압도적으로 커서 복호가 견고하다.
+const ZONE_TEX_STEP := 51
+
 @export var city_seed := 20260728
 @export var enabled := true
 
 ## 카탈로그. scale 은 팩마다 제각각인 모델 치수를 실측(§13)에서 실제 크기로 맞춘 값이다.
-## zone: "block"(블록 내부) / "walk"(보도) / "road"(차도)
+## zone: "block"(블록 내부) / "walk"(보도) / "road"(차도) — **자리의 종류**다.
+## kind: 지구제(§25)가 쓰는 **에셋의 종류**다. 블록 내부 자리에서만 걸러진다
+##       (tower 고층 · shop 상가 · house 주택 · tree · rock · bush).
 const CATALOG := [
 	# --- 건물: 블록 내부 ---
-	{ "path": "res://assets/buildings/Building1_Large.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building1_Small.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building2_Large.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building2_Small.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building3_Big.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building3_Small.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/Building4.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/House1.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/buildings/House2.obj", "scale": 2.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Bank.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Flat.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Flat2.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Hospital.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House2.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House3.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House4.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/House5.obj", "scale": 3.0, "zone": "block" },
-	{ "path": "res://assets/simplebuildings/Shop.obj", "scale": 3.0, "zone": "block" },
+	{ "path": "res://assets/buildings/Building1_Large.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/Building1_Small.obj", "scale": 2.0, "zone": "block", "kind": "shop" },
+	{ "path": "res://assets/buildings/Building2_Large.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/Building2_Small.obj", "scale": 2.0, "zone": "block", "kind": "shop" },
+	{ "path": "res://assets/buildings/Building3_Big.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/Building3_Small.obj", "scale": 2.0, "zone": "block", "kind": "shop" },
+	{ "path": "res://assets/buildings/Building4.obj", "scale": 2.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/buildings/House1.obj", "scale": 2.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/buildings/House2.obj", "scale": 2.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/Bank.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/Flat.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/Flat2.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/Hospital.obj", "scale": 3.0, "zone": "block", "kind": "tower" },
+	{ "path": "res://assets/simplebuildings/House.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House2.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House3.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House4.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/House5.obj", "scale": 3.0, "zone": "block", "kind": "house" },
+	{ "path": "res://assets/simplebuildings/Shop.obj", "scale": 3.0, "zone": "block", "kind": "shop" },
 	# --- 녹지: 블록 내부 ---
-	{ "path": "res://assets/nature/Tree1.obj", "scale": 1.5, "zone": "block" },
-	{ "path": "res://assets/nature/Tree2.obj", "scale": 1.2, "zone": "block" },
-	{ "path": "res://assets/nature/Tree3.obj", "scale": 1.5, "zone": "block" },
-	{ "path": "res://assets/nature/Tree4.obj", "scale": 1.0, "zone": "block" },
-	{ "path": "res://assets/nature/Rock1.obj", "scale": 1.0, "zone": "block" },
-	{ "path": "res://assets/nature/Rock2.obj", "scale": 1.0, "zone": "block" },
-	{ "path": "res://assets/nature/Rock3.obj", "scale": 1.0, "zone": "block" },
+	{ "path": "res://assets/nature/Tree1.obj", "scale": 1.5, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Tree2.obj", "scale": 1.2, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Tree3.obj", "scale": 1.5, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Tree4.obj", "scale": 1.0, "zone": "block", "kind": "tree" },
+	{ "path": "res://assets/nature/Rock1.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
+	{ "path": "res://assets/nature/Rock2.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
+	{ "path": "res://assets/nature/Rock3.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
+	# 공원 전용 덤불. 같은 에셋이 보도에도 있지만 자리의 종류가 다르다 —
+	# "bush" 는 P 의 kinds 에만 있으므로 D·C·R 블록에는 나타나지 않는다.
+	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
 	# --- 가로 시설물: 보도 ---
-	{ "path": "res://assets/streets/Streetlight_Single.obj", "scale": 7.3, "zone": "walk" },
-	{ "path": "res://assets/streets/Streetlight_Double.obj", "scale": 7.3, "zone": "walk" },
-	{ "path": "res://assets/streets/TrafficLight.obj", "scale": 5.2, "zone": "walk" },
-	{ "path": "res://assets/streets/Sign_Stop.obj", "scale": 4.4, "zone": "walk" },
-	{ "path": "res://assets/streets/Sign_NoParking.obj", "scale": 4.4, "zone": "walk" },
-	{ "path": "res://assets/streets/Sign_Triangle.obj", "scale": 4.4, "zone": "walk" },
-	{ "path": "res://assets/transport/TrafficSign1.obj", "scale": 1.6, "zone": "walk" },
-	{ "path": "res://assets/transport/TrafficSign2.obj", "scale": 1.6, "zone": "walk" },
-	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "walk" },
-	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "walk" },
-	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "walk" },
+	{ "path": "res://assets/streets/Streetlight_Single.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Streetlight_Double.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/TrafficLight.obj", "scale": 5.2, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Sign_Stop.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Sign_NoParking.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/streets/Sign_Triangle.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/transport/TrafficSign1.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/transport/TrafficSign2.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
+	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
+	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
 	# --- 차량: 차도 ---
-	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/NormalCar1.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/NormalCar2.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/SUV.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/SportsCar.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/cars/SportsCar2.obj", "scale": 1.0, "zone": "road" },
-	{ "path": "res://assets/transport/Ambulance.obj", "scale": 1.05, "zone": "road" },
-	{ "path": "res://assets/transport/Bus.obj", "scale": 1.96, "zone": "road" },
-	{ "path": "res://assets/transport/SchoolBus.obj", "scale": 1.84, "zone": "road" },
-	{ "path": "res://assets/transport/TrafficCone.obj", "scale": 0.6, "zone": "road" },
+	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/NormalCar1.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/NormalCar2.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/SUV.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/SportsCar.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/cars/SportsCar2.obj", "scale": 1.0, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/Ambulance.obj", "scale": 1.05, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/Bus.obj", "scale": 1.96, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/SchoolBus.obj", "scale": 1.84, "zone": "road", "kind": "car" },
+	{ "path": "res://assets/transport/TrafficCone.obj", "scale": 0.6, "zone": "road", "kind": "car" },
 ]
 
 ## 콜라이더 XZ 를 딸 밑동의 높이 비율. 아래 35% 는 밑동 셰이프, 나머지는 수관 셰이프다.
@@ -4747,22 +5347,11 @@ func plan(s: int) -> Array:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = s
 	var out := []
-	for b in block_centers():
-		plan_block(rng, b, out)
-		plan_walk(rng, b, out)
-		plan_road(rng, b, out)
-	return out
-
-
-## 블록 중앙 목록. 도로 중심선이 PITCH 의 배수이므로 블록 중앙은 그 중간이다.
-## 순서를 고정해야 시드가 같을 때 결과가 같다.
-func block_centers() -> Array:
-	var out := []
-	var n := int(GROUND_HALF / PITCH)          # 224/32 = 7
-	for k in range(-n, n):
-		for j in range(-n, n):
-			out.append(Vector3(float(k) * PITCH + PITCH * 0.5, 0.0,
-				float(j) * PITCH + PITCH * 0.5))
+	for k in range(CELL_MIN, CELL_MAX + 1):
+		for j in range(CELL_MIN, CELL_MAX + 1):
+			plan_block(rng, k, j, out)
+			plan_walk(rng, k, j, out)
+			plan_road(rng, k, j, out)
 	return out
 
 
@@ -4833,82 +5422,204 @@ static func road_slots(k_cross: int) -> Array:
 	return [-8.0, -3.5, 3.5, 8.0]
 
 
-## 블록의 사용 가능 구간 [lo, hi]. 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로
-## (8.5 대 6.0) 가장 가까운 중심선 하나로 재면 대로 쪽 보도를 침범한다.
-static func block_span(w: float) -> Vector2:
-	var k := floori(w / PITCH)
-	return Vector2(float(k) * PITCH + curb_half_at(k) + BLOCK_SETBACK,
-		float(k + 1) * PITCH - curb_half_at(k + 1) - BLOCK_SETBACK)
+# --- 지구 지도 파생 (§25) ---------------------------------------------------
+
+## 좌표 → 그 좌표를 품는 셀 인덱스. 지도 밖은 테두리 셀로 자른다(테두리는 W 다).
+static func cell_of(w: float) -> int:
+	return clampi(floori(w / PITCH), CELL_MIN, CELL_MAX)
+
+
+static func zone_at(k: int, j: int) -> int:
+	var c := clampi(k - CELL_MIN, 0, CELL_COUNT - 1)
+	var r := clampi(j - CELL_MIN, 0, CELL_COUNT - 1)
+	return int(ZONE_CODE[(ZONE_ROWS[r] as String)[c]])
+
+
+static func zone_at_pos(p: Vector3) -> int:
+	return zone_at(cell_of(p.x), cell_of(p.z))
+
+
+static func is_bridge_ew(jl: int, kc: int) -> bool:
+	for b in BRIDGES:
+		if int(b[0]) == jl and int(b[1]) == kc:
+			return true
+	return false
+
+
+## 도로 세그먼트가 존재하는가. **존 지도에서 파생되는 순수 함수**이고 별도 데이터가 없다.
+##   · 어느 한쪽이 수역이면 → 교량 목록에 있을 때만 존재한다.
+##   · 양쪽이 모두 공원이면 → 없다(수퍼블록 내부 관통 도로를 걷어낸다).
+##     한쪽만 공원이면 남는다 — 공원은 도로로 둘러싸인 것이 자연스럽다.
+static func seg_rule(a: int, b: int, bridge: bool) -> bool:
+	if a == Z_WATER or b == Z_WATER:
+		return bridge
+	return not (a == Z_PARK and b == Z_PARK)
+
+
+## 동서 도로(중심선 z = PITCH*jl)의, x 가 셀 kc 에 걸친 구간.
+static func seg_ew(jl: int, kc: int) -> bool:
+	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc))
+
+
+## 남북 도로(중심선 x = PITCH*kl)의, z 가 셀 jc 에 걸친 구간.
+## 강이 남북이라 이를 건너는 교량은 없다 — 남북 도로는 수역을 만나면 항상 끊긴다.
+static func seg_ns(kl: int, jc: int) -> bool:
+	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false)
+
+
+## 구멍이 이 자리에 있을 수 있는가(§25). 수역은 막고, 교량 아스팔트 위는 연다.
+## 판정하는 것은 **구멍 중심** 하나다 — 원반 절반이 물 위에 걸치는 것은 허용이다
+## ("강기슭이 파인" 연출이고, 반경 마진으로 막으면 교량 진입로까지 막힌다).
+static func passable(p: Vector3) -> bool:
+	var k := cell_of(p.x)
+	if zone_at(k, cell_of(p.z)) != Z_WATER:
+		return true
+	var jl := line_index(p.z)
+	return is_bridge_ew(jl, k) and absf(p.z - float(jl) * PITCH) <= road_half_at(jl)
+
+
+## P 수퍼블록의 축별 병합 범위 [최소 셀, 최대 셀]. 공원이 아니면 자기 셀 하나다.
+## 경계에서 멈추지 않으면 zone_at 이 테두리를 잘라 같은 값을 돌려주어 무한 루프가 된다.
+static func merge_k(k: int, j: int) -> Vector2i:
+	if zone_at(k, j) != Z_PARK:
+		return Vector2i(k, k)
+	var k0 := k
+	while k0 > CELL_MIN and zone_at(k0 - 1, j) == Z_PARK:
+		k0 -= 1
+	var k1 := k
+	while k1 < CELL_MAX and zone_at(k1 + 1, j) == Z_PARK:
+		k1 += 1
+	return Vector2i(k0, k1)
+
+
+static func merge_j(k: int, j: int) -> Vector2i:
+	if zone_at(k, j) != Z_PARK:
+		return Vector2i(j, j)
+	var j0 := j
+	while j0 > CELL_MIN and zone_at(k, j0 - 1) == Z_PARK:
+		j0 -= 1
+	var j1 := j
+	while j1 < CELL_MAX and zone_at(k, j1 + 1) == Z_PARK:
+		j1 += 1
+	return Vector2i(j0, j1)
+
+
+## 수퍼블록의 대표 셀인가 — (k, j) 사전순 최소. 배치는 여기서 **한 번만** 돈다.
+## 셀마다 돌리면 같은 병합 구간에 밀도가 셀 수 배로 겹친다.
+static func is_super_root(k: int, j: int) -> bool:
+	return merge_k(k, j).x == k and merge_j(k, j).x == j
+
+
+## 셀 (k, j) 의 배치 가능 구간. 공원이면 **병합 구간**이다 — 셰이더에서 내부 도로를
+## 지우기만 하고 이 구간을 셀 단위로 두면, 프롭이 옛 도로 띠를 계속 피해
+## "도로만 지워진 블록 넷" 이 되지 "수퍼블록" 이 되지 않는다.
+## 병합 구간은 첫 비-공원 인접 중심선의 커브에서 멈추므로, 지워진 내부 도로 자리는
+## 구간에 포함되어 그 위에도 나무가 선다.
+static func span_x(k: int, j: int) -> Vector2:
+	var m := merge_k(k, j)
+	return Vector2(float(m.x) * PITCH + curb_half_at(m.x) + BLOCK_SETBACK,
+		float(m.y + 1) * PITCH - curb_half_at(m.y + 1) - BLOCK_SETBACK)
+
+
+static func span_z(k: int, j: int) -> Vector2:
+	var m := merge_j(k, j)
+	return Vector2(float(m.x) * PITCH + curb_half_at(m.x) + BLOCK_SETBACK,
+		float(m.y + 1) * PITCH - curb_half_at(m.y + 1) - BLOCK_SETBACK)
+
+
+## 셰이더로 넘길 존 지도 텍스처. 여기가 지도의 단일 원천이고 셰이더는 이것을 읽는다
+## (판정기는 읽지 않는다 — 자기 사본을 든다).
+static func zone_texture() -> ImageTexture:
+	var img := Image.create(CELL_COUNT, CELL_COUNT, false, Image.FORMAT_R8)
+	for j in range(CELL_MIN, CELL_MAX + 1):
+		for k in range(CELL_MIN, CELL_MAX + 1):
+			var v := float(zone_at(k, j) * ZONE_TEX_STEP) / 255.0
+			img.set_pixel(k - CELL_MIN, j - CELL_MIN, Color(v, v, v))
+	return ImageTexture.create_from_image(img)
+
+
+static func block_center(k: int, j: int) -> Vector3:
+	return Vector3(float(k) * PITCH + PITCH * 0.5, 0.0, float(j) * PITCH + PITCH * 0.5)
 
 
 ## 블록 내부. 큰 건물 한 채를 먼저 시도하고 남는 자리를 작은 것으로 채운다.
 ## 자리가 되는지는 add_slot 이 판단한다 — 레이아웃마다 기하를 손으로 맞추지 않는다.
-func plan_block(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
+## §25: 무엇이·얼마나 들어가는지는 그 셀의 **지구(zone)** 가 정한다.
+func plan_block(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
+	var dz := zone_at(k, j)
+	if dz == Z_WATER:
+		return
+	# 공원은 수퍼블록 하나를 통째로 쓴다 — 대표 셀에서 한 번만 돈다.
+	if dz == Z_PARK and not is_super_root(k, j):
+		return
+	var prof: Dictionary = ZONE_PROFILE[dz]
 	# 블록 중앙 자리는 큰 것 전용이다. min_ext 를 안 걸면 이 한 번뿐인 기회를
 	# 덤불이 차지해 대형 건물이 도시 전체에서 한두 채로 줄어든다(실측).
 	# 대로가 한쪽에 붙은 블록은 격자 중앙과 사용 가능 구간의 중앙이 1.25m 어긋난다.
-	# 중앙 슬롯뿐 아니라 산포의 기준점도 함께 옮겨야 한다 — 중앙만 옮기면 나머지
-	# 16개가 대로 보도 쪽으로 편향된 채 전부 거절된다.
-	var sx := block_span(b.x)
-	var sz := block_span(b.z)
+	# 중앙 슬롯뿐 아니라 산포의 기준점도 함께 옮겨야 한다 — 중앙만 옮기면 나머지가
+	# 대로 보도 쪽으로 편향된 채 전부 거절된다.
+	var sx := span_x(k, j)
+	var sz := span_z(k, j)
 	var c := Vector3((sx.x + sx.y) * 0.5, 0.0, (sz.x + sz.y) * 0.5)
-	if rng.randf() < 0.45:
-		add_slot(rng, c, "block", out, "", 3.5)
-	# 산포 반경을 **사용 가능 구간에서 유도한다**(§22). 상수 8.5 를 그대로 쓰면 대로가
+	if rng.randf() < float(prof["center"]):
+		add_slot(rng, c, "block", out, "", float(prof["center_ext"]), dz)
+	# 산포 반경을 **사용 가능 구간에서 유도한다**(§22). 상수를 그대로 쓰면 대로가
 	# 붙은 블록(반폭 7.95)에서 축당 6.5% 의 시도가 구간 밖으로 나가 add_slot 이 조용히
-	# 거절한다 — 지도의 92%(196블록 중 180)가 그런 블록이라 그만큼 덜 찬다.
-	# 구간 반폭을 그대로 쓰지 않고 상한을 씌우는 이유: 이 값은 **중심**의 범위이고
-	# 에셋에는 폭이 있어서, 구간 끝까지 벌리면 가장자리 시도가 폭만큼 거절된다.
-	#
-	# **이 변경은 도시 전체를 다시 흔든다.** 산포 반경이 달라진 블록에서 add_slot 이
-	# 고르는 후보가 달라지고, 후보 수에 따라 난수 소비량이 달라져 그 뒤의 시드 흐름이
-	# 통째로 어긋나기 때문이다. 대로가 안 붙은 블록(16개)의 산포 반경은 8.5 그대로인데도
-	# 블록당 프롭이 6.38 → 5.69 로 바뀐 것이 그 증거다(실측). 계측 결과는 §22 에 있다.
-	var spread := Vector2(minf(SPREAD_MAX, (sx.y - sx.x) * 0.5),
-		minf(SPREAD_MAX, (sz.y - sz.x) * 0.5))
-	for _i in 16:
+	# 거절한다. 구간 반폭을 그대로 쓰지 않고 상한을 씌우는 이유: 이 값은 **중심**의
+	# 범위이고 에셋에는 폭이 있어서, 구간 끝까지 벌리면 가장자리 시도가 폭만큼 거절된다.
+	# 공원은 병합 구간이 넓으므로 상한도 넓다(ZONE_PROFILE).
+	var lim: float = float(prof["spread"])
+	var spread := Vector2(minf(lim, (sx.y - sx.x) * 0.5), minf(lim, (sz.y - sz.x) * 0.5))
+	for _i in int(prof["tries"]):
 		add_slot(rng, c + Vector3(rng.randf_range(-spread.x, spread.x), 0.0,
-			rng.randf_range(-spread.y, spread.y)), "block", out)
+			rng.randf_range(-spread.y, spread.y)), "block", out, "", 0.0, dz)
 
 
 ## 보도: 블록 네 변의 중앙선 위에 일정 간격으로 놓는다.
 ## 변마다 인접 도로의 등급이 다를 수 있으므로 중심선을 변마다 계산한다.
-func plan_walk(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
+## 밀도는 그 셀의 지구가 정한다. 도로가 걷힌 자리의 보도는 in_zone 이 거절한다.
+func plan_walk(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
+	var b := block_center(k, j)
+	var dz := zone_at(k, j)
+	var skip: float = float(ZONE_PROFILE[dz]["walk_skip"])
 	var half: float = PITCH * 0.5
 	for side in [-1.0, 1.0]:
 		var wz: float = b.z + side * (half - walk_center_at(line_index(b.z + side * half)))
 		for t in [-8.0, -3.0, 3.0, 8.0]:
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
-			add_slot(rng, Vector3(b.x + t, 0.0, wz), "walk", out)
+			add_slot(rng, Vector3(b.x + t, 0.0, wz), "walk", out, "", 0.0, dz)
 		var wx: float = b.x + side * (half - walk_center_at(line_index(b.x + side * half)))
 		for t in [-8.0, -3.0, 3.0, 8.0]:
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
-			add_slot(rng, Vector3(wx, 0.0, b.z + t), "walk", out)
+			add_slot(rng, Vector3(wx, 0.0, b.z + t), "walk", out, "", 0.0, dz)
 
 
 ## 차도: 블록의 -x·-z 쪽 도로만 담당한다. 그래야 인접 블록과 중복 생성되지 않는다.
 ## 차량은 도로 축 방향으로 세운다 — 방향은 카탈로그에 적지 않고 모델 AABB 의
 ## 긴 축에서 유도한다(팩마다 모델이 X 로 눕기도, Z 로 눕기도 한다).
 ## 차선 수와 정차 자리는 둘 다 도로 등급의 함수다 — 대로에는 차가 더 많이, 더 넓게 선다.
-func plan_road(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
+func plan_road(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
+	var b := block_center(k, j)
+	var dz := zone_at(k, j)
+	var skip: float = float(ZONE_PROFILE[dz]["road_skip"])
 	var half: float = PITCH * 0.5
-	var kz := line_index(b.z - half)          # 블록 -z 쪽 동서 도로
-	var kx := line_index(b.x - half)          # 블록 -x 쪽 남북 도로
+	var kz := j                               # 블록 -z 쪽 동서 도로의 중심선 인덱스
+	var kx := k                               # 블록 -x 쪽 남북 도로의 중심선 인덱스
 	var tz := road_slots(kx)                  # 동서 도로를 가로지르는 것은 남북 도로다
 	var tx := road_slots(kz)
 	for i in 4:
 		for slot in lane_slots(kz):
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
 			add_slot(rng, Vector3(b.x + float(tz[i]), 0.0, b.z - half + float(slot[0])),
-				"road", out, "x", float(slot[1]))
+				"road", out, "x", float(slot[1]), dz)
 		for slot in lane_slots(kx):
-			if rng.randf() < 0.55:
+			if rng.randf() < skip:
 				continue
 			add_slot(rng, Vector3(b.x - half + float(slot[0]), 0.0, b.z + float(tx[i])),
-				"road", out, "z", float(slot[1]))
+				"road", out, "z", float(slot[1]), dz)
 
 
 ## 한 자리에 들어갈 에셋을 고른다.
@@ -4920,18 +5631,29 @@ func plan_road(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
 ## 차선(폭 4m)에 들어가는 차가 전부 탈락한다 — 실측: 승용차 7종 중 1종만 남고
 ## 버스·구급차는 전멸했다. 회전이 90° 단위이므로 축방향 반extent 로 정확히 잰다.
 func add_slot(rng: RandomNumberGenerator, pos: Vector3, zone: String, out: Array,
-		road_axis := "", min_ext := 0.0) -> void:
+		road_axis := "", min_ext := 0.0, dz := Z_RESIDENTIAL) -> void:
 	if Vector2(pos.x, pos.z).length() < PLAZA_R:
 		return                                                      # 판정 광장
 	if absf(pos.x) > GROUND_HALF - 2.0 or absf(pos.z) > GROUND_HALF - 2.0:
 		return
+	# 수역 셀 안에는 **자리의 종류를 가리지 않고** 아무것도 놓지 않는다(§25).
+	# 교량 위도 비운다 — 그래야 Z3 가 "수역 셀 안에 프롭 0개" 라는 예외 없는 단언이 된다.
+	if zone_at(cell_of(pos.x), cell_of(pos.z)) == Z_WATER:
+		return
+	var prof: Dictionary = ZONE_PROFILE[dz]
+	var kinds: Array = prof["kinds"]
+	var mul: float = float(prof["scale_mul"]) if zone == "block" else 1.0
 	# 회전 후보를 먼저 정한다. 차량은 도로 축에 맞춰 두 방향, 나머지는 90° 네 방향.
 	var spin := rng.randi_range(0, 3)
 	var cands := []
 	for e in CATALOG:
 		if e["zone"] != zone:
 			continue
-		var h := half_extent(e)
+		# 블록 내부만 지구제로 거른다 — 보도·차도 프롭은 어느 지구에서나 같다.
+		if zone == "block" and not kinds.has(e["kind"]):
+			continue
+		var s: float = float(e["scale"]) * mul
+		var h := half_extent(e["path"], s)
 		if maxf(h.x, h.y) < min_ext:
 			continue
 		var yaw: float
@@ -4944,14 +5666,16 @@ func add_slot(rng: RandomNumberGenerator, pos: Vector3, zone: String, out: Array
 			yaw = (0.0 if long_is_z == want_z else PI * 0.5) + float(spin % 2) * PI
 		var ex := axis_extent(h, yaw)
 		if in_zone(pos, ex, zone):
-			cands.append({ "e": e, "yaw": yaw, "ex": ex })
+			cands.append({ "e": e, "yaw": yaw, "ex": ex, "s": s })
 	if cands.is_empty():
 		return
 	var pick: Dictionary = cands[rng.randi_range(0, cands.size() - 1)]
 	if not fits(pos, pick["ex"], out):
 		return
 	var e: Dictionary = pick["e"]
-	out.append({ "path": e["path"], "scale": e["scale"], "zone": zone,
+	# scale 은 **지구 배수를 곱한 실효값**을 싣는다. make_prop·지문·판정이 전부
+	# 이 값을 쓰므로, 여기서 확정하지 않으면 도심 고층이 배치만 크고 렌더는 원래 크기가 된다.
+	out.append({ "path": e["path"], "scale": pick["s"], "zone": zone,
 		"pos": pos, "ex": pick["ex"], "yaw": pick["yaw"] })
 
 
@@ -4970,6 +5694,11 @@ func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
 	var uz: float = absf(pos.z - float(kz) * PITCH)
 	var rx := road_half_at(kx)
 	var rz := road_half_at(kz)
+	# §25: 그려지지 않는 도로 위에는 프롭도 서지 않는다. 기하 조건만 보면 공원 내부의
+	# 걷힌 도로 자리에 가로등이 서고 강기슭의 걷힌 차선에 차가 맨땅 위에 선다 —
+	# in_zone 의 띠 검사는 도로가 **있는지**를 묻지 않기 때문이다.
+	var kc := cell_of(pos.x)
+	var jc := cell_of(pos.z)
 	match zone:
 		"road":
 			# 동서 도로 또는 남북 도로 중 한쪽에 온전히 들어가면 된다. 세 조건이다:
@@ -4979,21 +5708,24 @@ func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
 			# ③은 자리 중심이 아니라 **프롭의 실제 길이**로 잰다. 중심만 빼는 방식은
 			#   버스(반길이 4.24)의 차체가 교차로 안에 남는 것을 못 막는다.
 			var on_z: bool = uz + ex.y <= rz and uz - ex.y >= median_at(kz) \
-				and ux - ex.x >= rx + CROSS_W
+				and ux - ex.x >= rx + CROSS_W and seg_ew(kz, kc)
 			var on_x: bool = ux + ex.x <= rx and ux - ex.x >= median_at(kx) \
-				and uz - ex.y >= rz + CROSS_W
+				and uz - ex.y >= rz + CROSS_W and seg_ns(kx, jc)
 			return on_z or on_x
 		"walk":
 			# 한 축은 보도 띠 안, 다른 축은 교차 도로를 침범하지 않아야 한다.
 			var on_z: bool = uz - ex.y >= rz and uz + ex.y <= curb_half_at(kz) \
-				and ux - ex.x >= rx
+				and ux - ex.x >= rx and seg_ew(kz, kc)
 			var on_x: bool = ux - ex.x >= rx and ux + ex.x <= curb_half_at(kx) \
-				and uz - ex.y >= rz
+				and uz - ex.y >= rz and seg_ns(kx, jc)
 			return on_z or on_x
 		_:
 			# 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르다 — 구간으로 본다.
-			var sx := block_span(pos.x)
-			var sz := block_span(pos.z)
+			# 공원이면 span_* 이 **병합 구간**을 돌려주므로 걷힌 내부 도로 자리까지 찬다.
+			if zone_at(kc, jc) == Z_WATER:
+				return false
+			var sx := span_x(kc, jc)
+			var sz := span_z(kc, jc)
 			return pos.x - ex.x >= sx.x and pos.x + ex.x <= sx.y \
 				and pos.z - ex.y >= sz.x and pos.z + ex.y <= sz.y
 	return false
@@ -5011,12 +5743,12 @@ func fits(pos: Vector3, ex: Vector2, out: Array) -> bool:
 
 
 ## 에셋의 XZ 반extent(스케일 반영). 메시 AABB 에서 직접 잰다.
-func half_extent(e: Dictionary) -> Vector2:
-	var key: String = e["path"]
-	if not _r_cache.has(key):
-		var s: Vector3 = mesh_of(key).get_aabb().size
-		_r_cache[key] = Vector2(s.x, s.z) * 0.5
-	return (_r_cache[key] as Vector2) * float(e["scale"])
+## 스케일을 인자로 받는다 — 지구 배수(§25)가 붙으면 카탈로그의 값과 다르기 때문이다.
+func half_extent(path: String, scale: float) -> Vector2:
+	if not _r_cache.has(path):
+		var s: Vector3 = mesh_of(path).get_aabb().size
+		_r_cache[path] = Vector2(s.x, s.z) * 0.5
+	return (_r_cache[path] as Vector2) * scale
 
 
 ## 모델 밑동(아래 BASE_FRAC 높이)의 XZ 반extent와, 메시 XZ 중심 대비 그 중심의
@@ -5228,6 +5960,8 @@ AI의 난이도 균형(너무 강한가/약한가), 쫓기는 긴장감, 카메�
 ```gdscript
 extends Node
 
+const CITY := preload("res://scripts/city.gd")
+
 ## 4a: 경쟁 구멍의 조종자. 부모 Hole 을 매 물리 프레임 움직인다.
 ##
 ## 규칙은 세 줄이다.
@@ -5247,6 +5981,15 @@ extends Node
 @export var fear_k := 3.5
 ## 목표를 다시 고르는 주기(물리 프레임). 매 프레임 고르면 동률에서 덜덜 떤다.
 @export var retarget_frames := 20
+## 무진전 감지(§25). 강이 생기면서 "목표가 강 건너" 가 일상이 됐다 — 축별 슬라이드는
+## 둑을 따라 미끄러지게 해 주지만, 목표가 계속 강 건너면 둑을 영원히 밀며 정지한다.
+## **배회 지점만 다시 뽑는 것으로는 부족하다**: choose_target 이 sight(70) 안의 최근접
+## 먹이를 다시 고르는데 강폭이 32 뿐이라 강 건너 먹이가 최근접인 상황이 흔하다.
+## 그래서 목표도 함께 일정 시간 제외한다. 경로 탐색은 도입하지 않는다 —
+## 이 게임의 AI 는 조언 수준이면 충분하다.
+@export var stuck_frames := 120
+@export var stuck_dist := 0.5
+@export var ban_frames := 600
 
 var _rng := RandomNumberGenerator.new()
 var _hole: Node3D
@@ -5254,6 +5997,9 @@ var _reg: Node
 var _target: Node3D = null
 var _wander := Vector3.ZERO
 var _tick := 0
+var _stuck_ref := Vector3.ZERO
+## 인스턴스 ID -> 이 틱까지 목표에서 제외
+var _banned := {}
 
 
 func _ready() -> void:
@@ -5267,6 +6013,14 @@ func _physics_process(_dt: float) -> void:
 	if _hole == null or not is_instance_valid(_hole):
 		return
 	_tick += 1
+	# 무진전이면 배회 지점을 다시 뽑고 지금 목표를 한동안 제외한다(§25).
+	if _tick % stuck_frames == 0:
+		if _hole.global_position.distance_to(_stuck_ref) < stuck_dist:
+			_wander = pick_wander()
+			if is_instance_valid(_target):
+				_banned[_target.get_instance_id()] = _tick + ban_frames
+			_target = null
+		_stuck_ref = _hole.global_position
 	if _tick % retarget_frames == 0 or not is_instance_valid(_target):
 		_target = choose_target()
 	var goal := _wander
@@ -5310,7 +6064,7 @@ func choose_target() -> Node3D:
 	var best: Node3D = null
 	var bd := INF
 	for h in _reg.holes():
-		if h == _hole or not is_instance_valid(h):
+		if h == _hole or not is_instance_valid(h) or is_banned(h):
 			continue
 		if float(_hole.radius) < float(h.radius) * float(_hole.hole_bite_ratio):
 			continue
@@ -5321,7 +6075,7 @@ func choose_target() -> Node3D:
 	if best != null:
 		return best
 	for o in get_tree().get_nodes_in_group("swallowable"):
-		if not is_instance_valid(o) or o.falling:
+		if not is_instance_valid(o) or o.falling or is_banned(o):
 			continue
 		# 척도는 좁은 쪽 반폭이다(§23) — 외접반경으로 고르면 원 안에 들어가는
 		# 길쭉한 물체를 AI 가 통째로 무시한다.
@@ -5334,10 +6088,30 @@ func choose_target() -> Node3D:
 	return best
 
 
+## 무진전 때 제외한 목표인가. 지난 것은 그 자리에서 정리한다.
+func is_banned(n: Node) -> bool:
+	var id := n.get_instance_id()
+	if not _banned.has(id):
+		return false
+	if _tick >= int(_banned[id]):
+		_banned.erase(id)
+		return false
+	return true
+
+
 ## 지면 안의 임의 지점. 반경에 여유를 두어 가장자리에 붙지 않게 한다.
+## §25: 수역은 배회 지점이 될 수 없다 — 도달할 수 없는 곳을 향해 둑을 밀게 된다.
+## 시행 횟수를 고정해야 재현성이 유지된다(난수 소비량이 결과에 따라 달라지면 안 된다).
 func pick_wander() -> Vector3:
 	var lim: float = float(_hole.ground_half) * 0.8
-	return Vector3(_rng.randf_range(-lim, lim), 0.0, _rng.randf_range(-lim, lim))
+	var out := Vector3.ZERO
+	var got := false
+	for _i in 8:
+		var p := Vector3(_rng.randf_range(-lim, lim), 0.0, _rng.randf_range(-lim, lim))
+		if not got and CITY.passable(p):
+			out = p
+			got = true
+	return out
 
 
 func flat_dist(a: Vector3, b: Vector3) -> float:
@@ -6246,3 +7020,125 @@ pwsh tools/sync_plan_blocks.ps1 -Fix     # 문서를 파일에 맞춘다
 - **브라우저를 띄우는 것은 자동화되지 않았다.** 하네스는 URL을 열어 주지 않는다 — 사람이든 스크립트든 한 번은 띄워야 한다. 대신 그 한 번 뒤로는 아홉 종이 스스로 이어진다.
 - **3c는 게이트가 아니다**(위 참조). 브라우저에서 성능 여유분을 재려면 rAF 밖의 계측 수단이 필요하다.
 - **판정 스크린샷이 남지 않는다.** `save_png`는 브라우저에서도 `err=0`을 돌려주지만(실측 — "익스포트본의 `res://`는 읽기 전용이라 실패할 것"이라는 예상은 틀렸다) 그 파일은 브라우저의 메모리 파일시스템에 있고 새로고침과 함께 사라진다. 판정은 이미지를 메모리에서 재므로 결과에는 영향이 없지만, **데스크톱과 달리 나중에 열어 볼 그림이 없다.** 어긋난 자리를 눈으로 대조하려면 그 판정을 데스크톱에서 다시 돌려야 한다.
+
+---
+
+## §25. 격자 위에 도시를 얹는다 — 지구제·수계·수퍼블록 (구현·검증 완료, rev.24)
+
+유저의 지적은 넷이었고 그 첫째가 이것이다: **"실제 도시의 도로는 100% 바둑판이 아니다."** §18이 3배수 중심선을 대로로 승격시켰지만 그것으로는 부족했다 — 32m 격자가 지도 끝까지 완벽하게 균질했고, 병원·은행·주택이 위치와 무관하게 섞였으며, 지도는 보이지 않는 clamp에서 뚝 끊겼다. 여기서 격자 **위에** 지구제·수계·수퍼블록을 얹는다. 인프라(셰이더 도로·32m 주기)는 그대로 두고, **무엇이 어디에 서는가**와 **도로가 존재하는가**를 지도의 함수로 만든다.
+
+### 지도는 난수가 아니라 손으로 저작한 상수다
+
+`city.gd`의 `ZONE_ROWS` 열네 줄이 14×14 셀 전체를 정한다. 시드 난수로 뽑지 않은 이유가 셋이다. ① 판정기가 **독립 사본**으로 같은 지도를 들 수 있다(셰이더 uniform을 안 읽는 것과 같은 이유다). ② 강·공원·도심을 의도적으로 디자인할 수 있다. ③ E4 재현성이 시드와 무관하게 자동으로 성립한다.
+
+행·열 ↔ 월드 대응식은 **세 곳이 같은 식을 들어야 한다**(city.gd · 셰이더 · 판정기):
+
+```
+행 r = j + 7,  열 c = k + 7,  zone_at(k, j) = ZONE_ROWS[j + 7][k + 7]
+셀 (k, j) 는 x ∈ [32k, 32k+32], z ∈ [32j, 32j+32]
+```
+
+셰이더에는 14×14 R8 텍스처로 굽는다. 셀당 `zone_code * 51`이 들어가고, 51/255 = 0.2 간격은 8비트 양자화·필터 오차보다 압도적으로 커서 복호가 견고하다. **판정기는 이 텍스처를 읽지 않는다.**
+
+### 바다는 지면을 키워서 만들지 않는다 — 주입이 그것을 증명했다
+
+지도 밖을 바다로 칠하려면 `PlaneMesh`를 키우는 것이 자연스러워 보인다. **그렇게 하면 H 계열 판정이 통째로 무너진다.** 착시 판정은 탐침 프레임에서 배경(마젠타)을 찾아 그것을 기준 휘도로 쓰는데, 지면이 넓어지면 화면에서 하늘이 사라져 기준점 자체가 없어진다. 448 → 4000 주입을 실제로 넣어 보니 `inter`·`road` 지점이 즉시 `배경(마젠타)이 없다`로 탈락했다.
+
+그래서 바다는 **지도 안쪽 테두리 한 줄**(k 또는 j 가 ±끝인 52셀)이다. 지면 메시는 448 그대로고, 놀이 영역이 384×384로 줄어드는 대신 세계가 물로 둘러싸여 끝난다.
+
+### 도로의 존재는 지도에서 파생되는 순수 함수다
+
+세그먼트 데이터를 따로 두지 않는다. 어떤 도로 세그먼트든 양쪽 셀만 보면 정해진다.
+
+```gdscript
+static func seg_rule(a: int, b: int, bridge: bool) -> bool:
+	if a == Z_WATER or b == Z_WATER:
+		return bridge
+	return not (a == Z_PARK and b == Z_PARK)
+```
+
+양쪽이 공원이면 없다(수퍼블록 내부 관통 도로가 걷힌다). 한쪽만 공원이면 남는다 — 공원은 도로로 둘러싸인 것이 자연스럽다. 수역은 **교량 목록에 있을 때만** 뚫린다.
+
+교량은 **선이 아니라 세그먼트 단위**로 적는다(`BRIDGES = [[-3, 2], [0, 2], [3, 2]]`). 선 전체를 열면 같은 z의 바다 테두리까지 뚫려 구멍이 지도 밖 물 위로 나간다.
+
+### 공원은 도로만 지워서는 생기지 않는다
+
+셰이더에서 내부 도로를 지워도 `block_span`이 셀 단위로 커브를 물고 있으면 프롭이 옛 도로 띠를 계속 피한다 — 결과는 수퍼블록이 아니라 **"도로만 지워진 블록 넷"**이고, 빈 십자 띠가 그대로 남는다. 그래서 span을 존 인지로 병합하고, 배치는 **대표 셀(사전순 최소)에서 한 번만** 돈다. 셀마다 돌리면 같은 병합 구간에 밀도가 셀 수 배로 겹친다.
+
+### 존별 지면색은 휘도로 가를 수 없다
+
+네 지구의 지면은 D1(인접 표면 휘도차 ≥ 0.05)과 D4(어떤 지면도 우물만큼 어둡지 않다)를 지키려면 **[아스팔트 0.37, 커브 0.72] 사이 좁은 띠 안**에 전부 들어가야 한다. 그 안에서 넷을 휘도로 벌리면 서로 붙거나 D1을 깬다.
+
+그래서 Z1은 조명 배율에 불변인 **채널 우세도**로 판정한다 — 초록 우세도 `g = G - (R+B)/2`, 파랑 우세도 `b = B - (R+G)/2`. 규격은 값이 아니라 **순서**다.
+
+```
+g(공원 0.328) > g(주거 0.237) > g(상업 0.108) > g(도심 0.002)     그리고    물만 파랗다(b = 0.255)
+```
+
+모든 채널이 같은 배율로 곱해지면 차도 같은 배율로 곱해지므로 이 순서는 조명·톤매핑을 타지 않는다. 팔레트는 렌더 후에도 어느 채널도 1.0에 붙지 않도록 낮춰 잡았다 — 클리핑되면 채널 차가 뭉개진다(옛 커브색은 실제로 1.0000으로 포화해 있다).
+
+### AI는 목표가 아니라 경로에서 막힌다
+
+강이 생기자 "목표가 강 건너"가 일상이 됐다. `move_to`의 축별 슬라이드가 둑을 따라 미끄러지게 해 주지만, `choose_target`이 sight 70 안의 최근접 먹이를 계속 고르는데 **강폭이 32뿐**이라 강 건너 먹이가 최근접인 상황이 흔하다. 배회 지점만 다시 뽑는 완화로는 부족하다 — 목표도 함께 일정 시간 제외해야 풀린다(120프레임 실이동 < 0.5m → 재추첨 + 600프레임 블랙리스트). 경로 탐색은 도입하지 않았다.
+
+### 판정기의 계측 파생 상수는 전부 다시 유도했다
+
+`plan()`이 바뀌면 판정기에 박힌 **실측 유래 상수**가 통째로 깨진다. 그대로 두고 "기존 판정 전부 PASS"를 목표로 삼으면 정상 구현이 red가 된다. 재유도하고, 갱신한 상수마다 고장 주입을 다시 걸었다.
+
+| 상수 | 옛값 | 새값 | 근거 |
+|---|---|---|---|
+| `RESTART_PROPS` | 3876 | **2236** | 바다 52셀·강 14셀은 비고, 공원 9셀은 수퍼블록 셋으로 합치고, 걷힌 도로의 보도·차도 프롭이 사라졌다 |
+| `MIN_BOUL_ROAD` | 230 | **164** | 실측 329의 절반 |
+| `MIN_BOUL_WALK` | 320 | **152** | 실측 304의 절반 |
+| `MIN_CANOPY_PROPS` | 475 | **343** | 실측 687의 절반 |
+
+`PERIOD_TOL`은 선언만 있고 쓰이지 않는 상수였다(D3는 "D1·D2를 통과한 서로 다른 블록 2개 이상"으로 판정한다). 존별 지면색이 D3와 충돌할까 걱정할 필요가 없었던 이유다.
+
+### 판정이 증거를 못 찾던 자리 — 브라우저 게이트의 위약
+
+작업 전 baseline에서 브라우저 판정 둘(`--judge3`·`--judge4`)이 **창 크기 셋에서 전부** `탐침 프레임에 배경이 없다`로 떨어졌다(1568×779 · 1160×760 · 900×900). 데스크톱 1152×648은 통과했다. 렌더 결함이 아니라 **판정이 증거를 못 찾은 것**이었다.
+
+배경 띠는 원경에서 **최상단 몇 픽셀로 눌린 활 모양**인데(`shots/boul_far_probe.png`), `background_pixel`이 y 4칸·x 16칸 격자로 화면의 1/64만 훑고 있었다. 캔버스 크기가 조금만 달라지면 격자가 통째로 비켜간다. 그대로 두면 브라우저 게이트가 **창 크기에 따라 뒤집히는 위약**이다.
+
+요구하는 증거는 그대로 두고(마젠타 우세 픽셀이 실제로 있어야 한다) 탐색만 촘촘히 했다. 보통 첫 몇 행에서 찾고 곧장 빠져나오므로 비용도 거의 없다. 주입(지면 448 → 4000)이 여전히 탈락시키는 것을 확인했다.
+
+### 겹친 구멍 둘이 같은 개체를 각각 삼키고 있었다
+
+G2(총 면적 보존)가 성장 14.18 대 기대 7.37로 잡았다. `queue_free()`는 프레임 끝에 실행되고 그때까지 `is_instance_valid`가 참이라, 구멍 둘이 겹친 자리에서는 **같은 프레임에 두 구멍이 같은 개체를 각각 삼킨다.** 면적이 공짜로 두 배 늘어난다.
+
+선재 결함이고, AI 궤적이 바뀌면서 드러났다(`pick_wander`의 난수 소비량이 달라졌다). 소멸에 기대지 않고 `swallowable.consumed`로 한 번만 세도록 못을 박았다. 고친 뒤 G2는 45.5473 대 45.5473으로 정확히 일치한다.
+
+### 새 기준 — 전부 고장 주입으로 검증했다
+
+`--judge7` 하나에 모았다. 존 표본은 **톱다운 카메라**로 찍는다 — 표본이 화면 한가운데로 떨어져 투영·가림·거리 페이드를 걱정할 필요가 없다.
+
+| 기준 | 묻는 것 | 주입 | 결과 |
+|---|---|---|---|
+| Z1 | 존별 지면색의 순서 | 존 텍스처를 한 칸 민다 | F ✓ |
+| Z2 | 공원 수퍼블록 안에 도로가 없다 | 셰이더 도로 마스크를 끈다 | F ✓ |
+| Z3 | 수역 셀 안에 프롭이 0개 | 수역 검사·프로파일 잠금을 풀어 실제로 놓이게 한다 | F ✓ |
+| Z4 | 교량은 아스팔트, 나머지 강은 물 | 교량 목록을 비운다 | F ✓ |
+| Z5 | 수역은 못 지나가고 교량은 지나간다 | `move_to`의 수역 가드를 없앤다 | F ✓ |
+
+Z3의 첫 주입은 **잡히지 않았다**. `add_slot`의 수역 가드를 지워도 수역 존 프로파일의 skip 1.0이 따로 막고 있어 위반 자체가 발생하지 않았기 때문이다. 방어가 겹쳐 있으면 하나를 지우는 것으로는 주입이 성립하지 않는다 — 실제로 프롭이 물 위에 놓이는 데까지 밀어야 기준을 시험한 것이다.
+
+Z5는 구현체의 `passable`을 부르지 않는다. **구멍을 실제로 그리로 보내고** 도착 지점을 판정기의 사본으로 본다.
+
+### 문서 동기화의 사각지대 둘
+
+§24가 만든 `sync_plan_blocks.ps1`은 열 블록을 지키고 있었다. 그런데 이 절에서 고친 **`ground_hole.gdshader`와 `hole.gd`가 그 열에 없었다.** 파일 지도(§8)는 둘 다 "전문"이라고 적어 두었지만, 실제 절 제목에 그 표기가 없어 도구가 건너뛰고 있었다. `hole.gd` 쪽은 제목에 백틱 경로가 둘(`scenes/hole.tscn`이 먼저)이라 정규식이 엉뚱한 파일을 집기도 했다.
+
+제목을 고쳐 둘을 검사 범위로 끌어들였다. **열 블록에서 열두 블록이 됐다.** 기계가 지키지 않는 규율은 조용히 깨진다는 §24의 이야기가, 그 도구 자신의 사각지대에서 한 번 더 반복된 셈이다.
+
+### 회귀
+
+**데스크톱 Forward+ 열 종 · 데스크톱 Compatibility 열 종 · 브라우저 게이트 아홉 종 — 스물아홉 번 전부 PASS.** 신규 주입 6종(Z1~Z5 + 배경 탐색)을 더해 누적 91종이다.
+문서 대조는 `어긋난 블록 0개 / 전체 12개`로 끝난다.
+
+### 남긴 한계
+
+- **§24의 한계는 그대로다** — Chrome 하나·기계 하나. 이번에도 넓히지 않았다.
+- **놀이 영역이 384×384로 줄었다.** 바다 테두리 한 줄만큼이다. 지면 메시를 키우는 길은 위에서 막혔으므로, 더 넓히려면 격자 자체를 키워야 한다.
+- **기슭에 걸친 구멍은 허용이다.** Z5는 구멍 **중심**만 본다 — 원반 절반이 물 위에 걸치는 것은 "강기슭이 파인" 연출이고, 반경 마진으로 막으면 교량 진입로 접근까지 막힌다. 구현자가 이를 버그로 오인해 고치지 말 것.
+- **교량에는 프롭이 없다.** Z3를 "수역 셀 안에 프롭 0개"라는 예외 없는 단언으로 두기 위한 선택이다. Phase B의 주행 차량은 교량을 건너므로, 그때 M3에 교량 예외를 명시해야 한다(PLAN2 §4에 적어 두었다).
+- **존별 밀도·스케일 배수는 체감으로 조정할 값이다.** 유저가 아직 길게 플레이하지 않았다.

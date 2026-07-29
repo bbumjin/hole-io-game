@@ -35,6 +35,45 @@ const SPEC_CROSS_PITCH := 1.2                      # 횡단보도 줄무늬 주�
 const SPEC_BOUL_EVERY := 3                         # k mod 3 == 0 인 중심선이 대로
 const SPEC_BOUL_HALF := 6.5                        # 대로 아스팔트 반폭
 const SPEC_LANE_GAP := 0.75                        # 대로 이중 중앙선의 중심 오프셋
+# --- 지구 지도 규격 (§25) --------------------------------------------------
+# **city.gd 의 ZONE_ROWS 를 읽지 않는다.** 읽으면 지도를 바꾼 빌드가 자기 값끼리
+# 일치해 그대로 통과한다 — 셰이더의 uniform 을 안 읽는 것과 정확히 같은 이유다.
+# 여기가 판정기의 사본이고, 사본이 어긋나는 것 자체가 탈락 사유다.
+#     행 r = j + 7,  열 c = k + 7,  spec_zone(k, j) = SPEC_ZONE_ROWS[j+7][k+7]
+const SPEC_ZONE_ROWS := [
+	"WWWWWWWWWWWWWW",   # j = -7
+	"WRRRRRRRRWRRRW",   # j = -6
+	"WRRRRRRRRWRRRW",   # j = -5
+	"WRRCCCCCCWCRRW",   # j = -4
+	"WRRCCCCCCWCRRW",   # j = -3
+	"WRRCCDDDDWCRRW",   # j = -2
+	"WRRCCDDDDWCRRW",   # j = -1
+	"WPPCCDDDDWCRRW",   # j =  0
+	"WPPCCDDDDWCRRW",   # j =  1
+	"WRRCCCCCCWCRRW",   # j =  2
+	"WRRCCCCCCWCPPW",   # j =  3
+	"WRRPPRRRRWRPPW",   # j =  4
+	"WRRRRRRRRWRRRW",   # j =  5
+	"WWWWWWWWWWWWWW",   # j =  6
+]
+const SPEC_CELL_MIN := -7
+const SPEC_CELL_MAX := 6
+const SPEC_CELL_COUNT := 14
+const SPEC_ZONE_CODE := { "D": 0, "C": 1, "R": 2, "P": 3, "W": 4 }
+const SPEC_Z_DOWNTOWN := 0
+const SPEC_Z_COMMERCIAL := 1
+const SPEC_Z_RESIDENTIAL := 2
+const SPEC_Z_PARK := 3
+const SPEC_Z_WATER := 4
+## 수역을 건너는 동서 도로 세그먼트 [중심선 인덱스, 셀 인덱스].
+const SPEC_BRIDGES := [[-3, 2], [0, 2], [3, 2]]
+
+## Z1: 존별 지면색을 **휘도**로 가르면 안 된다 — 네 지구가 전부 [아스팔트, 커브] 사이
+## 좁은 띠 안에 있어야 D1·D4 가 성립하므로 휘도만으로는 서로 붙는다. 대신 조명 배율에
+## 불변인 **채널 우세도**로 판정한다: 초록 우세 g = G - (R+B)/2, 파랑 우세 b = B - (R+G)/2.
+## 규격은 순서다 — 공원이 가장 푸르고 도심이 가장 무채색이며 물만 파랗다.
+const ZONE_G_MARGIN := 0.02                        # 이웃 지구 사이 초록 우세도 최소 차
+const ZONE_W_MARGIN := 0.05                        # 물의 파랑 우세도 하한
 const SURF_DIFF_MIN := 0.05                        # D1: 인접 표면 휘도차 하한
 const PERIOD_TOL := 0.05                           # D3: 다른 블록에서 같은 표면의 휘도 허용 편차
 const CROSS_GROUPS_MIN := 3                        # D2: 횡단보도 띠에서 세어야 할 엣지 그룹 수
@@ -71,8 +110,11 @@ const MIN_PROPS := 300                             # E1: 도시가 실제로 생
 ## **이 하한이 잡는 것은 "위계가 통째로 사라졌는가"(그때 0 이 된다) 하나뿐이다.**
 ## 자리 하나를 지우는 정도의 부분 회귀는 비율로 안 걸린다 — 그것은 E7b(자리 구조)가
 ## 본다. 두 기준의 역할을 섞어서 읽지 마라.
-const MIN_BOUL_ROAD := 230
-const MIN_BOUL_WALK := 320
+## §25 재유도: 지구제·수계·수퍼블록이 들어오며 실측이 통째로 달라졌다.
+## 대로 세그먼트 일부가 사라졌기 때문이다(강 횡단 중 교량 셋만 남고, 공원 내부가
+## 걷히고, 바다 테두리에 도로가 없다). 실측 460/640 → 329/304, 하한은 그 절반이다.
+const MIN_BOUL_ROAD := 164
+const MIN_BOUL_WALK := 152
 const MIN_ALBEDOS := 12                            # E1: 단색 팔레트가 실제로 다양한가
 const GROUND_TOL := 0.05                           # E5: 접지 허용 오차(월드 단위)
 const TILT_TOL := 0.02                             # E5: 직립 허용 기울기(라디안)
@@ -111,10 +153,11 @@ const ROUND_TEST_FRAMES := 600                     # T1: 그 라운드를 덮고
 const TIMER_TOL := 0.25                            # T1: 판정기 시계와의 허용 오차(초)
 const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고정을 확인하는 프레임
 const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 수 (플레이어 + AI 5)
-## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 산포 반경을 구간에서 유도하며
-## 3804 → 3876 로 늘었다 — 대로가 붙은 블록에서 구간 밖으로 나가 거절되던 시도가
-## 자리를 찾은 만큼이다.
-const RESTART_PROPS := 3876
+## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 3804 → 3876 이었고,
+## §25 에서 3876 → 2236 으로 줄었다. 줄어든 것이 규격이다 — 바다 테두리(52셀)와
+## 강(14셀)에는 아무것도 놓지 않고, 공원 9셀은 수퍼블록 셋으로 합쳐 한 번만 채우며,
+## 걷힌 도로 위의 보도·차도 프롭이 사라졌다.
+const RESTART_PROPS := 2236
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -136,9 +179,10 @@ const FALL_FRAMES := 240
 ## E8: 메시 반폭이 밑동 셰이프 반폭의 이 배 이상이면 "가지가 있는 프롭" 이다.
 ## city.gd 의 CANOPY_RATIO 와 같은 값을 판정기가 따로 든다.
 const CANOPY_RATIO := 1.5
-## E8: 그런 프롭의 하한. 실측 955 의 절반이다. 이 하한이 잡는 것은
-## "밑동 셰이프가 다시 메시 전체가 되어 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
-const MIN_CANOPY_PROPS := 475
+## E8: 그런 프롭의 하한. 이 하한이 잡는 것은 "밑동 셰이프가 다시 메시 전체가 되어
+## 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
+## §25 재유도: 실측 955 → 687(도시 총량이 줄었다). 하한은 그 절반이다.
+const MIN_CANOPY_PROPS := 343
 
 # --- §21 한글 HUD 판정 -----------------------------------------------------
 ## 번들 폰트의 경로. 라벨이 이것을 쓰지 않으면 데스크톱에서는 시스템 폴백으로
@@ -239,12 +283,75 @@ func spec_lane_mark_u(k: int) -> float:
 	return SPEC_LANE_GAP if spec_is_boulevard(k) else 0.0
 
 
+# --- 지구 지도 파생 (§25) — 전부 판정기의 사본에서만 계산한다 ------------------
+
+func spec_cell_of(w: float) -> int:
+	return clampi(floori(w / SPEC_PITCH), SPEC_CELL_MIN, SPEC_CELL_MAX)
+
+
+func spec_zone(k: int, j: int) -> int:
+	var c := clampi(k - SPEC_CELL_MIN, 0, SPEC_CELL_COUNT - 1)
+	var r := clampi(j - SPEC_CELL_MIN, 0, SPEC_CELL_COUNT - 1)
+	return int(SPEC_ZONE_CODE[(SPEC_ZONE_ROWS[r] as String)[c]])
+
+
+func spec_zone_at(p: Vector3) -> int:
+	return spec_zone(spec_cell_of(p.x), spec_cell_of(p.z))
+
+
+func spec_is_bridge_ew(jl: int, kc: int) -> bool:
+	for b in SPEC_BRIDGES:
+		if int(b[0]) == jl and int(b[1]) == kc:
+			return true
+	return false
+
+
+func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
+	if a == SPEC_Z_WATER or b == SPEC_Z_WATER:
+		return bridge
+	return not (a == SPEC_Z_PARK and b == SPEC_Z_PARK)
+
+
+func spec_seg_ew(jl: int, kc: int) -> bool:
+	return spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc))
+
+
+func spec_seg_ns(kl: int, jc: int) -> bool:
+	return spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false)
+
+
+## 구멍이 이 자리에 있을 수 있는가 — Z5 의 규격이다.
+func spec_passable(p: Vector3) -> bool:
+	var k := spec_cell_of(p.x)
+	if spec_zone(k, spec_cell_of(p.z)) != SPEC_Z_WATER:
+		return true
+	var jl := spec_line_index(p.z)
+	return spec_is_bridge_ew(jl, k) \
+		and absf(p.z - float(jl) * SPEC_PITCH) <= spec_road_half(jl)
+
+
+## 공원 수퍼블록의 축별 병합 범위. E2 가 "블록 구간 안인가" 를 물을 때 쓴다.
+func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
+	var v := k if along_k else j
+	if spec_zone(k, j) != SPEC_Z_PARK:
+		return Vector2i(v, v)
+	var lo := v
+	while lo > SPEC_CELL_MIN \
+			and spec_zone(lo - 1 if along_k else k, j if along_k else lo - 1) == SPEC_Z_PARK:
+		lo -= 1
+	var hi := v
+	while hi < SPEC_CELL_MAX \
+			and spec_zone(hi + 1 if along_k else k, j if along_k else hi + 1) == SPEC_Z_PARK:
+		hi += 1
+	return Vector2i(lo, hi)
+
+
 ## 판정 인자의 전체 목록이자 **고르는 우선순위**다. 웹 쿼리는 외부 입력이라 이
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge6", "--judge5", "--judge4", "--judge3c", "--judge3b",
-	"--judge3", "--judge2", "--judge1b", "--judge"]
+const JUDGE_ORDER := ["--judge7", "--judge6", "--judge5", "--judge4", "--judge3c",
+	"--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
 
 
 ## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
@@ -327,6 +434,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--judge7": await run_judge_7()
 		"--judge6": await run_judge_6()
 		"--judge5": await run_judge_5()
 		"--judge4": await run_judge_4()
@@ -437,7 +545,7 @@ func judge_static(prefix: String, allow_no_block := false, props_hidden := false
 	# 고정 좌표 (4,4) 는 지면이 넓어지면 배경이 아니게 되어 H6 가 무의미해진다.
 	var bg_px := background_pixel(probe)
 	if bg_px.x < 0:
-		print("JUDGE %sbg FAIL: 탐침 프레임의 네 모서리가 모두 배경이 아니다" % prefix)
+		print("JUDGE %sbg FAIL: 탐침 프레임 위쪽 절반에 배경(마젠타)이 없다" % prefix)
 		return false
 	var lum_bg := shot.get_pixel(bg_px.x, bg_px.y).get_luminance()
 
@@ -938,9 +1046,22 @@ func probe_blocks(holes: Array, img: Image) -> Array:
 	var why := []
 	for dk in range(-2, 3):
 		for dj in range(-2, 3):
-			var b := Vector3(float(k0 + dk) * SPEC_PITCH + half, 0.0,
-				float(j0 + dj) * SPEC_PITCH + half)
+			var kc := k0 + dk
+			var jc := j0 + dj
+			var b := Vector3(float(kc) * SPEC_PITCH + half, 0.0,
+				float(jc) * SPEC_PITCH + half)
+			# §25: D 계열 표본은 "블록 지면 + 보도 + 아스팔트 + 중앙선" 넷을 전제한다.
+			# 공원·수역 셀에는 그 넷이 없다 — 표본을 옮긴다(건너뛴다).
+			# 존을 안 거르면 정상 빌드가 공원 잔디를 아스팔트로 알고 D1 에서 탈락한다.
+			var dz := spec_zone(kc, jc)
+			if dz == SPEC_Z_PARK or dz == SPEC_Z_WATER:
+				why.append("(%.0f,%.0f):존%d" % [b.x, b.z, dz])
+				continue
 			for sz in [-1.0, 1.0]:
+				# 그 변의 동서 도로가 실제로 존재해야 표본이 의미를 갖는다.
+				if not spec_seg_ew(spec_line_index(b.z + sz * half), kc):
+					why.append("(%.0f,%.0f)sz%.0f:도로없음" % [b.x, b.z, sz])
+					continue
 				if lane_width_px(b, sz) < LANE_MIN_PX:
 					why.append("(%.0f,%.0f)sz%.0f:중앙선%.1fpx" % [b.x, b.z, sz, lane_width_px(b, sz)])
 					continue
@@ -953,6 +1074,9 @@ func probe_blocks(holes: Array, img: Image) -> Array:
 					continue
 				var picked := false
 				for sx in [-1.0, 1.0]:
+					# 횡단보도는 **가로지르는 남북 도로**가 있어야 존재한다.
+					if not spec_seg_ns(spec_line_index(b.x + sx * half), jc):
+						continue
 					var seg_bad := ""
 					for p in cross_segment(b, sx, sz):
 						if seg_bad.is_empty():
@@ -1037,11 +1161,20 @@ func lum_at(img: Image, p: Vector3) -> float:
 ## 네 모서리만 보는 것도 부족하다 — 카메라를 당기고 도시를 채우자 모서리마다
 ## 원경의 건물이 걸려 "네 모서리가 모두 배경이 아니다" 로 판정이 무효화됐다(실측).
 ## 배경은 화면 위쪽에만 남으므로, 위에서부터 아래로 훑으며 처음 만나는 것을 쓴다.
+##
+## **성기게 훑으면 안 된다.** 옛 격자(y 4칸·x 16칸)는 화면의 1/64 만 봤는데, 이 배경
+## 띠는 원경에서 **최상단 몇 픽셀**로 눌린 활 모양이라(shots/boul_far_probe.png) 캔버스
+## 크기가 조금만 달라져도 격자가 통째로 비켜간다 — 데스크톱 1152x648 은 통과하고
+## 브라우저는 창 크기 셋(1568x779·1160x760·900x900)에서 전부 "배경이 없다" 로 떨어졌다.
+## 그것은 렌더 결함이 아니라 **판정이 증거를 못 찾은 것**이고, 그대로 두면 브라우저
+## 게이트가 창 크기에 따라 뒤집히는 위약이 된다.
+## 요구하는 증거는 그대로다(마젠타 우세 픽셀이 실제로 있어야 한다) — 탐색만 촘촘히 한다.
+## 보통 첫 몇 행에서 찾고 곧장 빠져나오므로 비용도 거의 없다.
 func background_pixel(probe: Image) -> Vector2i:
 	var w := probe.get_width()
 	var h := probe.get_height()
-	for y in range(2, h / 2, 4):
-		for x in range(2, w, 16):
+	for y in range(0, h / 2):
+		for x in range(0, w, 2):
 			var c := probe.get_pixel(x, y)
 			if minf(c.r, c.b) - c.g > MAGENTA_TH:
 				return Vector2i(x, y)
@@ -1229,15 +1362,12 @@ func footprint(pts: PackedVector2Array) -> Dictionary:
 		"ax": abs_range(xlo, xhi), "az": abs_range(zlo, zhi) }
 
 
-## 블록 구간에 온전히 들어가는가. lo/hi 는 인덱스 k 의 중심선 기준 편차다.
-## 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로(8.5 대 6.0) 가장 가까운 중심선
-## 하나로만 재면 반대쪽(대로 쪽) 보도 침범을 놓친다 — 두 경계선을 각각 본다.
-func in_block_span(k: int, lo: float, hi: float) -> bool:
-	if lo >= 0.0:
-		return lo >= spec_curb_half(k) and hi <= SPEC_PITCH - spec_curb_half(k + 1)
-	if hi <= 0.0:
-		return -hi >= spec_curb_half(k) and -lo <= SPEC_PITCH - spec_curb_half(k - 1)
-	return false                               # 중심선을 걸쳤다
+## 셀 (k, j) 의 블록 구간(월드 절대 좌표). 공원이면 **병합 구간**이다.
+## 대로가 한쪽에만 붙은 블록은 좌우 여백이 다르므로(8.5 대 6.0) 두 경계선을 각각 본다.
+func spec_block_span(k: int, j: int, along_k: bool) -> Vector2:
+	var m := spec_merge(k, j, along_k)
+	return Vector2(float(m.x) * SPEC_PITCH + spec_curb_half(m.x),
+		float(m.y + 1) * SPEC_PITCH - spec_curb_half(m.y + 1))
 
 
 func zone_of(pts: PackedVector2Array) -> String:
@@ -1248,16 +1378,41 @@ func zone_of(pts: PackedVector2Array) -> String:
 	var az: Vector2 = fp["az"]
 	var rx := spec_road_half(kx)
 	var rz := spec_road_half(kz)
+	# 발자국 중심이 속한 셀. 존 판정과 도로 존재 판정이 둘 다 이것을 쓴다.
+	var cc := Vector2.ZERO
+	for p in pts:
+		cc += p
+	cc /= float(pts.size())
+	var kc := spec_cell_of(cc.x)
+	var jc := spec_cell_of(cc.y)
+	# §25: 수역 셀 안에는 아무것도 없어야 한다 — 교량 위도 예외가 아니다.
+	if spec_zone(kc, jc) == SPEC_Z_WATER:
+		return ""
 	# 차도는 세 조건을 전부 만족해야 한다: 아스팔트 안 · 중앙 분리대 밖 ·
 	# 교차로와 그 바깥 횡단보도 밖. 뒤의 둘은 §18 에서 추가한 배치 규칙이고,
 	# 판정기가 이것을 안 들면 그 규칙을 지운 빌드를 아무도 안 잡는다.
-	if (az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W) \
-			or (ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W):
+	# §25 는 넷째를 더한다: **그 도로가 실제로 존재하는가**. 없으면 그 위의 프롭은
+	# 맨땅에 선 것이고, 기하 띠만 재는 옛 판정은 그것을 정상으로 통과시킨다.
+	if (az.y <= rz and az.x >= spec_median(kz) and ax.x >= rx + SPEC_CROSS_W \
+				and spec_seg_ew(kz, kc)) \
+			or (ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W \
+				and spec_seg_ns(kx, jc)):
 		return "road"
-	if (az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx) \
-			or (ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz):
+	if (az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx and spec_seg_ew(kz, kc)) \
+			or (ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz \
+				and spec_seg_ns(kx, jc)):
 		return "walk"
-	if in_block_span(kx, fp["xlo"], fp["xhi"]) and in_block_span(kz, fp["zlo"], fp["zhi"]):
+	# 블록 구간은 **셀 좌표**로 묻는다. 공원 수퍼블록은 여러 셀이 한 구간으로 병합되고
+	# 걷힌 내부 도로 자리까지 프롭이 들어가는 것이 규격이라, 중심선 기준 편차만 보던
+	# 옛 판정은 그 배치를 전부 "구역 이탈" 로 잡는다.
+	var sx := spec_block_span(kc, jc, true)
+	var sz := spec_block_span(kc, jc, false)
+	var lo := Vector2(INF, INF)
+	var hi := Vector2(-INF, -INF)
+	for p in pts:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	if lo.x >= sx.x and hi.x <= sx.y and lo.y >= sz.x and hi.y <= sz.y:
 		return "block"
 	return ""                                  # 어느 구역에도 온전히 안 들어간다
 
@@ -2530,6 +2685,186 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 		body.add_child(cs)
 		y += size.y
 	return body
+
+# --- §25: 지구제·수계 판정 --------------------------------------------------
+
+## 존 대표 셀. 좌표는 판정기의 사본에서 고른 것이고 구현체를 읽지 않는다.
+const ZONE_SPOTS := [
+	["도심", SPEC_Z_DOWNTOWN, Vector3(-16.0, 0.0, -16.0)],      # 셀 (-1,-1)
+	["상업", SPEC_Z_COMMERCIAL, Vector3(-80.0, 0.0, -80.0)],    # 셀 (-3,-3)
+	["주거", SPEC_Z_RESIDENTIAL, Vector3(-144.0, 0.0, -144.0)], # 셀 (-5,-5)
+	["공원", SPEC_Z_PARK, Vector3(-176.0, 0.0, 16.0)],          # 셀 (-6, 0) 서쪽 공원
+	["수역", SPEC_Z_WATER, Vector3(80.0, 0.0, 16.0)],           # 셀 ( 2, 0) 강
+]
+## 톱다운 표본 카메라의 높이. FOV 75 에서 세로 약 92m — 셀 세 칸이 들어온다.
+## 톱다운으로 보는 이유: 표본이 화면 한가운데로 떨어져 투영·가림·거리 페이드를
+## 걱정할 필요가 없다. D 계열이 게임 카메라에서 겪은 문제(서브픽셀 중앙선 등)를
+## 여기서는 처음부터 피한다.
+const ZONE_CAM_Y := 60.0
+## Z2: 서쪽 공원(k=-6..-5, j=0..1)의 **걷힌 내부 중심선** 위 표본.
+## 여기에 아스팔트가 보이면 수퍼블록이 성립하지 않은 것이다.
+const PARK_INNER := [Vector3(-160.0, 0.0, 32.0), Vector3(-160.0, 0.0, 20.0),
+	Vector3(-160.0, 0.0, 44.0), Vector3(-172.0, 0.0, 32.0), Vector3(-148.0, 0.0, 32.0)]
+## Z4: 교량 위 표본. 강 셀(k=2, x ∈ [64,96]) 한가운데를 지나는 동서 대로 z = 0·96 이다.
+const BRIDGE_ON := [Vector3(72.0, 0.0, 0.0), Vector3(88.0, 0.0, 0.0),
+	Vector3(72.0, 0.0, 96.0), Vector3(88.0, 0.0, 96.0)]
+## Z4: 교량이 아닌 강 위. 여기에도 도로가 있으면 강을 통째로 덮은 것이다.
+const BRIDGE_OFF := [Vector3(72.0, 0.0, 32.0), Vector3(88.0, 0.0, 64.0),
+	Vector3(72.0, 0.0, -64.0)]
+## 아스팔트로 인정할 상한 둘. 물과 아스팔트를 가르는 것은 휘도가 아니라 색이다 —
+## 둘 다 어둡지만 물만 파랗다(실측: 물 0.255 / 아스팔트 0.035). 임계는 그 중간이다.
+## 초록 쪽도 함께 막는다: 파랑만 보면 **교량 자리가 잔디로 바뀐 빌드**가 통과한다
+## (잔디는 파랗지 않다). 아스팔트는 무채색이라 두 우세도가 모두 0 근처여야 한다.
+const ROAD_B_MAX := 0.14
+const ROAD_G_MAX := 0.06
+
+
+## 카메라를 지정 지점 바로 위에서 수직으로 내려다보게 세운다.
+func top_down(at: Vector3) -> void:
+	_cam.global_position = Vector3(at.x, ZONE_CAM_Y, at.z)
+	_cam.global_rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+
+
+## 그 픽셀의 초록 우세도와 파랑 우세도. **조명 배율에 불변인 양**이다
+## (모든 채널이 같은 배율로 곱해지면 차도 같은 배율로 곱해진다).
+## 휘도를 쓰지 않는 이유: 네 지구의 지면은 D1·D4 때문에 [아스팔트, 커브] 사이 좁은
+## 휘도 띠 안에 들어가야 해서, 휘도만으로는 서로 갈리지 않는다.
+func chroma(img: Image, p: Vector3) -> Vector2:
+	var c := img.get_pixelv(px(p, img))
+	return Vector2(c.g - (c.r + c.b) * 0.5, c.b - (c.r + c.g) * 0.5)
+
+
+## Z1~Z5. 지구제·수계·수퍼블록이 규격대로 그려지고 막히는가.
+func run_judge_7() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	# Judge._ready 는 Main._ready 보다 먼저 돈다 — _main.hole 은 아직 Nil 이다.
+	# 한 프레임 뒤 레지스트리에서 받는다(다른 판정과 같은 방식).
+	await get_tree().process_frame
+	var hole: Node3D = _reg.holes()[0]
+	_main.hud_root.visible = false
+	# 구멍을 표본에서 먼 구석으로 치운다. 톱다운이라 구멍이 표본 셀 위에 있으면
+	# 우물이 그대로 표본 픽셀에 찍힌다.
+	hole.move_to(Vector3(-176.0, 0.0, -176.0))
+	_reg.flush()
+	var saved := hide_props()
+	await get_tree().process_frame
+
+	# --- Z1: 존별 지면색 -----------------------------------------------------
+	# 규격은 **순서**다: 공원이 가장 푸르고 도심이 가장 무채색이며 물만 파랗다.
+	# 존 텍스처를 한 칸 밀면 대표 셀이 이웃 지구를 읽어 순서가 깨진다.
+	var gd := {}
+	var bd := {}
+	for spot in ZONE_SPOTS:
+		top_down(spot[2])
+		for _i in 3:
+			await get_tree().process_frame
+		var shot := await capture("zone_%s" % spot[0])
+		var ch := chroma(shot, spot[2])
+		gd[int(spot[1])] = ch.x
+		bd[int(spot[1])] = ch.y
+		print("JUDGE 7 존 %s at (%.0f,%.0f) 초록우세=%.4f 파랑우세=%.4f"
+			% [spot[0], float((spot[2] as Vector3).x), float((spot[2] as Vector3).z),
+			   ch.x, ch.y])
+	var z1: bool = float(gd[SPEC_Z_PARK]) - float(gd[SPEC_Z_RESIDENTIAL]) >= ZONE_G_MARGIN \
+		and float(gd[SPEC_Z_RESIDENTIAL]) - float(gd[SPEC_Z_COMMERCIAL]) >= ZONE_G_MARGIN \
+		and float(gd[SPEC_Z_COMMERCIAL]) - float(gd[SPEC_Z_DOWNTOWN]) >= ZONE_G_MARGIN \
+		and float(bd[SPEC_Z_WATER]) >= ZONE_W_MARGIN
+	for z in [SPEC_Z_DOWNTOWN, SPEC_Z_COMMERCIAL, SPEC_Z_RESIDENTIAL, SPEC_Z_PARK]:
+		z1 = z1 and float(bd[z]) < ZONE_W_MARGIN          # 물만 파랗다
+
+	# --- Z2: 공원 수퍼블록 안에 도로가 없다 ----------------------------------
+	top_down(Vector3(-160.0, 0.0, 32.0))
+	for _i in 3:
+		await get_tree().process_frame
+	var park := await capture("zone_park_inner")
+	var z2 := true
+	var park_ref := chroma(park, Vector3(-176.0, 0.0, 16.0)).x
+	for p in PARK_INNER:
+		# 아스팔트·보도는 무채색이라 초록 우세도가 잔디보다 확 낮다.
+		var gg := chroma(park, p).x
+		var ok := gg >= park_ref - ZONE_G_MARGIN * 2.0
+		z2 = z2 and ok
+		print("JUDGE 7 공원내부 (%.0f,%.0f) 초록우세=%.4f (잔디 %.4f) %s"
+			% [(p as Vector3).x, (p as Vector3).z, gg, park_ref, pf(ok)])
+
+	# --- Z4: 교량은 있고, 교량이 아닌 강 위에는 도로가 없다 -------------------
+	var z4 := true
+	for p in BRIDGE_ON:
+		top_down(p)
+		for _i in 3:
+			await get_tree().process_frame
+		var img := await capture("zone_bridge_%d_%d" % [int((p as Vector3).x), int((p as Vector3).z)])
+		var ch := chroma(img, p)
+		var ok: bool = ch.y < ROAD_B_MAX and absf(ch.x) < ROAD_G_MAX   # 무채색 아스팔트다
+		z4 = z4 and ok
+		print("JUDGE 7 교량위 (%.0f,%.0f) 파랑우세=%.4f 초록우세=%.4f %s"
+			% [(p as Vector3).x, (p as Vector3).z, ch.y, ch.x, pf(ok)])
+	for p in BRIDGE_OFF:
+		top_down(p)
+		for _i in 3:
+			await get_tree().process_frame
+		var img := await capture("zone_river_%d_%d" % [int((p as Vector3).x), int((p as Vector3).z)])
+		var ch := chroma(img, p)
+		var ok := ch.y >= ZONE_W_MARGIN                   # 물이다
+		z4 = z4 and ok
+		print("JUDGE 7 교량아님 (%.0f,%.0f) 파랑우세=%.4f %s"
+			% [(p as Vector3).x, (p as Vector3).z, ch.y, pf(ok)])
+	restore_props(saved)
+
+	# 항공 뷰 두 장. **판정이 아니라 휴먼 검수용**이다 — 지구·강·공원·바다가 사람 눈에
+	# 도시로 읽히는가는 기계가 답할 질문이 아니다(전역 원칙 §1).
+	top_down(Vector3.ZERO)
+	_cam.global_position = Vector3(0.0, 430.0, 0.0)
+	for _i in 3:
+		await get_tree().process_frame
+	await capture("aerial_zones")
+	await get_tree().process_frame
+	await capture("aerial_city")
+
+	# --- Z3: 수역 셀 안에 프롭이 하나도 없다 ---------------------------------
+	var city: Node3D = _main.get_node("City")
+	var items: Array = city.plan(city.city_seed)
+	var in_water := 0
+	for it in items:
+		var p: Vector3 = it["pos"]
+		if spec_zone(spec_cell_of(p.x), spec_cell_of(p.z)) == SPEC_Z_WATER:
+			if in_water < 5:
+				print("JUDGE 7 Z3 수역 위 프롭: %s at (%.1f, %.1f)" % [it["path"], p.x, p.z])
+			in_water += 1
+	var z3 := in_water == 0
+
+	# --- Z5: 수역은 못 지나가고 교량은 지나간다 -------------------------------
+	# 구현체의 passable 을 부르지 않는다. **구멍을 실제로 그리로 보내고** 어디에
+	# 도착했는지 판정기의 사본으로 본다 — move_to 의 가드를 지우면 그대로 걸린다.
+	var z5 := true
+	var probes := [
+		["강 한가운데", Vector3(80.0, 0.0, 32.0), false],
+		["강 상류", Vector3(80.0, 0.0, -64.0), false],
+		["바다 테두리", Vector3(-208.0, 0.0, 0.0), false],
+		["교량 z=0", Vector3(80.0, 0.0, 0.0), true],
+		["교량 z=96", Vector3(80.0, 0.0, 96.0), true],
+	]
+	for pr in probes:
+		var goal: Vector3 = pr[1]
+		hole.move_to(Vector3(48.0, 0.0, goal.z))          # 목표 옆 육지에서 출발
+		hole.move_to(goal)
+		var landed := hole.global_position
+		var dry := spec_passable(landed)
+		var reached := landed.distance_to(goal) < 0.5
+		var ok: bool = dry and reached == bool(pr[2])
+		z5 = z5 and ok
+		print("JUDGE 7 Z5 %s 목표(%.0f,%.0f) 도착(%.1f,%.1f) 육지=%s 도달=%s 기대=%s %s"
+			% [pr[0], goal.x, goal.z, landed.x, landed.z,
+			   pf(dry), pf(reached), pf(bool(pr[2])), pf(ok)])
+
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s (수역프롭=%d)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), in_water])
+	var ok := z1 and z2 and z3 and z4 and z5
+	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
+	get_tree().quit(0 if ok else 1)
+
 
 # --- §21: 한글 HUD 판정 ----------------------------------------------------
 

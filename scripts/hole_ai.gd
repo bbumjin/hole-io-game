@@ -1,5 +1,7 @@
 extends Node
 
+const CITY := preload("res://scripts/city.gd")
+
 ## 4a: 경쟁 구멍의 조종자. 부모 Hole 을 매 물리 프레임 움직인다.
 ##
 ## 규칙은 세 줄이다.
@@ -19,6 +21,15 @@ extends Node
 @export var fear_k := 3.5
 ## 목표를 다시 고르는 주기(물리 프레임). 매 프레임 고르면 동률에서 덜덜 떤다.
 @export var retarget_frames := 20
+## 무진전 감지(§25). 강이 생기면서 "목표가 강 건너" 가 일상이 됐다 — 축별 슬라이드는
+## 둑을 따라 미끄러지게 해 주지만, 목표가 계속 강 건너면 둑을 영원히 밀며 정지한다.
+## **배회 지점만 다시 뽑는 것으로는 부족하다**: choose_target 이 sight(70) 안의 최근접
+## 먹이를 다시 고르는데 강폭이 32 뿐이라 강 건너 먹이가 최근접인 상황이 흔하다.
+## 그래서 목표도 함께 일정 시간 제외한다. 경로 탐색은 도입하지 않는다 —
+## 이 게임의 AI 는 조언 수준이면 충분하다.
+@export var stuck_frames := 120
+@export var stuck_dist := 0.5
+@export var ban_frames := 600
 
 var _rng := RandomNumberGenerator.new()
 var _hole: Node3D
@@ -26,6 +37,9 @@ var _reg: Node
 var _target: Node3D = null
 var _wander := Vector3.ZERO
 var _tick := 0
+var _stuck_ref := Vector3.ZERO
+## 인스턴스 ID -> 이 틱까지 목표에서 제외
+var _banned := {}
 
 
 func _ready() -> void:
@@ -39,6 +53,14 @@ func _physics_process(_dt: float) -> void:
 	if _hole == null or not is_instance_valid(_hole):
 		return
 	_tick += 1
+	# 무진전이면 배회 지점을 다시 뽑고 지금 목표를 한동안 제외한다(§25).
+	if _tick % stuck_frames == 0:
+		if _hole.global_position.distance_to(_stuck_ref) < stuck_dist:
+			_wander = pick_wander()
+			if is_instance_valid(_target):
+				_banned[_target.get_instance_id()] = _tick + ban_frames
+			_target = null
+		_stuck_ref = _hole.global_position
 	if _tick % retarget_frames == 0 or not is_instance_valid(_target):
 		_target = choose_target()
 	var goal := _wander
@@ -82,7 +104,7 @@ func choose_target() -> Node3D:
 	var best: Node3D = null
 	var bd := INF
 	for h in _reg.holes():
-		if h == _hole or not is_instance_valid(h):
+		if h == _hole or not is_instance_valid(h) or is_banned(h):
 			continue
 		if float(_hole.radius) < float(h.radius) * float(_hole.hole_bite_ratio):
 			continue
@@ -93,7 +115,7 @@ func choose_target() -> Node3D:
 	if best != null:
 		return best
 	for o in get_tree().get_nodes_in_group("swallowable"):
-		if not is_instance_valid(o) or o.falling:
+		if not is_instance_valid(o) or o.falling or is_banned(o):
 			continue
 		# 척도는 좁은 쪽 반폭이다(§23) — 외접반경으로 고르면 원 안에 들어가는
 		# 길쭉한 물체를 AI 가 통째로 무시한다.
@@ -106,10 +128,30 @@ func choose_target() -> Node3D:
 	return best
 
 
+## 무진전 때 제외한 목표인가. 지난 것은 그 자리에서 정리한다.
+func is_banned(n: Node) -> bool:
+	var id := n.get_instance_id()
+	if not _banned.has(id):
+		return false
+	if _tick >= int(_banned[id]):
+		_banned.erase(id)
+		return false
+	return true
+
+
 ## 지면 안의 임의 지점. 반경에 여유를 두어 가장자리에 붙지 않게 한다.
+## §25: 수역은 배회 지점이 될 수 없다 — 도달할 수 없는 곳을 향해 둑을 밀게 된다.
+## 시행 횟수를 고정해야 재현성이 유지된다(난수 소비량이 결과에 따라 달라지면 안 된다).
 func pick_wander() -> Vector3:
 	var lim: float = float(_hole.ground_half) * 0.8
-	return Vector3(_rng.randf_range(-lim, lim), 0.0, _rng.randf_range(-lim, lim))
+	var out := Vector3.ZERO
+	var got := false
+	for _i in 8:
+		var p := Vector3(_rng.randf_range(-lim, lim), 0.0, _rng.randf_range(-lim, lim))
+		if not got and CITY.passable(p):
+			out = p
+			got = true
+	return out
 
 
 func flat_dist(a: Vector3, b: Vector3) -> float:
