@@ -239,35 +239,112 @@ func spec_lane_mark_u(k: int) -> float:
 	return SPEC_LANE_GAP if spec_is_boulevard(k) else 0.0
 
 
+## 판정 인자의 전체 목록이자 **고르는 우선순위**다. 웹 쿼리는 외부 입력이라 이
+## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
+## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
+## 긴 것부터 본다.
+const JUDGE_ORDER := ["--judge6", "--judge5", "--judge4", "--judge3c", "--judge3b",
+	"--judge3", "--judge2", "--judge1b", "--judge"]
+
+
+## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
+##
+## 판정 인자는 데스크톱에서 명령줄로 온다. **브라우저에는 명령줄이 없다** —
+## 그래서 §22 까지 브라우저에서 돈 기계 판정은 0회였다. 웹에서는 쿼리 문자열을
+## 같은 인자로 옮긴다: `?judge=6` → `--judge6`, `?judge=` → `--judge`.
+##
+## **고르는 자리를 하나로 둔다.** 인자가 둘 이상 들어와도 도는 것은 하나인데,
+## 분기와 하네스 보고가 각자 고르면 "판정 A 의 결과" 자리에 판정 B 의 결과가
+## 기록된다.
+func judge_flag() -> String:
+	var args: Array = Array(OS.get_cmdline_user_args())
+	if OS.has_feature("web"):
+		var q := str(JavaScriptBridge.eval("window.location.search", true))
+		for pair in q.trim_prefix("?").split("&", false):
+			var kv := pair.split("=", true, 1)
+			if kv.size() == 2 and kv[0] == "judge":
+				args.append("--judge" + kv[1].uri_decode())
+	for f in JUDGE_ORDER:
+		if f in args:
+			return f
+	return ""
+
+
+## 브라우저 안의 판정 결과를 하네스로 내보내는 통로(§24).
+## Godot 의 `print` 는 `console.log` 로 나간다(엔진의 `onPrint` 가 호출 시점에
+## `console.log` 를 찾으므로 나중에 감싸도 걸린다). 그 줄을 전부 모아 두고
+## `JUDGE RESULT ->` 를 보는 순간 하네스에 되돌려 보낸다.
+##
+## **결과가 오지 않는 것을 통과로 읽으면 안 된다.** 하네스는 신호가 도착해야만
+## 판정을 마치고, 도착하지 않으면 시간 초과로 FAIL 한다 — 페이지가 아예 안 뜨거나
+## 판정이 중간에 죽은 경우가 "지적사항 없음" 으로 둔갑하는 것이 이 판정의 가장
+## 큰 위험이다. 종료 직전에 보내지 않고 **결과 줄을 보는 즉시** 보내는 것도 같은
+## 이유다(quit 뒤에는 프레임이 더 안 돌아 fetch 가 출발하지 못할 수 있다).
+func web_beacon(flag: String) -> void:
+	JavaScriptBridge.eval("""
+window.__JUDGE = {flag: %s, ua: navigator.userAgent, lines: [], result: "", sent: false};
+(function () {
+	var orig = console.log;
+	console.log = function () {
+		var s = Array.prototype.map.call(arguments, String).join(" ");
+		var j = window.__JUDGE;
+		j.lines.push(s);
+		if (!j.sent && s.indexOf("JUDGE RESULT ->") >= 0) {
+			j.sent = true;
+			j.result = s.indexOf("PASS") >= 0 ? "PASS" : "FAIL";
+			document.title = "JUDGE " + j.flag + " " + j.result;
+			var body = JSON.stringify(j);
+			try {
+				navigator.sendBeacon("/judge-result",
+					new Blob([body], {type: "application/json"}));
+			} catch (e) {
+				fetch("/judge-result", {method: "POST", body: body, keepalive: true});
+			}
+			// 다음 판정으로 넘어가는 것은 하네스가 정한다. 여기서 하는 일은
+			// "나는 끝났다" 를 들고 /next 를 두드리는 것뿐이다 — 브라우저를 판정마다
+			// 손으로 다시 여는 것을 없애려는 것이고, 순서·목록은 서버가 쥔다.
+			// 하네스가 서빙한 페이지에서만 넘어간다. 배포본에 `?judge=` 를 붙여 연
+			// 사람을 있지도 않은 경로로 보내지 않는다.
+			if (location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+				setTimeout(function () { window.location.replace("/next?after=" + j.flag); }, 500);
+			}
+		}
+		orig.apply(console, arguments);
+	};
+})();
+""" % JSON.stringify(flag), true)
+
+
 func _ready() -> void:
-	var args := OS.get_cmdline_user_args()
-	if not ("--judge" in args or "--judge1b" in args or "--judge2" in args
-			or "--judge3" in args or "--judge3b" in args or "--judge3c" in args
-			or "--judge4" in args or "--judge5" in args or "--judge6" in args):
+	var flag := judge_flag()
+	if flag.is_empty():
 		return
+	if OS.has_feature("web"):
+		web_beacon(flag)
 	_main = get_parent()
 	_main.judging = true          # main.gd._ready 보다 먼저 실행된다 (자식 → 부모)
 	# 1a~3단계 판정은 전부 "구멍 하나" 를 전제로 세워졌다. 4단계 판정에서만 아레나를 켠다.
-	_main.arena = "--judge4" in args or "--judge5" in args
+	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
-	if "--judge6" in args:
-		await run_judge_6()
-	elif "--judge5" in args:
-		await run_judge_5()
-	elif "--judge4" in args:
-		await run_judge_4()
-	elif "--judge3c" in args:
-		await run_judge_3c()
-	elif "--judge3b" in args:
-		await run_judge_3b()
-	elif "--judge3" in args:
-		await run_judge_3()
-	elif "--judge2" in args:
-		await run_judge_2()
-	elif "--judge1b" in args:
-		await run_judge_1b()
-	else:
-		await run_judge()
+	match flag:
+		"--judge6": await run_judge_6()
+		"--judge5": await run_judge_5()
+		"--judge4": await run_judge_4()
+		"--judge3c": await run_judge_3c()
+		"--judge3b": await run_judge_3b()
+		"--judge3": await run_judge_3()
+		"--judge2": await run_judge_2()
+		"--judge1b": await run_judge_1b()
+		_: await run_judge()
+	# 판정이 결과 줄을 내지 못하고 끝나는 길이 있다(setup() 실패 등은 곧바로 quit 한다).
+	# 웹에서는 그 침묵이 하네스의 시간 초과로만 드러나 원인이 "안 떴다" 와 구분되지
+	# 않는다. quit 요청 뒤에도 이 프레임은 끝까지 도므로, 여기서 대신 FAIL 을 낸다.
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("""
+if (window.__JUDGE && !window.__JUDGE.sent) {
+	console.log("JUDGE RESULT -> FAIL (판정이 결과를 내지 못하고 끝났다)");
+}
+""", true)
 
 
 func setup() -> bool:
@@ -574,6 +651,32 @@ func judge_hole(h: Node3D, idx: int, base: Image, shot: Image, probe: Image,
 
 	var h1 := lum_c <= lum_g * 0.5
 	var h2 := inside and (lum_hi - lum_lo) >= 0.02
+	# H6(중심 휘도가 배경과 구별되는가)은 §24 에서 게이트에서 내렸다 — H3 와 같은 이유다.
+	# 묻는 것은 "구멍 안이 배경이 비쳐 보이는 구멍(월드를 뚫은 구멍)이 아닌가" 인데,
+	# 이 씬에서는 우물 안도 하늘도 둘 다 어두워 판별 폭이 팔레트와 백엔드에 달려 있다.
+	# 실측(정상 빌드, 같은 커밋):
+	#   Forward+          중심 0.1548 배경 0.2115 → 0.0567  통과
+	#   브라우저 WebGL2    중심 0.1817 배경 0.0905 → 0.0912  통과
+	#   데스크톱 opengl3   중심 0.1817 배경 0.1849 → **0.0032  탈락**
+	# 세 값 중 다른 것은 **배경 휘도뿐**이다. 같은 빌드·같은 렌더링 백엔드인데
+	# 클리어 색이 데스크톱과 브라우저에서 다르게 읽힌다. 정상 빌드가 재는 사람의
+	# 백엔드에 따라 탈락하는 수는 게이트가 될 수 없다.
+	#
+	# 표본 좌표는 정상이다. bg=(50,2) 은 화면 꼭대기의 하늘이고, 저장된 프레임에서
+	# 직접 읽어도 같은 값이다(shot.png (50,2) = RGB 46,47,52 → 0.1846). 즉 **재는
+	# 자리가 틀린 것이 아니라, 렌더된 하늘과 우물 안의 휘도가 실제로 붙어 있다.**
+	#
+	# 그리고 **H6 은 자기가 이름 붙인 결함을 잡지도 못했다.** 우물 메시를 숨겨
+	# 배경이 원반 안으로 그대로 비치게 한 주입에서 H6 은 두 백엔드 모두 통과했다
+	# (dCB = 0.1210 / 0.0944). 그 프레임에서 중심은 0.0905 로 읽히는데 꼭대기 하늘은
+	# 0.2115 다 — 같은 배경인데 두 자리의 값이 다르다. **왜 다른지는 규명하지 않았다.**
+	# 다만 그 차이가 있는 한 "중심 == 배경" 은 성립하지 않고, H6 은 배경이 그대로
+	# 비치는 프레임을 통과시킨다. 잡은 것은 H7(leak 1862/2, 1856/2)과 H2(dRing 0.0000)다.
+	#
+	# **같은 질문의 강한 판본이 이미 있다.** H7 은 배경을 **마젠타로 바꿔** 놓고
+	# 원반 안의 마젠타 픽셀을 센다(정상 빌드 실측 leak=0/2) — 마젠타는 어떤 씬
+	# 팔레트와도 겹치지 않으므로 지면·우물 색을 바꿔도, 백엔드를 바꿔도 흔들리지 않는다.
+	# 진단용으로 계속 찍는다.
 	var h6 := absf(lum_c - lum_bg) >= 0.03
 	var h7 := leak <= tol                                # 이음새·정렬: 배경이 새지 않는다
 	# 하드 알파는 어느 방향에서도 부드러운 전이가 없다(실측 0/32).
@@ -585,14 +688,14 @@ func judge_hole(h: Node3D, idx: int, base: Image, shot: Image, probe: Image,
 	# H3(엣지 그룹 증분)은 3단계에서 폐기했다. 지면에 도로 스트라이프가 생기면
 	# 기준·판정 프레임이 같은 엣지를 세어 정상 빌드가 탈락한다(실측 base=9 shot=10).
 	# 윤곽의 존재는 H7(이음새)·H8(림 AA)이 더 강하게 판정한다. 진단용으로만 남긴다.
-	var ok: bool = h1 and h2 and h6 and h7 and h8 and h9
+	var ok: bool = h1 and h2 and h7 and h8 and h9
 
 	print("JUDGE hole%d px c=%s | lum c=%.4f ring[%.4f..%.4f] g=%.4f bg=%.4f dRing=%.4f dCB=%.4f inside=%s"
 		% [idx, str(p_c), lum_c, lum_lo, lum_hi, lum_g, lum_bg,
 		   lum_hi - lum_lo, absf(lum_c - lum_bg), inside])
 	print("JUDGE hole%d groups %d->%d (H3 폐기, 진단용) | leak=%d/%d rim_aa=%d/%d depth=%.2f/%.2f"
 		% [idx, g_base, g_shot, leak, tol, aa.x, aa.y, depth, need_depth])
-	print("JUDGE hole%d H1=%s H2=%s H6=%s H7=%s H8=%s H9=%s -> %s"
+	print("JUDGE hole%d H1=%s H2=%s H6=%s(폐기, 진단용) H7=%s H8=%s H9=%s -> %s"
 		% [idx, pf(h1), pf(h2), pf(h6), pf(h7), pf(h8), pf(h9),
 		   ("PASS" if ok else "FAIL")])
 	return ok
@@ -635,18 +738,37 @@ func check_uniforms() -> bool:
 ##
 ## 실행 렌더러는 **런타임에서** 읽어 로그에 남긴다. 프로젝트 설정만 보면
 ## `--rendering-driver opengl3` 로 돌린 판정도 "forward_plus" 라고 보고한다.
+##
+## **기대값은 실행 플랫폼의 함수다(§24).** `rendering_method` 를 무조건
+## `forward_plus` 로 단언하면 브라우저 판정이 **정상 빌드에서** 탈락한다 —
+## 웹 익스포트본에서 그 키는 언제나 `gl_compatibility` 로 읽히기 때문이다.
+## 데스크톱에서는 관측할 수 없는 사실이었다.
+##
+## 처음에 그 이유를 "익스포트가 `.web` 오버라이드를 기본 키에 적용한다" 고 적었다가
+## **고장 주입에 반증당했다**: `.web` 을 `forward_plus` 로 바꾼 빌드에서도 기본 키는
+## 그대로 `gl_compatibility` 였다(설정=gl_compatibility, 웹=forward_plus). 오버라이드가
+## 적용된 것이 아니라 **익스포터가 웹 기본값을 그 키에 써 넣는다.** 두 키는 독립이다.
+##
+## 웹에서는 **런타임 렌더러까지** 단언한다. 설정만 보는 것보다 강하다 — 같은 주입에서
+## 실행 렌더러가 실제로 `forward_plus` 로 떴고(실측), 그것은 설정 검사가 아니라
+## 이 검사가 무는 자리다. 데스크톱에서는 런타임을 단언하지 않는다: §22 의
+## `--rendering-driver opengl3` 회귀가 같은 코드로 돌아야 한다.
 func check_pipeline() -> bool:
+	var web := OS.has_feature("web")
 	var code: String = _mat.shader.code
 	var ok := code.contains("alpha_to_coverage") and code.contains("depth_prepass_alpha")
 	ok = ok and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)) > 0
-	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")) == "forward_plus"
+	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")) \
+		== ("gl_compatibility" if web else "forward_plus")
 	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method.web", "")) \
 		== "gl_compatibility"
-	print("JUDGE pipeline: 실행 렌더러=%s 설정=%s 웹=%s msaa=%d"
+	ok = ok and (not web or RenderingServer.get_current_rendering_method() == "gl_compatibility")
+	print("JUDGE pipeline: 실행 렌더러=%s 설정=%s 웹=%s msaa=%d 플랫폼=%s"
 		% [RenderingServer.get_current_rendering_method(),
 		   str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")),
 		   str(ProjectSettings.get_setting("rendering/renderer/rendering_method.web", "")),
-		   int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0))])
+		   int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)),
+		   "web" if web else "desktop"])
 	return ok
 
 
@@ -2125,8 +2247,10 @@ func true_radius(o: Node3D) -> float:
 # --- 2단계 판정 ------------------------------------------------------------
 
 ## C1: 성장이 면적 보존 법칙을 따르는가  R' = sqrt(R^2 + k*r^2)
-## C2: 크기 게이트 — 상한을 넘는 오브젝트는 삼켜지지도, 가라앉지도 않는다.
-##     그리고 구멍이 자라 상한을 넘기면 그때는 삼켜진다.
+## C2: 거절 규격 — 통과반경이 구멍 반경보다 큰 물체는 삼켜지지도, 가라앉지도 않는다.
+##     그리고 구멍이 자라 그 반경을 넘기면 그때는 삼켜진다(R 2.3 → 5.06).
+##     구간마다 묻는 것이 다르다: 0차는 **반경이 고정된 채** 거절이 성립하는가,
+##     1차는 자라는 내내 매 프레임 규격이 지켜지는가(gate_breaches), 2차는 열리는가.
 ## C3: 스코어가 삼킨 오브젝트의 기여 합과 일치하는가
 ## C4: 성장한 반경에서도 착시가 유지되는가 (우물·Area3D 가 SSOT 를 따라갔는가)
 func run_judge_2() -> void:
@@ -2144,31 +2268,51 @@ func run_judge_2() -> void:
 	var score_of := {}
 	var big: Array = []
 	var small: Array = []
+	var grey: Array = []
 	for o in objs:
 		var id: int = o.get_instance_id()
 		r_of[id] = true_radius(o)
 		# 점수도 판정기가 규격대로 직접 계산한다 — 구현체의 score_value 를 믿으면
 		# 산출식을 통째로 바꾼 빌드가 자기 값끼리 일치해 그대로 통과한다(실측).
 		score_of[id] = int(round(float(r_of[id]) * float(r_of[id]) * 100.0))
-		# 분류는 구현체에 묻지 않고 **물리 규격**으로 한다(§23):
-		# 좁은 쪽 반폭이 구멍 반경보다 크면 그 물체는 구멍을 통과할 수 없다.
+		# 분류는 구현체에 묻지 않고 **물리 규격**으로 한다(§23). 두 규격은 서로 다른
+		# 양이고, 셋으로 갈린다.
+		#   통과 규격 — XZ 외접반경 < R : 눕히지 않고도 들어간다. 반드시 삼켜진다.
+		#   거절 규격 — 통과반경(true_fit) > R : 어떤 자세로도 못 들어간다.
+		#   그 사이 — 회색 지대. **판정기는 단언하지 않는다.**
 		# can_swallow() 에 물으면 안 된다 — 이제 그 함수는 AI 조언일 뿐이라
 		# 흡입을 막지 않는다.
 		if true_radius(o) < r0:
 			small.append(o)
-		else:
+		elif true_fit(o) > r0:
 			big.append(o)
-	print("JUDGE 2 start R=%.4f objects=%d 통과불가=%d (통과반경 >= %.4f)"
-		% [r0, objs.size(), big.size(), r0])
+		else:
+			grey.append(o)
+	# 픽스처를 손대다 어느 한쪽이 비면 시나리오가 조용히 아무것도 시험하지 않게 된다.
+	# 그 상태를 통과로 읽지 않는다.
+	var c2set: bool = small.size() > 0 and big.size() > 0
+	print("JUDGE 2 start R=%.4f objects=%d 통과=%d 거절=%d 회색=%d (거절 = 통과반경 > %.4f)"
+		% [r0, objs.size(), small.size(), big.size(), grey.size(), r0])
 
-	# --- 0차: 반경이 작은 상태로 큰 오브젝트 위에 머문다 ---
+	# --- 0차: 반경이 작은 상태로 거절 규격 물체 위에 머문다 ---
 	# 이 단계가 없으면 시나리오가 "거절"을 한 번도 건드리지 않아,
 	# 물체를 무조건 삼키는 빌드도 그대로 통과한다(실측).
 	var gate_violation := 0
 	for b in big:
 		gate_violation += await hover(hole, objs, b, HOVER_FRAMES)
+	# **거절 생존은 여기서 묻는다 — 1차가 끝난 뒤가 아니다.**
+	# 0차 내내 반경은 r0 그대로라 "거절 규격이면 안 들어간다" 가 그대로 성립한다.
+	# 1차에서는 구멍이 소형을 먹으며 2.3 → 5.79 로 자라고, 그 경로가 대형 픽스처
+	# (16,-2)에서 5.4m 까지 접근한다 — 그때 대형이 빠지는 것은 **규격대로다**
+	# (거절 반경 2.83 < 5.79). 옛 기준은 그 소멸을 위반으로 셌고, 그래서 §23 이
+	# 크기 게이트를 걷어낸 뒤로는 픽스처 배치라는 우연에 기대고 있었다.
+	# 1차 구간의 규격 준수는 gate_breaches 가 **매 물리 프레임** 본다 — 그쪽이
+	# 반경과 물체를 그때그때 비교하므로 자라는 도중에도 정확하다.
+	var c2a: bool = alive_count(big) == big.size()
+	print("JUDGE 2 hover 후 거절 생존=%d/%d gate_violations=%d"
+		% [alive_count(big), big.size(), gate_violation])
 
-	# --- 1차: 게이트를 통과하는 작은 것만 삼킨다 ---
+	# --- 1차: 통과 규격의 소형만 삼킨다 ---
 	gate_violation += await suck(hole, objs, small)
 
 	var r1: float = hole.radius
@@ -2181,10 +2325,6 @@ func run_judge_2() -> void:
 	var expect_r1: float = sqrt(r0 * r0 + SPEC_GROWTH_K * sum_sq)
 	var c1 := absf(r1 - expect_r1) < 0.005
 	var c3: bool = _main.score == expect_score
-	# 1차에서 큰 것들은 하나도 사라지지 않아야 한다
-	var c2a := true
-	for o in big:
-		c2a = c2a and is_instance_valid(o)
 
 	print("JUDGE 2 after small: R=%.4f expect=%.4f (dR=%.4f) score=%d expect=%d big_alive=%d/%d"
 		% [r1, expect_r1, r1 - expect_r1, _main.score, expect_score,
@@ -2210,10 +2350,10 @@ func run_judge_2() -> void:
 	var c4 := await judge_static("grown_")
 	_main.hud_root.visible = true
 
-	var c2 := c2a and c2b and gate_violation == 0 and left == 0
+	var c2 := c2set and c2a and c2b and gate_violation == 0 and left == 0
 	var ok := c1 and c2 and c3 and c4
-	print("JUDGE 2 final R=%.4f score=%d left=%d gate_violations=%d"
-		% [hole.radius, _main.score, left, gate_violation])
+	print("JUDGE 2 final R=%.4f score=%d left=%d gate_violations=%d set=%s 거절생존=%s 개방=%s"
+		% [hole.radius, _main.score, left, gate_violation, pf(c2set), pf(c2a), pf(c2b)])
 	print("JUDGE 2 C1=%s C2=%s C3=%s C4=%s -> %s"
 		% [pf(c1), pf(c2), pf(c3), pf(c4), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))

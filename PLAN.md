@@ -1,5 +1,7 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD (rev.22)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 (rev.23)
 
+> **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
+>
 > **rev.22 = 통과를 기하로 흉내내지 않는다(§23).** 구멍 둘레에 **물리적 바닥판(림)** 을 놓고 크기 게이트·통과 조건·§19 의 걸림 계수를 전부 지웠다. 무엇이 들어가고 무엇이 걸리는지는 물리가 정한다 — 차는 코부터 들어가고, 넓은 것은 림에 얹히며, 나무는 **수관 콜라이더**가 림에 걸린다. 플레이 피드백 셋(안 삼켜짐·걸림 부실·땅에서 녹음)이 한 뿌리였다.
 >
 > **rev.21 = 웹 렌더러 기계 판정 · 산포 반경 유도(§22).** `--rendering-driver opengl3` 로 판정 아홉 종을 **Compatibility 에서도 전부** 돌렸다(전부 PASS, 3c 는 2.7배 느리지만 예산의 32%). `plan_block` 의 산포 반경 8.5 를 사용 가능 구간에서 유도해 대로 인접 블록의 밀도 편향을 34% → 10% 로 줄였다(프롭 3804 → 3876).
@@ -30,7 +32,7 @@
 > 계획 감사: rev.1 = 55 → rev.2 = 66 → rev.3 = 62/68 → rev.4 = 72/70 → rev.5 = 78 → rev.6 = **82/82 (합격)** → rev.7
 > 코드 감사(1a 구현물): **90 (일치·품질 축, 합격) / 64 (고장 주입 축, 불합격)** → rev.8 = 본 문서
 >
-> **1a·1b·2·3a·3b·3c·4a·4b는 구현 완료 상태다 — 로드맵의 전 단계가 끝났다.** `project.godot` / `scenes` / `scripts` / `shaders` / `assets`가 이 문서와 함께 저장소에 있고, 이 문서의 모든 코드 블록은 그 파일들과 **바이트 단위로 동일**하다(기계 대조 — rev.16에서 12개 파일 전부 재확인).
+> **1a·1b·2·3a·3b·3c·4a·4b는 구현 완료 상태다 — 로드맵의 전 단계가 끝났다.** `project.godot` / `scenes` / `scripts` / `shaders` / `assets`가 이 문서와 함께 저장소에 있고, 이 문서의 모든 코드 블록은 그 파일들과 **바이트 단위로 동일**하다. 이 단언은 rev.16 이후 §17~§23에서 **열 블록 중 여덟이 어긋난 채로 방치돼 있었다**(§24에서 발견·복구). 이제 손이 아니라 `tools/sync_plan_blocks.ps1`이 대조한다.
 >
 > rev.7까지의 판정기는 고장 주입 감사에서 세 방향으로 무너졌다. rev.8은 그 결과다.
 >
@@ -181,7 +183,7 @@ JUDGE RESULT -> PASS
 | 1b | 구멍 이동 + 흡입 물리 + 카메라 추적 | **완료** — B1~B4 PASS, 고장 주입 4종 검증 |
 | 2 | 성장 곡선, 크기별 흡입 판정, 스코어 | **완료** — C1~C4 PASS, 고장 주입 4종 검증 |
 | 3a | 도로·보도·노면표시를 지면 셰이더에 통합 + 도시 격자 + 판정기 정비 | **완료** — D1~D6 PASS, 고장 주입 7종 검증(§12). 지면은 §17에서 448×448로 확대, 도로 위계는 §18 |
-| 3b | Quaternius 에셋 임포트 + 절차적 도시 배치(건물·차량·가로시설물·녹지) | **완료** — E1~E7 PASS, 프롭 **3804개**(§18), 고장 주입 7종 검증(§13) |
+| 3b | Quaternius 에셋 임포트 + 절차적 도시 배치(건물·차량·가로시설물·녹지) | **완료** — E1~E8 PASS, 프롭 **3876개**(§22), 고장 주입 7종 검증(§13) |
 | 3c | 성능 측정 → 필요하면 MultiMesh 인스턴싱 | **완료(측정 결과 최적화 불필요)** — 0.99ms/프레임, 예산의 6%(§14) |
 | 4a | AI 경쟁 구멍 + 구멍끼리의 포식 | **완료** — G1~G7 PASS, 구멍 6개, 고장 주입 7종 검증(§15) |
 | 4b | 타이머 · 순위 리더보드 · 승패 · 재시작 UI | **완료** — T1~T6 PASS, 고장 주입 8종 검증(§16) |
@@ -283,6 +285,7 @@ rev.8까지 "Downtown City MegaKit(glTF) 단독"으로 적어 두었으나, **3�
 [ext_resource type="PackedScene" path="res://scenes/swallowable.tscn" id="6"]
 [ext_resource type="PackedScene" path="res://scenes/swallowable_big.tscn" id="7"]
 [ext_resource type="Script" path="res://scripts/city.gd" id="8"]
+[ext_resource type="FontFile" uid="uid://b3x3lllwaes5u" path="res://assets/fonts/hud_kr.ttf" id="9"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -334,39 +337,16 @@ shape = SubResource("Shape_1")
 
 [node name="Swallowables" type="Node3D" parent="."]
 
-[node name="S0" parent="Swallowables" instance=ExtResource("6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -6, 1.31, -8)
-
-[node name="S1" parent="Swallowables" instance=ExtResource("6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.31, -9)
-
-[node name="S2" parent="Swallowables" instance=ExtResource("6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 6, 1.31, -9)
-
-[node name="S3" parent="Swallowables" instance=ExtResource("6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 11, 1.31, -4)
-
-[node name="S4" parent="Swallowables" instance=ExtResource("6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -11, 1.31, -5)
-
-[node name="S5" parent="Swallowables" instance=ExtResource("6")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 3, 1.31, -14)
-
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("8")
 
 [node name="Judge" type="Node" parent="."]
 script = ExtResource("4")
 
-[node name="B0" parent="Swallowables" instance=ExtResource("7")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 16, 2, -2)
-
-[node name="B1" parent="Swallowables" instance=ExtResource("7")]
-transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 14, 2, -12)
-
 [node name="HUD" type="CanvasLayer" parent="."]
 
 [node name="Label" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 14.0
@@ -375,6 +355,7 @@ offset_right = 460.0
 offset_bottom = -12.0
 
 [node name="Timer" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_left = 0.5
 anchor_right = 0.5
 offset_left = -80.0
@@ -384,6 +365,7 @@ offset_bottom = 42.0
 horizontal_alignment = 1
 
 [node name="Board" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_left = 1.0
 anchor_right = 1.0
 offset_left = -230.0
@@ -392,6 +374,7 @@ offset_right = -12.0
 offset_bottom = 210.0
 
 [node name="Over" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
@@ -434,6 +417,9 @@ resource_local_to_scene = true
 radius = 5.0
 height = 8.0
 
+[sub_resource type="ConcavePolygonShape3D" id="Rim_1"]
+resource_local_to_scene = true
+
 [node name="Hole" type="Node3D"]
 script = ExtResource("1")
 
@@ -449,6 +435,13 @@ monitoring = true
 [node name="Shape" type="CollisionShape3D" parent="Area"]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 2, 0)
 shape = SubResource("Sh_1")
+
+[node name="Rim" type="StaticBody3D" parent="."]
+collision_layer = 8
+collision_mask = 0
+
+[node name="Shape" type="CollisionShape3D" parent="Rim"]
+shape = SubResource("Rim_1")
 ```
 
 - **`resource_local_to_scene = true`는 이중 방어다** — 단독 필수 조건이 아니다. 4조합을 실측했다(반경 5.0/2.0 인스턴스 2개, `want 5.150`):
@@ -903,7 +896,13 @@ extends RigidBody3D
 ## 이 스크립트는 자기 크기와 낙하 상태만 안다.
 
 ## XZ 외접반경. 0 이하이면 _ready 에서 콜라이더 AABB 로 산출한다.
+## §17 이후 도시 프롭의 콜라이더는 **밑동**에서 따므로, 이 값은 곧 밑동 반경이다.
 @export var radius := 0.0
+## 원형 구멍을 통과하는 데 필요한 반경 — 콜라이더의 **좁은 쪽 반폭**이다(§23).
+## `radius`(외접반경)로 이것을 대신하면 길쭉한 물체가 부당하게 거절된다:
+## 택시는 외접반경 2.27 이지만 폭은 0.85 이고, 원 안에 들어와 보이는데도 안 먹혔다
+## (플레이 피드백). AI 목표 선정이 이 값을 쓴다.
+@export var fit_radius := 0.0
 ## 점수. 0 이하이면 단면적에 비례해 산출한다(큰 것을 삼킬수록 많이 받는다).
 @export var score_value := 0
 ## 구멍이 다가올 때까지 정적으로 세워 둘 것인가.
@@ -914,14 +913,23 @@ extends RigidBody3D
 @export var start_frozen := false
 
 var falling := false
+## 콜라이더의 가장 높은 점(원점 기준). "구멍 안으로 들어갔다" 를 이 값으로 판단한다 —
+## 원점만 보면 **키 큰 물체가 가지도 닿기 전에 낙하로 전환된다**(실측: 수관 픽스처가
+## 밑동 0.6m 만 잠기고도 충돌을 잃어 그대로 통과했다).
+var top_height := 0.0
 
 var _can_sleep_default := true
+## 이 물체를 감지 범위에 두고 있는 구멍의 수(§23).
+var _rim_refs := 0
 
 
 func _ready() -> void:
 	_can_sleep_default = can_sleep
 	if radius <= 0.0:
 		radius = auto_radius()
+	if fit_radius <= 0.0:
+		fit_radius = auto_fit_radius()
+	top_height = auto_top_height()
 	if score_value <= 0:
 		score_value = int(round(radius * radius * 100.0))
 	if start_frozen:
@@ -948,8 +956,57 @@ func auto_radius() -> float:
 	return r
 
 
-## 구멍 안으로 완전히 들어왔을 때 hole.gd 가 호출한다.
-## 지면(layer 1)과 다른 오브젝트(layer 2) 양쪽에서 떨어져 나온다.
+## 통과 반경 = **가장 잘 눕혔을 때의 외접반경**.
+##
+## 좁은 쪽 반폭만 보면 안 된다 — 한 변 2.6 인 정육면체는 폭이 1.3 이지만 대각선이
+## 3.68 이라 지름 3.4 인 구멍에 **모서리로 얹힌다**(실측: 그래서 한 개도 안 빠졌다).
+## 반대로 외접반경만 보면 길쭉한 차가 부당하게 거절된다(택시 2.27, 실제 폭 0.85).
+## 물체를 가장 유리하게 눕히면 통과 단면은 **가장 작은 두 반extent** 가 만드는
+## 직사각형이므로, 그 외접반경이 규격이다: sqrt(h1^2 + h2^2), h1 <= h2 <= h3.
+func auto_fit_radius() -> float:
+	var r := INF
+	for c in find_children("", "CollisionShape3D", false, false):
+		var col := c as CollisionShape3D
+		if col.shape == null:
+			continue
+		var s := col.shape.get_debug_mesh().get_aabb().size
+		var h := [s.x * 0.5, s.y * 0.5, s.z * 0.5]
+		h.sort()
+		r = minf(r, sqrt(h[0] * h[0] + h[1] * h[1]))
+	return radius if is_inf(r) else r
+
+
+## 콜라이더 전체의 꼭대기 높이(원점 기준).
+func auto_top_height() -> float:
+	var t := 0.0
+	for c in find_children("", "CollisionShape3D", false, false):
+		var col := c as CollisionShape3D
+		if col.shape == null:
+			continue
+		var s := col.shape.get_debug_mesh().get_aabb().size
+		t = maxf(t, col.position.y + s.y * 0.5)
+	return t
+
+
+## 림 바닥판을 딛기 시작한다 — 지면(레이어 1) 대신 림(레이어 8)과 충돌한다(§23).
+## 구멍 위에는 바닥이 없으므로, 여기서부터는 물체가 스스로 기울고 빠진다.
+## 구멍 두 개의 감지 범위에 동시에 들어갈 수 있어 **횟수를 센다** — 하나가 떠났다고
+## 지면을 되돌리면 나머지 구멍 위에서 지면을 딛고 서 있게 된다.
+func enter_rim() -> void:
+	_rim_refs += 1
+	if not falling:
+		collision_mask = (collision_mask & ~1) | 8
+
+
+func exit_rim() -> void:
+	_rim_refs = maxi(_rim_refs - 1, 0)
+	if _rim_refs == 0 and not falling:
+		collision_mask = (collision_mask & ~8) | 1
+
+
+## 지면 아래로 확실히 내려갔을 때 hole.gd 가 호출한다(§23 이후로는 **물리가**
+## 그 시점을 정한다 — 통과 조건을 기하로 흉내내지 않는다).
+## 지면(layer 1)·림(layer 8)·다른 오브젝트(layer 2) 어느 쪽과도 더는 부딪히지 않는다.
 ## Godot 충돌 판정은 OR 이므로 mask 만 0 으로 해서는 지면을 통과하지 못한다.
 func begin_fall() -> void:
 	if falling:
@@ -1112,9 +1169,27 @@ var winner_score := 0
 ## 종료 사유 — "time"(시간 만료) 또는 "eaten"(플레이어가 먹힘).
 var over_reason := ""
 
-## 재시작 때 판정 대상 8개를 원래 자리에 되살리기 위한 기록.
-## _ready 에서 한 번만 찍어 두고 이후에는 읽기만 한다.
-var _judge_set_spec: Array = []
+## §20. 판정 대상 8개(소형 6 + 대형 2). **판정 모드에서만** 스폰한다.
+##
+## 원래는 main.tscn 에 손으로 놓여 있었다. 그러나 이것들은 1a 의 스케일 기준용
+## 픽스처이지 게임의 일부가 아니다 — 노랑·파랑 큐브가 광장에 서서 **시작 화면에
+## 그대로 보였고**, 도시 에셋과 이질적이었다. §17 이 같은 이유로 `RefBox` 를 지운
+## 것과 같은 판단이다. 다만 이쪽은 1b·2·3b·5 판정의 시나리오가 통째로 이 8개 위에
+## 서 있으므로 지울 수는 없고, **판정에만 존재하도록** 옮겼다.
+##
+## 치수·자리를 바꾸면 안 된다. C2 는 "소형 6개를 다 먹어야 대형의 게이트가 열린다"
+## 를 시험하고(R 5 → 6.73, 게이트 3.03 > 대형 r 2.83), B1 은 MOVED_TO 가 이것들에서
+## 충분히 멀다는 전제 위에 있다(§17).
+const JUDGE_SET := [
+	["res://scenes/swallowable.tscn", "S0", Vector3(-6.0, 1.31, -8.0)],
+	["res://scenes/swallowable.tscn", "S1", Vector3(0.0, 1.31, -9.0)],
+	["res://scenes/swallowable.tscn", "S2", Vector3(6.0, 1.31, -9.0)],
+	["res://scenes/swallowable.tscn", "S3", Vector3(11.0, 1.31, -4.0)],
+	["res://scenes/swallowable.tscn", "S4", Vector3(-11.0, 1.31, -5.0)],
+	["res://scenes/swallowable.tscn", "S5", Vector3(3.0, 1.31, -14.0)],
+	["res://scenes/swallowable_big.tscn", "B0", Vector3(16.0, 2.0, -2.0)],
+	["res://scenes/swallowable_big.tscn", "B1", Vector3(14.0, 2.0, -12.0)],
+]
 
 ## 플레이어 점수. 구멍이 진실 원천이고 여기서는 되읽기만 한다
 ## (2단계 판정의 C3 가 이 이름으로 읽는다).
@@ -1140,19 +1215,29 @@ func _ready() -> void:
 	if arena:
 		spawn_ai()
 	cam.follow(hole, hole.radius, true)
-	record_judge_set()
+	spawn_judge_set()
 	time_left = round_seconds
 	update_hud()
 
 
-## 판정 대상(씬에 손으로 놓은 8개)의 원본 씬과 위치를 기록한다.
-## restart() 가 이것으로 되살린다 — 삼켜져 free 된 것은 되돌릴 방법이 없다.
-func record_judge_set() -> void:
+## 판정 대상 8개를 규격대로 세운다. **판정 모드가 아니면 아무것도 만들지 않는다** —
+## 게임에는 이 픽스처가 존재하지 않는다.
+##
+## `judging` 은 Judge._ready 가 Main._ready 보다 먼저(자식 → 부모) 세워 두므로
+## 여기서 읽을 수 있다. 판정 플래그 없이 실행하면 Judge 는 아무 일도 하지 않고
+## 이 함수도 빈손으로 돌아간다.
+##
+## _ready 와 restart() 가 **같은 함수**를 부른다. 둘 중 하나만 조건을 걸면
+## "게임에서는 없는데 재시작하면 나타난다" 가 된다.
+func spawn_judge_set() -> void:
 	var box := get_node_or_null("Swallowables")
-	if box == null:
+	if box == null or not judging:
 		return
-	for c in box.get_children():
-		_judge_set_spec.append([c.scene_file_path, c.name, (c as Node3D).transform])
+	for spec in JUDGE_SET:
+		var n: Node3D = load(spec[0]).instantiate()
+		n.name = spec[1]
+		box.add_child(n)
+		n.position = spec[2]
 
 
 ## AI 구멍을 원점 둘레에 고르게 배치한다. 위치를 난수로 뽑지 않는 이유는
@@ -1277,11 +1362,7 @@ func restart() -> void:
 	if box != null:
 		for c in box.get_children():
 			c.free()
-		for spec in _judge_set_spec:
-			var n: Node3D = load(spec[0]).instantiate()
-			n.name = spec[1]
-			box.add_child(n)
-			n.transform = spec[2]
+	spawn_judge_set()
 
 	state = State.PLAYING
 	time_left = round_seconds
@@ -1377,18 +1458,22 @@ func _on_swallowed(_node: Node3D) -> void:
 	update_hud()
 
 
+## HUD 문구는 한글이다(§21). 쓰는 음절은 `assets/fonts/hud_kr.ttf` 에 서브셋으로
+## 들어 있고, **여기에 새 음절을 쓰면 그 글자는 화면에서 사라진다** — 판정 T8 이
+## 현재 HUD 가 그리는 모든 문자에 글리프가 있는지 본다. 문구를 바꾸면
+## `assets/fonts/README.md` 의 재생성 절차로 폰트를 다시 만들어야 한다.
 func update_hud() -> void:
 	if player_alive():
-		hud.text = "SCORE %d    SIZE %.2f    EATEN %d" % [score, hole.radius, swallowed_total]
+		hud.text = "점수 %d    크기 %.2f    삼킴 %d" % [score, hole.radius, swallowed_total]
 	else:
-		hud.text = "SCORE %d    (EATEN)" % score
+		hud.text = "점수 %d    (먹힘)" % score
 	hud_timer.text = "%d:%02d" % [int(time_left) / 60, int(time_left) % 60]
 	hud_board.text = leaderboard_text()
 	hud_over.visible = state == State.OVER
 	if state == State.OVER:
-		var head := "TIME UP" if over_reason == "time" else "YOU WERE EATEN"
-		var mine := "WIN" if winner == "P" else "LOSE"
-		hud_over.text = "%s\n1st  %s   %d\nYOU: %s (%d)\nPRESS R TO RESTART"\
+		var head := "시간 종료" if over_reason == "time" else "먹혔다"
+		var mine := "승리" if winner == "P" else "패배"
+		hud_over.text = "%s\n1위  %s   %d\n나: %s (%d)\nR 키로 다시 시작"\
 			% [head, winner, winner_score, mine, score]
 
 
@@ -1403,7 +1488,7 @@ func leaderboard_text() -> String:
 		if int(a.score) != int(b.score):
 			return int(a.score) > int(b.score)
 		return float(a.radius) > float(b.radius))
-	var lines := PackedStringArray([" #  NAME   SCORE   SIZE"])
+	var lines := PackedStringArray([" 순위  이름    점수    크기"])
 	for i in hs.size():
 		var h: Node3D = hs[i]
 		lines.append("%2d.  %-4s %6d  %5.1f" % [i + 1, h.label, h.score, h.radius])
@@ -1451,9 +1536,11 @@ window/size/viewport_height=648
 
 renderer/rendering_method="forward_plus"
 ; 웹은 Forward+ 를 지원하지 않는다(WebGL2 = Compatibility 뿐).
-; 이 오버라이드가 없으면 브라우저에서 렌더러 초기화가 실패한다.
+; **이 줄은 엔진 기본값과 같다** — 지워도 웹은 gl_compatibility 로 뜬다(실측: 줄을
+; 지우고 돌려도 ProjectSettings 가 gl_compatibility 를 돌려준다). 명시해 두는 것은
+; 판정기(H10)가 이 값을 읽어 "웹이 Forward+ 로 바뀌지 않았는가" 를 지키기 위해서다.
 ; 실측: Compatibility 에서도 착시는 성립한다 — `--rendering-driver opengl3` 로
-; 1a 판정을 돌려 H1·H2·H7·H8(rim_aa=16/32)·H9 가 전부 통과했다.
+; 판정 아홉 종을 전부 돌려 전부 PASS 다(§22).
 renderer/rendering_method.web="gl_compatibility"
 anti_aliasing/quality/msaa_3d=2
 ```
@@ -1512,6 +1599,7 @@ extends Node
 
 ## 1a 기계 판정. `-- --judge` 로 실행할 때만 동작하고, 그 외에는 아무것도 하지 않는다.
 
+const SWALLOWABLE := preload("res://scripts/swallowable.gd")
 const SHOT_DIR := "res://shots/"
 const WARMUP := 30                                 # 셰이더 파이프라인 워밍업
 const EDGE_THR := 0.08
@@ -1569,6 +1657,12 @@ const SPEC_START_R := 1.5
 ## 이 시나리오들이 묻는 것은 "흡입·성장 파이프라인이 규격대로 도는가" 이지
 ## "시작 반경이 얼마인가" 가 아니므로, 픽스처를 고정하는 편이 옳다.
 const FIXTURE_R := 5.0
+## 2단계의 "거절 → 성장 → 통과" 시나리오가 쓰는 반경(§23).
+## 물리가 통과를 정하게 된 뒤로는 **구멍 지름과 물체 폭**의 관계가 곧 규격이다.
+## 2.3 은 소형 픽스처는 눕히지 않고도 통과시키고(XZ 외접반경 1.838 < 2.3), 대형은
+## 어떤 자세로도 막는다(통과 반경 2.828 > 2.3).
+## 소형 6개를 삼키면 R = sqrt(2.3^2 + 6*1.838^2) = 5.06 으로 자라 대형도 열린다.
+const GATE_R := 2.3
 const MIN_PROPS := 300                             # E1: 도시가 실제로 생성됐는가
 ## E7a: 대로 규격에서만 가능한 자리에 선 프롭의 하한. 실측값의 절반이다.
 ## **이 하한이 잡는 것은 "위계가 통째로 사라졌는가"(그때 0 이 된다) 하나뿐이다.**
@@ -1600,8 +1694,12 @@ const MIN_ELEV := deg_to_rad(30.0)
 const SPEC_BITE_RATIO := 1.05
 const SPEC_BITE_DEPTH := 0.8
 ## G7: AI 구멍이 자유 실행 동안 최소한 이만큼은 움직여야 한다(월드 단위).
-## 속도 12 로 15초면 최대 180m 다 — 30m 는 "멈춰 있지 않다" 를 보는 낮은 문턱이다.
-const AI_MIN_PATH := 30.0
+## 속도 12 로 15초면 최대 180m 다 — "멈춰 있지 않다" 를 보는 낮은 문턱이다.
+## 30 이었다가 §23 에서 11 로 내렸다. 통과를 물리가 정하게 되면서 AI 가 **자기 자리
+## 근처의 것을 바로 먹을 수 있게 됐고**, 그만큼 덜 돌아다닌다(실측: 세 AI 의 이동이
+## 44.7 / 37.2 / 21.9, 그동안 반경은 각각 +0.41 / +0.57 / +0.70 자랐다).
+## 11 은 그 최솟값 21.9 의 절반이다. 굳은 AI 는 0 이 되므로 변별력은 그대로다.
+const AI_MIN_PATH := 11.0
 const OVERLAP_FRAMES := 300                        # G6 시나리오: 사냥이 성사될 때까지
 
 # --- 4b 게임 루프 판정 ----------------------------------------------------
@@ -1610,10 +1708,51 @@ const ROUND_TEST_FRAMES := 600                     # T1: 그 라운드를 덮고
 const TIMER_TOL := 0.25                            # T1: 판정기 시계와의 허용 오차(초)
 const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고정을 확인하는 프레임
 const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 수 (플레이어 + AI 5)
-const RESTART_PROPS := 3804                        # T5: 재시작 후 도시 프롭 수 (시드 고정)
+## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 산포 반경을 구간에서 유도하며
+## 3804 → 3876 로 늘었다 — 대로가 붙은 블록에서 구간 밖으로 나가 거절되던 시도가
+## 자리를 찾은 만큼이다.
+const RESTART_PROPS := 3876
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
+
+# --- §23 물리 통과 판정 ----------------------------------------------------
+## 통과 판정 시행의 기본 구멍 반경. 픽스처 치수가 이 값 둘레에서 정해진다:
+##   flat 2x2x2  — XZ 외접반경 1.414 < 2.0  → 눕히지 않고도 통과(K1)
+##   wide 6x2x6  — 통과 반경 3.162 > 2.0    → 어떤 자세로도 거절(K2)
+##   pole 0.6x8  — 통과 반경 0.424 < 2.0    → 길어도 통과(K6)
+const FALL_R := 2.0
+## 수관보다 넓은 구멍. 나무 픽스처의 수관(6x6, 외접반경 4.243)보다 커야 한다.
+const FALL_BIG_R := 5.0
+## 나무 픽스처: 밑동 0.8 각 3m + 수관 6x6 2m. 밑동만 보면 FALL_R 을 여유 있게
+## 통과하지만(0.566 < 2.0) 수관이 걸린다(3.162 > 2.0).
+const FALL_TREE := [Vector3(0.8, 3.0, 0.8), Vector3(6.0, 2.0, 6.0)]
+## 한 시행에 허용하는 물리 프레임. 통과하는 것은 이보다 훨씬 빨리 빠지고(실측),
+## 거절되는 것은 이 내내 남아야 한다.
+const FALL_FRAMES := 240
+## E8: 메시 반폭이 밑동 셰이프 반폭의 이 배 이상이면 "가지가 있는 프롭" 이다.
+## city.gd 의 CANOPY_RATIO 와 같은 값을 판정기가 따로 든다.
+const CANOPY_RATIO := 1.5
+## E8: 그런 프롭의 하한. 실측 955 의 절반이다. 이 하한이 잡는 것은
+## "밑동 셰이프가 다시 메시 전체가 되어 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
+const MIN_CANOPY_PROPS := 475
+
+# --- §21 한글 HUD 판정 -----------------------------------------------------
+## 번들 폰트의 경로. 라벨이 이것을 쓰지 않으면 데스크톱에서는 시스템 폴백으로
+## 멀쩡히 그려지고 **웹에서만** 글자가 사라진다 — 판정기가 도는 환경에서는 보이지
+## 않는 결함이므로 출처를 직접 묻는다.
+const HUD_FONT_PATH := "res://assets/fonts/hud_kr.ttf"
+## HUD 문구 규격의 한글 음절 전부. 구현체의 문자열만 검사하면 문구를 통째로 영문으로
+## 되돌린 빌드가 "쓰는 글자가 전부 있다" 로 통과한다 — 판정기가 따로 들어야 한다.
+## 폰트 서브셋(assets/fonts/README.md)과 같은 집합이어야 한다.
+const SPEC_HUD_CHARS := "점수크기삼킴먹힘순위이름시간종료혔다승리패배나키로작"
+## T8③: 한글 26자를 그린 라벨이 남겨야 할 최소 잉크 픽셀. 실측 2568 의 1/4 이다.
+const HUD_INK_MIN := 640
+## T8②-b: HUD 네 라벨이 그 순간 실제로 그리고 있어야 할 서로 다른 한글 음절 수.
+## 실측 21 의 절반이다. 처음에 1/3(7)로 잡았더니 **네 문구 중 셋을 영문으로
+## 되돌린 빌드가 정확히 7 로 통과했다** — 게임오버 문구 하나만 한글로 남아도
+## 그만큼이 나온다. 절반으로 올리면 그 주입이 7 대 10 으로 갈린다.
+const HUD_KR_MIN := 10
 
 # --- 3c 성능 예산 ---------------------------------------------------------
 ## 성능을 재는 지점 **둘**. 하나로 갈아치우면 안 된다 — §17 이전의 계측과 비교할 수
@@ -1697,33 +1836,112 @@ func spec_lane_mark_u(k: int) -> float:
 	return SPEC_LANE_GAP if spec_is_boulevard(k) else 0.0
 
 
+## 판정 인자의 전체 목록이자 **고르는 우선순위**다. 웹 쿼리는 외부 입력이라 이
+## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
+## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
+## 긴 것부터 본다.
+const JUDGE_ORDER := ["--judge6", "--judge5", "--judge4", "--judge3c", "--judge3b",
+	"--judge3", "--judge2", "--judge1b", "--judge"]
+
+
+## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
+##
+## 판정 인자는 데스크톱에서 명령줄로 온다. **브라우저에는 명령줄이 없다** —
+## 그래서 §22 까지 브라우저에서 돈 기계 판정은 0회였다. 웹에서는 쿼리 문자열을
+## 같은 인자로 옮긴다: `?judge=6` → `--judge6`, `?judge=` → `--judge`.
+##
+## **고르는 자리를 하나로 둔다.** 인자가 둘 이상 들어와도 도는 것은 하나인데,
+## 분기와 하네스 보고가 각자 고르면 "판정 A 의 결과" 자리에 판정 B 의 결과가
+## 기록된다.
+func judge_flag() -> String:
+	var args: Array = Array(OS.get_cmdline_user_args())
+	if OS.has_feature("web"):
+		var q := str(JavaScriptBridge.eval("window.location.search", true))
+		for pair in q.trim_prefix("?").split("&", false):
+			var kv := pair.split("=", true, 1)
+			if kv.size() == 2 and kv[0] == "judge":
+				args.append("--judge" + kv[1].uri_decode())
+	for f in JUDGE_ORDER:
+		if f in args:
+			return f
+	return ""
+
+
+## 브라우저 안의 판정 결과를 하네스로 내보내는 통로(§24).
+## Godot 의 `print` 는 `console.log` 로 나간다(엔진의 `onPrint` 가 호출 시점에
+## `console.log` 를 찾으므로 나중에 감싸도 걸린다). 그 줄을 전부 모아 두고
+## `JUDGE RESULT ->` 를 보는 순간 하네스에 되돌려 보낸다.
+##
+## **결과가 오지 않는 것을 통과로 읽으면 안 된다.** 하네스는 신호가 도착해야만
+## 판정을 마치고, 도착하지 않으면 시간 초과로 FAIL 한다 — 페이지가 아예 안 뜨거나
+## 판정이 중간에 죽은 경우가 "지적사항 없음" 으로 둔갑하는 것이 이 판정의 가장
+## 큰 위험이다. 종료 직전에 보내지 않고 **결과 줄을 보는 즉시** 보내는 것도 같은
+## 이유다(quit 뒤에는 프레임이 더 안 돌아 fetch 가 출발하지 못할 수 있다).
+func web_beacon(flag: String) -> void:
+	JavaScriptBridge.eval("""
+window.__JUDGE = {flag: %s, ua: navigator.userAgent, lines: [], result: "", sent: false};
+(function () {
+	var orig = console.log;
+	console.log = function () {
+		var s = Array.prototype.map.call(arguments, String).join(" ");
+		var j = window.__JUDGE;
+		j.lines.push(s);
+		if (!j.sent && s.indexOf("JUDGE RESULT ->") >= 0) {
+			j.sent = true;
+			j.result = s.indexOf("PASS") >= 0 ? "PASS" : "FAIL";
+			document.title = "JUDGE " + j.flag + " " + j.result;
+			var body = JSON.stringify(j);
+			try {
+				navigator.sendBeacon("/judge-result",
+					new Blob([body], {type: "application/json"}));
+			} catch (e) {
+				fetch("/judge-result", {method: "POST", body: body, keepalive: true});
+			}
+			// 다음 판정으로 넘어가는 것은 하네스가 정한다. 여기서 하는 일은
+			// "나는 끝났다" 를 들고 /next 를 두드리는 것뿐이다 — 브라우저를 판정마다
+			// 손으로 다시 여는 것을 없애려는 것이고, 순서·목록은 서버가 쥔다.
+			// 하네스가 서빙한 페이지에서만 넘어간다. 배포본에 `?judge=` 를 붙여 연
+			// 사람을 있지도 않은 경로로 보내지 않는다.
+			if (location.hostname === "127.0.0.1" || location.hostname === "localhost") {
+				setTimeout(function () { window.location.replace("/next?after=" + j.flag); }, 500);
+			}
+		}
+		orig.apply(console, arguments);
+	};
+})();
+""" % JSON.stringify(flag), true)
+
+
 func _ready() -> void:
-	var args := OS.get_cmdline_user_args()
-	if not ("--judge" in args or "--judge1b" in args or "--judge2" in args
-			or "--judge3" in args or "--judge3b" in args or "--judge3c" in args
-			or "--judge4" in args or "--judge5" in args):
+	var flag := judge_flag()
+	if flag.is_empty():
 		return
+	if OS.has_feature("web"):
+		web_beacon(flag)
 	_main = get_parent()
 	_main.judging = true          # main.gd._ready 보다 먼저 실행된다 (자식 → 부모)
 	# 1a~3단계 판정은 전부 "구멍 하나" 를 전제로 세워졌다. 4단계 판정에서만 아레나를 켠다.
-	_main.arena = "--judge4" in args or "--judge5" in args
+	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
-	if "--judge5" in args:
-		await run_judge_5()
-	elif "--judge4" in args:
-		await run_judge_4()
-	elif "--judge3c" in args:
-		await run_judge_3c()
-	elif "--judge3b" in args:
-		await run_judge_3b()
-	elif "--judge3" in args:
-		await run_judge_3()
-	elif "--judge2" in args:
-		await run_judge_2()
-	elif "--judge1b" in args:
-		await run_judge_1b()
-	else:
-		await run_judge()
+	match flag:
+		"--judge6": await run_judge_6()
+		"--judge5": await run_judge_5()
+		"--judge4": await run_judge_4()
+		"--judge3c": await run_judge_3c()
+		"--judge3b": await run_judge_3b()
+		"--judge3": await run_judge_3()
+		"--judge2": await run_judge_2()
+		"--judge1b": await run_judge_1b()
+		_: await run_judge()
+	# 판정이 결과 줄을 내지 못하고 끝나는 길이 있다(setup() 실패 등은 곧바로 quit 한다).
+	# 웹에서는 그 침묵이 하네스의 시간 초과로만 드러나 원인이 "안 떴다" 와 구분되지
+	# 않는다. quit 요청 뒤에도 이 프레임은 끝까지 도므로, 여기서 대신 FAIL 을 낸다.
+	if OS.has_feature("web"):
+		JavaScriptBridge.eval("""
+if (window.__JUDGE && !window.__JUDGE.sent) {
+	console.log("JUDGE RESULT -> FAIL (판정이 결과를 내지 못하고 끝났다)");
+}
+""", true)
 
 
 func setup() -> bool:
@@ -1937,15 +2155,17 @@ func run_judge_1b() -> void:
 				_was_falling[id] = true
 				var dxz: float = Vector2(o.global_position.x - hole.global_position.x,
 					o.global_position.z - hole.global_position.z).length()
-				# 오브젝트 반경은 구현체의 값을 믿지 않고 콜라이더에서 직접 잰다.
-				# 구현이 잘못된 산출식을 쓰면 판정도 같은 값으로 오염되어 검출력이 사라진다
-				# (실측: XZ 최대 절반값으로 바꾼 빌드가 그대로 통과했다).
-				var margin: float = hole.radius - (dxz + true_radius(o))
+				# §23 이후 전환 시점은 **물리**가 정한다("지면 아래로 내려갔다").
+				# 그러니 물을 것은 "기하 조건을 만족했는가" 가 아니라
+				# **"그때 물체가 구멍 위에 있었는가"** 다 — 구멍 밖 지면 아래로
+				# 내려간 채 전환됐다면 그것이 곧 "땅에서 녹아 사라진" 것이다.
+				# 반경은 구현체를 믿지 않고 콜라이더에서 직접 잰다.
+				var margin: float = hole.radius - (dxz - true_fit(o))
 				worst = minf(worst, margin)
 				if margin < 0.0:
 					sink += 1
-					print("JUDGE 1b  early-convert: dist=%.3f + r=%.3f > R=%.3f (margin %.3f, 구현이 쓴 r=%.3f)"
-						% [dxz, true_radius(o), hole.radius, margin, o.radius])
+					print("JUDGE 1b  구멍 밖에서 낙하 전환: dist=%.3f - fit=%.3f > R=%.3f (margin %.3f)"
+						% [dxz, true_fit(o), hole.radius, margin])
 				# B4: 낙하 전환 후에는 지면·다른 오브젝트 어느 쪽과도 충돌하면 안 된다.
 				# Godot 판정은 OR 이므로 양방향을 모두 본다.
 				for other in objs:
@@ -1958,8 +2178,15 @@ func run_judge_1b() -> void:
 							% [o.collision_layer, o.collision_mask,
 							   other.collision_layer, other.collision_mask])
 						break
-			elif not o.falling and o.global_position.y < SINK_LIMIT:
-				sink += 1     # 전환 없이 지면을 뚫고 내려갔다
+			elif not o.falling and o.global_position.y < SINK_LIMIT \
+					and not over_hole(o, hole):
+				# 구멍 위가 아닌데 지면 아래로 내려갔다 = 단단한 지면을 뚫었다.
+				# 구멍 위에서 기울며 잠기는 것은 §23 이 노린 정상 거동이다.
+				sink += 1
+				print("JUDGE 1b  지면 관통: %s y=%.3f dist=%.3f fit=%.3f R=%.3f"
+					% [o.name, o.global_position.y,
+					   flat_dist(o.global_position, hole.global_position),
+					   true_fit(o), hole.radius])
 		await get_tree().physics_frame
 		frames += 1
 
@@ -2021,6 +2248,32 @@ func judge_hole(h: Node3D, idx: int, base: Image, shot: Image, probe: Image,
 
 	var h1 := lum_c <= lum_g * 0.5
 	var h2 := inside and (lum_hi - lum_lo) >= 0.02
+	# H6(중심 휘도가 배경과 구별되는가)은 §24 에서 게이트에서 내렸다 — H3 와 같은 이유다.
+	# 묻는 것은 "구멍 안이 배경이 비쳐 보이는 구멍(월드를 뚫은 구멍)이 아닌가" 인데,
+	# 이 씬에서는 우물 안도 하늘도 둘 다 어두워 판별 폭이 팔레트와 백엔드에 달려 있다.
+	# 실측(정상 빌드, 같은 커밋):
+	#   Forward+          중심 0.1548 배경 0.2115 → 0.0567  통과
+	#   브라우저 WebGL2    중심 0.1817 배경 0.0905 → 0.0912  통과
+	#   데스크톱 opengl3   중심 0.1817 배경 0.1849 → **0.0032  탈락**
+	# 세 값 중 다른 것은 **배경 휘도뿐**이다. 같은 빌드·같은 렌더링 백엔드인데
+	# 클리어 색이 데스크톱과 브라우저에서 다르게 읽힌다. 정상 빌드가 재는 사람의
+	# 백엔드에 따라 탈락하는 수는 게이트가 될 수 없다.
+	#
+	# 표본 좌표는 정상이다. bg=(50,2) 은 화면 꼭대기의 하늘이고, 저장된 프레임에서
+	# 직접 읽어도 같은 값이다(shot.png (50,2) = RGB 46,47,52 → 0.1846). 즉 **재는
+	# 자리가 틀린 것이 아니라, 렌더된 하늘과 우물 안의 휘도가 실제로 붙어 있다.**
+	#
+	# 그리고 **H6 은 자기가 이름 붙인 결함을 잡지도 못했다.** 우물 메시를 숨겨
+	# 배경이 원반 안으로 그대로 비치게 한 주입에서 H6 은 두 백엔드 모두 통과했다
+	# (dCB = 0.1210 / 0.0944). 그 프레임에서 중심은 0.0905 로 읽히는데 꼭대기 하늘은
+	# 0.2115 다 — 같은 배경인데 두 자리의 값이 다르다. **왜 다른지는 규명하지 않았다.**
+	# 다만 그 차이가 있는 한 "중심 == 배경" 은 성립하지 않고, H6 은 배경이 그대로
+	# 비치는 프레임을 통과시킨다. 잡은 것은 H7(leak 1862/2, 1856/2)과 H2(dRing 0.0000)다.
+	#
+	# **같은 질문의 강한 판본이 이미 있다.** H7 은 배경을 **마젠타로 바꿔** 놓고
+	# 원반 안의 마젠타 픽셀을 센다(정상 빌드 실측 leak=0/2) — 마젠타는 어떤 씬
+	# 팔레트와도 겹치지 않으므로 지면·우물 색을 바꿔도, 백엔드를 바꿔도 흔들리지 않는다.
+	# 진단용으로 계속 찍는다.
 	var h6 := absf(lum_c - lum_bg) >= 0.03
 	var h7 := leak <= tol                                # 이음새·정렬: 배경이 새지 않는다
 	# 하드 알파는 어느 방향에서도 부드러운 전이가 없다(실측 0/32).
@@ -2032,14 +2285,14 @@ func judge_hole(h: Node3D, idx: int, base: Image, shot: Image, probe: Image,
 	# H3(엣지 그룹 증분)은 3단계에서 폐기했다. 지면에 도로 스트라이프가 생기면
 	# 기준·판정 프레임이 같은 엣지를 세어 정상 빌드가 탈락한다(실측 base=9 shot=10).
 	# 윤곽의 존재는 H7(이음새)·H8(림 AA)이 더 강하게 판정한다. 진단용으로만 남긴다.
-	var ok: bool = h1 and h2 and h6 and h7 and h8 and h9
+	var ok: bool = h1 and h2 and h7 and h8 and h9
 
 	print("JUDGE hole%d px c=%s | lum c=%.4f ring[%.4f..%.4f] g=%.4f bg=%.4f dRing=%.4f dCB=%.4f inside=%s"
 		% [idx, str(p_c), lum_c, lum_lo, lum_hi, lum_g, lum_bg,
 		   lum_hi - lum_lo, absf(lum_c - lum_bg), inside])
 	print("JUDGE hole%d groups %d->%d (H3 폐기, 진단용) | leak=%d/%d rim_aa=%d/%d depth=%.2f/%.2f"
 		% [idx, g_base, g_shot, leak, tol, aa.x, aa.y, depth, need_depth])
-	print("JUDGE hole%d H1=%s H2=%s H6=%s H7=%s H8=%s H9=%s -> %s"
+	print("JUDGE hole%d H1=%s H2=%s H6=%s(폐기, 진단용) H7=%s H8=%s H9=%s -> %s"
 		% [idx, pf(h1), pf(h2), pf(h6), pf(h7), pf(h8), pf(h9),
 		   ("PASS" if ok else "FAIL")])
 	return ok
@@ -2068,11 +2321,51 @@ func check_uniforms() -> bool:
 
 ## H10: §2·§5 의 결정이 유지되는가 — 렌더러와 셰이더 render_mode 를 직접 단언한다.
 ## 픽셀 휴리스틱(H8)만으로는 아트 변경에 가려질 수 있으므로 구조적으로도 막는다.
+## 착시가 서 있는 파이프라인 전제를 **설정과 런타임 양쪽에서** 확인한다.
+##
+## 웹 렌더링 방식을 함께 단언한다(§22). 웹은 Forward+ 를 지원하지 않으므로 이 값이
+## 어긋나면 브라우저에서 렌더러 초기화가 실패한다 — 데스크톱 실행에는 아무 영향이
+## 없어서 판정 아홉 종이 전부 통과한 채 배포본만 죽는다.
+##
+## **다만 이 검사가 무는 범위는 좁다.** `rendering_method.web` 은 project.godot 에
+## 없어도 엔진 기본값이 이미 `gl_compatibility` 다(실측: 그 줄을 지우고 돌려도
+## 판정기가 gl_compatibility 를 읽는다). 그러니 이 검사가 잡는 것은 **누가 그 값을
+## 다른 것으로 바꿔 놓는 경우** 하나이고, 줄을 지우는 것은 잡지 못한다 — 잡을 것이
+## 없기 때문이다. project.godot 의 그 줄은 설정이라기보다 문서에 가깝다.
+##
+## 실행 렌더러는 **런타임에서** 읽어 로그에 남긴다. 프로젝트 설정만 보면
+## `--rendering-driver opengl3` 로 돌린 판정도 "forward_plus" 라고 보고한다.
+##
+## **기대값은 실행 플랫폼의 함수다(§24).** `rendering_method` 를 무조건
+## `forward_plus` 로 단언하면 브라우저 판정이 **정상 빌드에서** 탈락한다 —
+## 웹 익스포트본에서 그 키는 언제나 `gl_compatibility` 로 읽히기 때문이다.
+## 데스크톱에서는 관측할 수 없는 사실이었다.
+##
+## 처음에 그 이유를 "익스포트가 `.web` 오버라이드를 기본 키에 적용한다" 고 적었다가
+## **고장 주입에 반증당했다**: `.web` 을 `forward_plus` 로 바꾼 빌드에서도 기본 키는
+## 그대로 `gl_compatibility` 였다(설정=gl_compatibility, 웹=forward_plus). 오버라이드가
+## 적용된 것이 아니라 **익스포터가 웹 기본값을 그 키에 써 넣는다.** 두 키는 독립이다.
+##
+## 웹에서는 **런타임 렌더러까지** 단언한다. 설정만 보는 것보다 강하다 — 같은 주입에서
+## 실행 렌더러가 실제로 `forward_plus` 로 떴고(실측), 그것은 설정 검사가 아니라
+## 이 검사가 무는 자리다. 데스크톱에서는 런타임을 단언하지 않는다: §22 의
+## `--rendering-driver opengl3` 회귀가 같은 코드로 돌아야 한다.
 func check_pipeline() -> bool:
+	var web := OS.has_feature("web")
 	var code: String = _mat.shader.code
 	var ok := code.contains("alpha_to_coverage") and code.contains("depth_prepass_alpha")
 	ok = ok and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)) > 0
-	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")) == "forward_plus"
+	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")) \
+		== ("gl_compatibility" if web else "forward_plus")
+	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method.web", "")) \
+		== "gl_compatibility"
+	ok = ok and (not web or RenderingServer.get_current_rendering_method() == "gl_compatibility")
+	print("JUDGE pipeline: 실행 렌더러=%s 설정=%s 웹=%s msaa=%d 플랫폼=%s"
+		% [RenderingServer.get_current_rendering_method(),
+		   str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")),
+		   str(ProjectSettings.get_setting("rendering/renderer/rendering_method.web", "")),
+		   int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)),
+		   "web" if web else "desktop"])
 	return ok
 
 
@@ -2684,6 +2977,8 @@ func run_judge_3b() -> void:
 	var zone_n := {"road": 0, "walk": 0, "block": 0}
 	var boul_n := {"road": 0, "walk": 0}
 	var boul_bands := {}
+	var e8_bad := 0
+	var canopy_n := 0
 	for o in props:
 		var n3 := o as Node3D
 		if n3 == null:
@@ -2723,6 +3018,30 @@ func run_judge_3b() -> void:
 				print("JUDGE 3b E5 %s: %s" % [n3.name, why5])
 		if Vector2(n3.global_position.x, n3.global_position.z).length() < SPEC_PLAZA_R:
 			e6_bad += 1
+		# --- E8: 수관 셰이프(§23) ---
+		# 가지가 림에 걸리려면 **가지에 콜라이더가 있어야 한다.** 보이는 메시가
+		# 밑동 셰이프보다 확연히 넓은 프롭은 셰이프가 둘이어야 한다(밑동 + 수관).
+		# 메시와 셰이프를 판정기가 직접 재고 개수를 센다 — 구현체의 필드를 안 믿는다.
+		var shapes: Array = n3.find_children("", "CollisionShape3D", false, false)
+		var base_half: float = 0.0
+		if not shapes.is_empty() and (shapes[0] as CollisionShape3D).shape != null:
+			var bsz := (shapes[0] as CollisionShape3D).shape.get_debug_mesh().get_aabb().size
+			base_half = maxf(bsz.x, bsz.z) * 0.5
+		var mesh_half: float = 0.0
+		for c in n3.find_children("", "MeshInstance3D", false, false):
+			var mi := c as MeshInstance3D
+			if mi.mesh == null:
+				continue
+			var ms: Vector3 = mi.mesh.get_aabb().size * mi.scale.abs()
+			mesh_half = maxf(mesh_half, maxf(ms.x, ms.z) * 0.5)
+		if base_half > 0.0 and mesh_half >= base_half * CANOPY_RATIO:
+			canopy_n += 1
+			if shapes.size() < 2:
+				e8_bad += 1
+				if e8_bad <= 5:
+					print("JUDGE 3b E8 %s: 메시 반폭 %.2f 가 밑동 %.2f 의 %.1f배인데 셰이프가 %d개다"
+						% [n3.name, mesh_half, base_half, mesh_half / base_half,
+						   shapes.size()])
 
 	# --- E3: 겹침 (SAT). 반경으로 1차 걸러 쌍 수를 줄인다 ---
 	var e3_bad := 0
@@ -2776,18 +3095,24 @@ func run_judge_3b() -> void:
 	#        주입이 하한 230 대 223 으로 간신히 걸렸다) — 구조로 물어야 한다.
 	var e7: bool = boul_n["road"] >= MIN_BOUL_ROAD and boul_n["walk"] >= MIN_BOUL_WALK \
 		and boul_bands.size() >= 3
-	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7
+	# E8: §19 의 걸림 모형이 실제로 입력을 갖는가. 두 질문을 함께 묻는다.
+	#   ① 수관이 넓은 프롭에 수관 셰이프가 달려 있는가 (셰이프 개수)
+	#   ② 그런 프롭이 하한 이상 있는가 — 밑동 셰이프를 다시
+	#      메시 전체로 되돌리면 둘이 같아져 걸림이 조용히 사라진다.
+	var e8: bool = e8_bad == 0 and canopy_n >= MIN_CANOPY_PROPS
+	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7 and e8
 	print("JUDGE 3b props=%d catalog=%d albedos=%d zones road=%d walk=%d block=%d"
 		% [props.size(), cat.size(), albedos.size(),
 		   zone_n["road"], zone_n["walk"], zone_n["block"]])
 	print("JUDGE 3b E7 대로전용자리: road=%d(>=%d) walk=%d(>=%d) 차선자리=%s(3개 전부)"
 		% [boul_n["road"], MIN_BOUL_ROAD, boul_n["walk"], MIN_BOUL_WALK,
 		   str(boul_bands.keys())])
-	print("JUDGE 3b bad: E1=%d E2=%d E3=%d E5=%d E6=%d judge_set=%d fp=%d/%d settle_move=%.4f settle_tilt=%.4f"
-		% [e1_bad, e2_bad, e3_bad, e5_bad, e6_bad, jset, f1.length(), f3.length(),
+	print("JUDGE 3b bad: E1=%d E2=%d E3=%d E5=%d E6=%d E8=%d judge_set=%d fp=%d/%d settle_move=%.4f settle_tilt=%.4f"
+		% [e1_bad, e2_bad, e3_bad, e5_bad, e6_bad, e8_bad, jset, f1.length(), f3.length(),
 		   moved, tilted])
-	print("JUDGE 3b E1=%s E2=%s E3=%s E4=%s E5=%s E6=%s E7=%s -> %s"
-		% [pf(e1), pf(e2), pf(e3), pf(e4), pf(e5), pf(e6), pf(e7),
+	print("JUDGE 3b E8 수관프롭=%d(>=%d, 수관/밑동 >= %.1f)" % [canopy_n, MIN_CANOPY_PROPS, CANOPY_RATIO])
+	print("JUDGE 3b E1=%s E2=%s E3=%s E4=%s E5=%s E6=%s E7=%s E8=%s -> %s"
+		% [pf(e1), pf(e2), pf(e3), pf(e4), pf(e5), pf(e6), pf(e7), pf(e8),
 		   ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
@@ -2801,6 +3126,7 @@ func run_judge_3b() -> void:
 ## T4: 승자가 최고 점수 구멍인가
 ## T5: 재시작이 초기 상태를 복원하는가
 ## T6: 플레이어가 먹히면 그 자리에서 판이 끝나는가
+## T7: 판정 픽스처 8개가 게임에는 존재하지 않는가 (§20)
 func run_judge_5() -> void:
 	if not setup():
 		get_tree().quit(1)
@@ -2884,6 +3210,9 @@ func run_judge_5() -> void:
 	# --- T5: 재시작 복원 ---
 	var city: Node3D = _main.get_node("City")
 	var fp0: String = city.fingerprint(city.plan(city.city_seed))
+	# T5 는 **판정 모드의** 재시작을 본다. §20 이후 픽스처 8개는 판정 모드에서만
+	# 스폰되므로, 앞의 시나리오가 내려 둔 플래그를 여기서 다시 올려야 한다.
+	_main.judging = true
 	_main.restart()
 	await get_tree().process_frame
 	var hs: Array = _reg.holes()
@@ -2903,15 +3232,45 @@ func run_judge_5() -> void:
 		% [hs.size(), RESTART_HOLES, pf(radii_ok), pf(score_ok), props, RESTART_PROPS,
 		   jset, _main.state, _main.time_left])
 
+	# --- T7: 판정 픽스처는 게임에 존재하지 않는다 (§20) ---
+	# 두 갈래로 회귀할 수 있어 둘 다 막는다.
+	#   ① 씬에 손으로 다시 놓는다 → main.tscn 을 **파일로 열어** Swallowables 아래
+	#      노드 수를 센다. 실행 중의 노드를 세면 판정 모드에서 스폰된 8개와 구별할
+	#      수 없어 이 회귀를 영원히 못 잡는다.
+	#   ② 스폰 조건을 없앤다 → 게임 모드로 재시작해 픽스처가 0 인지 본다.
+	#      도시는 그대로여야 한다 — 제거가 픽스처에만 닿았는지 함께 묻는다.
+	var authored := 0
+	var st: SceneState = (load("res://scenes/main.tscn") as PackedScene).get_state()
+	for i in st.get_node_count():
+		# SceneState 의 경로는 루트 상대라 앞에 "./" 가 붙는다("./Swallowables/S0").
+		# 이 접두사를 빼먹은 첫 판은 **주입한 픽스처를 못 잡는 위약**이었다 — 고장
+		# 주입이 아니었으면 "0 개" 라는 통과 로그를 그대로 믿었을 것이다.
+		var p := str(st.get_node_path(i)).trim_prefix("./")
+		if p.begins_with("Swallowables/"):
+			authored += 1
+			print("JUDGE 5 T7 씬에 픽스처가 남아 있다: %s" % p)
+	_main.judging = false
+	_main.restart()
+	await get_tree().process_frame
+	var jset_play: int = get_tree().get_nodes_in_group("judge_set").size()
+	var props_play: int = city.get_child_count()
+	var t7: bool = authored == 0 and jset_play == 0 and props_play == RESTART_PROPS
+	print("JUDGE 5 T7: 씬에 놓인 픽스처=%d 게임 재시작 후 픽스처=%d 도시프롭=%d(기대 %d)"
+		% [authored, jset_play, props_play, RESTART_PROPS])
+
+	# --- T8: 한글 HUD 가 실제로 그려지는가 (§21) ---
+	var t8 := await judge_hud_font()
+
 	# --- T6: 플레이어가 먹히면 그 자리에서 끝난다 ---
 	var t6r := await judge_player_eaten()
 	var t6: bool = bool(t6r["over"]) and str(t6r["reason"]) == "eaten"
 	print("JUDGE 5 T6: state=%d reason=%s" % [t6r["state"], t6r["reason"]])
 
 	_main.judging = true
-	var ok: bool = t1 and t2 and t3 and t4 and t5 and t6
-	print("JUDGE 5 T1=%s T2=%s T3=%s T4=%s T5=%s T6=%s -> %s"
-		% [pf(t1), pf(t2), pf(t3), pf(t4), pf(t5), pf(t6), ("PASS" if ok else "FAIL")])
+	var ok: bool = t1 and t2 and t3 and t4 and t5 and t6 and t7 and t8
+	print("JUDGE 5 T1=%s T2=%s T3=%s T4=%s T5=%s T6=%s T7=%s T8=%s -> %s"
+		% [pf(t1), pf(t2), pf(t3), pf(t4), pf(t5), pf(t6), pf(t7), pf(t8),
+		   ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -3434,6 +3793,36 @@ func alive_count(objs: Array) -> int:
 	return n
 
 
+## 물체가 **어떤 자세로든** 통과하려면 구멍 반경이 이보다 커야 한다(§23).
+## 가장 작은 두 반extent 가 만드는 단면의 외접반경 — 판정기가 콜라이더에서 직접 잰다.
+## 이 값보다 구멍이 작으면 그 물체는 **어떻게 해도 못 들어간다**(거절 규격).
+## 반대로 XZ 외접반경(true_radius)보다 구멍이 크면 눕히지 않고도 들어간다(통과 규격).
+## 그 사이는 물리가 정하는 회색 지대이고, 판정기는 그 구간을 단언하지 않는다.
+func true_fit(o: Node3D) -> float:
+	var key: int = -o.get_instance_id()
+	if _r_cache.has(key):
+		return _r_cache[key]
+	var r := INF
+	for c in o.find_children("", "CollisionShape3D", false, false):
+		var col := c as CollisionShape3D
+		if col.shape == null:
+			continue
+		var s := col.shape.get_debug_mesh().get_aabb().size
+		var h := [s.x * 0.5, s.y * 0.5, s.z * 0.5]
+		h.sort()
+		r = minf(r, sqrt(h[0] * h[0] + h[1] * h[1]))
+	if is_inf(r):
+		r = true_radius(o)
+	_r_cache[key] = r
+	return r
+
+
+## 물체의 XZ 원반이 구멍 원반과 겹치는가. 지면 아래로 내려가도 되는 자리인지를 가른다.
+func over_hole(o: Node3D, hole: Node3D) -> bool:
+	return flat_dist(o.global_position, hole.global_position) \
+		< float(hole.radius) + true_radius(o)
+
+
 ## 오브젝트의 XZ 외접반경을 콜라이더에서 직접 잰다(구현체의 radius 필드와 독립).
 ## get_debug_mesh() 는 비싸므로 인스턴스별로 한 번만 계산한다.
 func true_radius(o: Node3D) -> float:
@@ -3455,8 +3844,10 @@ func true_radius(o: Node3D) -> float:
 # --- 2단계 판정 ------------------------------------------------------------
 
 ## C1: 성장이 면적 보존 법칙을 따르는가  R' = sqrt(R^2 + k*r^2)
-## C2: 크기 게이트 — 상한을 넘는 오브젝트는 삼켜지지도, 가라앉지도 않는다.
-##     그리고 구멍이 자라 상한을 넘기면 그때는 삼켜진다.
+## C2: 거절 규격 — 통과반경이 구멍 반경보다 큰 물체는 삼켜지지도, 가라앉지도 않는다.
+##     그리고 구멍이 자라 그 반경을 넘기면 그때는 삼켜진다(R 2.3 → 5.06).
+##     구간마다 묻는 것이 다르다: 0차는 **반경이 고정된 채** 거절이 성립하는가,
+##     1차는 자라는 내내 매 프레임 규격이 지켜지는가(gate_breaches), 2차는 열리는가.
 ## C3: 스코어가 삼킨 오브젝트의 기여 합과 일치하는가
 ## C4: 성장한 반경에서도 착시가 유지되는가 (우물·Area3D 가 SSOT 를 따라갔는가)
 func run_judge_2() -> void:
@@ -3465,7 +3856,7 @@ func run_judge_2() -> void:
 		return
 	await get_tree().process_frame
 	var hole: Node3D = _reg.holes()[0]
-	hole.set_radius(FIXTURE_R)          # 성장 시나리오도 픽스처 반경에서 돈다
+	hole.set_radius(GATE_R)             # 거절 → 성장 → 통과 시나리오의 시작 반경
 	var r0: float = hole.radius
 	var objs: Array = get_tree().get_nodes_in_group("judge_set")
 
@@ -3474,29 +3865,51 @@ func run_judge_2() -> void:
 	var score_of := {}
 	var big: Array = []
 	var small: Array = []
+	var grey: Array = []
 	for o in objs:
 		var id: int = o.get_instance_id()
 		r_of[id] = true_radius(o)
 		# 점수도 판정기가 규격대로 직접 계산한다 — 구현체의 score_value 를 믿으면
 		# 산출식을 통째로 바꾼 빌드가 자기 값끼리 일치해 그대로 통과한다(실측).
 		score_of[id] = int(round(float(r_of[id]) * float(r_of[id]) * 100.0))
-		# 게이트 분류도 can_swallow() 에 묻지 않는다 — 게이트를 제거한 빌드에서는
-		# 그 함수가 항상 true 라 검사 대상이 사라진다(실측).
-		if float(r_of[id]) <= r0 * hole.swallow_ratio:
+		# 분류는 구현체에 묻지 않고 **물리 규격**으로 한다(§23). 두 규격은 서로 다른
+		# 양이고, 셋으로 갈린다.
+		#   통과 규격 — XZ 외접반경 < R : 눕히지 않고도 들어간다. 반드시 삼켜진다.
+		#   거절 규격 — 통과반경(true_fit) > R : 어떤 자세로도 못 들어간다.
+		#   그 사이 — 회색 지대. **판정기는 단언하지 않는다.**
+		# can_swallow() 에 물으면 안 된다 — 이제 그 함수는 AI 조언일 뿐이라
+		# 흡입을 막지 않는다.
+		if true_radius(o) < r0:
 			small.append(o)
-		else:
+		elif true_fit(o) > r0:
 			big.append(o)
-	print("JUDGE 2 start R=%.4f objects=%d over_gate=%d (gate=%.4f)"
-		% [r0, objs.size(), big.size(), r0 * hole.swallow_ratio])
+		else:
+			grey.append(o)
+	# 픽스처를 손대다 어느 한쪽이 비면 시나리오가 조용히 아무것도 시험하지 않게 된다.
+	# 그 상태를 통과로 읽지 않는다.
+	var c2set: bool = small.size() > 0 and big.size() > 0
+	print("JUDGE 2 start R=%.4f objects=%d 통과=%d 거절=%d 회색=%d (거절 = 통과반경 > %.4f)"
+		% [r0, objs.size(), small.size(), big.size(), grey.size(), r0])
 
-	# --- 0차: 반경이 작은 상태로 큰 오브젝트 위에 머문다 ---
-	# 이 단계가 없으면 시나리오가 게이트를 한 번도 건드리지 않아,
-	# 게이트를 통째로 제거한 빌드도 그대로 통과한다(실측).
+	# --- 0차: 반경이 작은 상태로 거절 규격 물체 위에 머문다 ---
+	# 이 단계가 없으면 시나리오가 "거절"을 한 번도 건드리지 않아,
+	# 물체를 무조건 삼키는 빌드도 그대로 통과한다(실측).
 	var gate_violation := 0
 	for b in big:
 		gate_violation += await hover(hole, objs, b, HOVER_FRAMES)
+	# **거절 생존은 여기서 묻는다 — 1차가 끝난 뒤가 아니다.**
+	# 0차 내내 반경은 r0 그대로라 "거절 규격이면 안 들어간다" 가 그대로 성립한다.
+	# 1차에서는 구멍이 소형을 먹으며 2.3 → 5.79 로 자라고, 그 경로가 대형 픽스처
+	# (16,-2)에서 5.4m 까지 접근한다 — 그때 대형이 빠지는 것은 **규격대로다**
+	# (거절 반경 2.83 < 5.79). 옛 기준은 그 소멸을 위반으로 셌고, 그래서 §23 이
+	# 크기 게이트를 걷어낸 뒤로는 픽스처 배치라는 우연에 기대고 있었다.
+	# 1차 구간의 규격 준수는 gate_breaches 가 **매 물리 프레임** 본다 — 그쪽이
+	# 반경과 물체를 그때그때 비교하므로 자라는 도중에도 정확하다.
+	var c2a: bool = alive_count(big) == big.size()
+	print("JUDGE 2 hover 후 거절 생존=%d/%d gate_violations=%d"
+		% [alive_count(big), big.size(), gate_violation])
 
-	# --- 1차: 게이트를 통과하는 작은 것만 삼킨다 ---
+	# --- 1차: 통과 규격의 소형만 삼킨다 ---
 	gate_violation += await suck(hole, objs, small)
 
 	var r1: float = hole.radius
@@ -3509,10 +3922,6 @@ func run_judge_2() -> void:
 	var expect_r1: float = sqrt(r0 * r0 + SPEC_GROWTH_K * sum_sq)
 	var c1 := absf(r1 - expect_r1) < 0.005
 	var c3: bool = _main.score == expect_score
-	# 1차에서 큰 것들은 하나도 사라지지 않아야 한다
-	var c2a := true
-	for o in big:
-		c2a = c2a and is_instance_valid(o)
 
 	print("JUDGE 2 after small: R=%.4f expect=%.4f (dR=%.4f) score=%d expect=%d big_alive=%d/%d"
 		% [r1, expect_r1, r1 - expect_r1, _main.score, expect_score,
@@ -3525,7 +3934,7 @@ func run_judge_2() -> void:
 	for o in big:
 		if not is_instance_valid(o):
 			continue
-		if true_radius(o) > hole.radius * hole.swallow_ratio:
+		if true_radius(o) >= hole.radius:
 			c2b = false
 	gate_violation += await suck(hole, objs, big)
 	var left := alive_count(objs)
@@ -3538,10 +3947,10 @@ func run_judge_2() -> void:
 	var c4 := await judge_static("grown_")
 	_main.hud_root.visible = true
 
-	var c2 := c2a and c2b and gate_violation == 0 and left == 0
+	var c2 := c2set and c2a and c2b and gate_violation == 0 and left == 0
 	var ok := c1 and c2 and c3 and c4
-	print("JUDGE 2 final R=%.4f score=%d left=%d gate_violations=%d"
-		% [hole.radius, _main.score, left, gate_violation])
+	print("JUDGE 2 final R=%.4f score=%d left=%d gate_violations=%d set=%s 거절생존=%s 개방=%s"
+		% [hole.radius, _main.score, left, gate_violation, pf(c2set), pf(c2a), pf(c2b)])
 	print("JUDGE 2 C1=%s C2=%s C3=%s C4=%s -> %s"
 		% [pf(c1), pf(c2), pf(c3), pf(c4), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
@@ -3571,17 +3980,8 @@ func suck(hole: Node3D, objs: Array, only: Array) -> int:
 			var step: float = minf(to.length(), _main.MOVE_SPEED / 60.0)
 			if step > 0.0001:
 				_main.set_hole_position(hole.global_position + to.normalized() * step)
-		# 게이트 위반 감시: 상한을 넘는 오브젝트는 낙하하지도 가라앉지도 않아야 한다
-		for o in objs:
-			if not is_instance_valid(o):
-				continue
-			if true_radius(o) <= hole.radius * hole.swallow_ratio:
-				continue
-			if o.falling or o.global_position.y < SINK_LIMIT:
-				violations += 1
-				print("JUDGE 2  gate breach: r=%.3f > R*%.2f=%.3f falling=%s y=%.3f"
-					% [true_radius(o), hole.swallow_ratio,
-					   hole.radius * hole.swallow_ratio, o.falling, o.global_position.y])
+		# 거절 감시: 통과할 수 없는 물체는 빠지지도, 지면을 뚫지도 않아야 한다
+		violations += gate_breaches(hole, objs)
 		await get_tree().physics_frame
 		frames += 1
 	return violations
@@ -3603,21 +4003,210 @@ func hover(hole: Node3D, objs: Array, target: Node3D, frames: int) -> int:
 	return violations
 
 
-## 상한을 넘는 오브젝트가 낙하했거나 지면 아래로 내려갔는가.
-## 판정 기준을 can_swallow() 에 묻지 않는다 — 게이트를 제거한 빌드에서는 항상 true 다.
+## **통과할 수 없는** 물체(좁은 쪽 반폭 >= 구멍 반경)가 빠졌거나 지면을 뚫었는가.
+## 규격을 구현체에 묻지 않는다 — §23 이후 `can_swallow()` 는 AI 조언일 뿐이고
+## 흡입을 막지 않으므로, 그 함수로 판정하면 검사 대상이 통째로 사라진다.
 func gate_breaches(hole: Node3D, objs: Array) -> int:
 	var n := 0
 	for o in objs:
 		if not is_instance_valid(o):
 			continue
-		if true_radius(o) <= hole.radius * hole.swallow_ratio:
-			continue
-		if o.falling or o.global_position.y < SINK_LIMIT:
+		if true_fit(o) < float(hole.radius):
+			continue                              # 통과 가능 — 검사 대상이 아니다
+		if o.falling or (o.global_position.y < SINK_LIMIT and not over_hole(o, hole)):
 			n += 1
-			print("JUDGE 2  gate breach: r=%.3f > R*%.2f=%.3f falling=%s y=%.3f"
-				% [true_radius(o), hole.swallow_ratio,
-				   hole.radius * hole.swallow_ratio, o.falling, o.global_position.y])
+			print("JUDGE 2  거절 위반: fit=%.3f >= R=%.3f falling=%s y=%.3f dist=%.3f"
+				% [true_fit(o), hole.radius, o.falling, o.global_position.y,
+				   flat_dist(o.global_position, hole.global_position)])
 	return n
+
+
+# --- §23: 물리 통과 판정 ---------------------------------------------------
+
+## K1 통과 규격 — XZ 외접반경이 구멍 반경보다 작은 물체는 **눕히지 않고도** 들어간다.
+##    반드시 예산 안에 삼켜져야 한다.
+## K2 거절 규격 — 통과 반경(가장 작은 두 반extent 의 외접반경)이 구멍 반경보다 큰
+##    물체는 **어떤 자세로도** 못 들어간다. 예산 내내 림 위에 남아야 한다.
+## K3 수관 걸림 — 밑동은 들어가고도 남지만 가지가 구멍보다 넓은 물체는 걸려서 남는다.
+##    §19 는 이것을 통과 조건에 계수를 곱해 흉내냈다. 지금은 **가지에 콜라이더가
+##    있고 구멍 둘레에 물리적 림이 있어서** 그냥 걸린다.
+## K4 해소 — 구멍이 수관보다 커지면 그 물체도 들어간다.
+## K5 지면 관통 없음 — 어느 시행에서도, 지면 아래로 내려간 물체는 **구멍 위**에 있다.
+##    플레이 피드백의 "땅 위에서 녹아 사라진다" 가 이 기준이다.
+## K6 긴 물체 — 폭이 구멍보다 좁으면 길이가 아무리 길어도 결국 들어간다(전봇대).
+func run_judge_6() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
+	var hole: Node3D = _reg.holes()[0]
+	# 광장의 판정 대상 8개를 치운다 — 시행 도중 함께 삼켜져 구멍이 자라면
+	# 시나리오의 전제(반경 고정)가 깨진다(§19 에서 밟은 함정).
+	for o in get_tree().get_nodes_in_group("judge_set"):
+		o.queue_free()
+	await get_tree().physics_frame
+
+	var flat := await fall_run(hole, "flat", FALL_R, [Vector3(2.0, 2.0, 2.0)])
+	var wide := await fall_run(hole, "wide", FALL_R, [Vector3(6.0, 2.0, 6.0)])
+	var pole := await fall_run(hole, "pole", FALL_R, [Vector3(0.6, 8.0, 0.6)])
+	var tree := await fall_run(hole, "tree", FALL_R, FALL_TREE)
+	var tree_big := await fall_run(hole, "tree_big", FALL_BIG_R, FALL_TREE)
+
+	var k1: bool = bool(flat["gone"])
+	var k2: bool = not bool(wide["gone"])
+	var k3: bool = not bool(tree["gone"])
+	var k4: bool = bool(tree_big["gone"])
+	var k5 := true
+	for r in [flat, wide, pole, tree, tree_big]:
+		k5 = k5 and int(r["sink_bad"]) == 0
+	var k6: bool = bool(pole["gone"])
+
+	var ok: bool = k1 and k2 and k3 and k4 and k5 and k6
+	print("JUDGE 6 K1=%s K2=%s K3=%s K4=%s K5=%s K6=%s -> %s"
+		% [pf(k1), pf(k2), pf(k3), pf(k4), pf(k5), pf(k6), ("PASS" if ok else "FAIL")])
+	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
+	get_tree().quit(0 if ok else 1)
+
+
+## 시행 하나. 구멍을 r 로 되돌려 원점에 세우고, 픽스처를 **구멍 한가운데**에 놓은 뒤
+## 구멍을 움직이지 않고 예산만큼 돌린다. 가운데에 놓는 것이 가장 강한 시험이다 —
+## "가운데 놓아도 안 빠진다" 와 "가운데 놓으면 빠진다" 를 각각 단언할 수 있다.
+##
+## 반환: gone(삼켜졌는가) / frames(삼켜진 프레임) / sink_bad(구멍 밖 지면 관통 횟수)
+func fall_run(hole: Node3D, tag: String, r: float, boxes: Array) -> Dictionary:
+	hole.set_radius(r)
+	hole.move_to(Vector3.ZERO)
+	var body := fall_fixture("Fall_" + tag, boxes)
+	_main.add_child(body)
+	await get_tree().physics_frame
+	var rr: float = true_radius(body)
+	var rf: float = true_fit(body)
+	var gone := -1
+	var sink_bad := 0
+	var min_y := 0.0
+	var f := 0
+	while f < FALL_FRAMES and gone < 0:
+		if not is_instance_valid(body):
+			gone = f
+			break
+		min_y = minf(min_y, body.global_position.y)
+		if body.global_position.y < SINK_LIMIT and not over_hole(body, hole):
+			sink_bad += 1
+			if sink_bad == 1:
+				print("JUDGE 6 %s 구멍 밖 지면 관통: y=%.3f dist=%.3f R=%.3f"
+					% [tag, body.global_position.y,
+					   flat_dist(body.global_position, hole.global_position), r])
+		await get_tree().physics_frame
+		f += 1
+	print("JUDGE 6 %-9s R=%5.2f 외접=%.3f 통과반경=%.3f 삼킴=%s(%d프레임) 최저y=%.2f 관통=%d"
+		% [tag, r, rr, rf, "예" if gone >= 0 else "아니오", gone, min_y, sink_bad])
+	if is_instance_valid(body):
+		body.queue_free()
+	await get_tree().physics_frame
+	return { "gone": gone >= 0, "frames": gone, "sink_bad": sink_bad }
+
+
+## 판정용 픽스처. 상자 셰이프를 아래에서부터 쌓는다(밑동 + 수관).
+## 도시 프롭과 같은 규약(레이어 2, swallowable.gd)을 따르되 치수는 판정기가 정한다.
+func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
+	var body := RigidBody3D.new()
+	body.set_script(SWALLOWABLE)
+	body.collision_layer = 2
+	body.collision_mask = 1 | 2
+	body.name = name
+	body.mass = 10.0
+	body.add_to_group("swallowable")
+	var y := 0.0
+	for b in boxes:
+		var size: Vector3 = b
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = size
+		cs.shape = box
+		cs.position.y = y + size.y * 0.5
+		body.add_child(cs)
+		y += size.y
+	return body
+
+# --- §21: 한글 HUD 판정 ----------------------------------------------------
+
+## T8. 세 가지를 함께 묻는다.
+##   ① 네 라벨이 **번들 폰트**를 쓰는가. 시스템 폴백에 기대면 데스크톱에서는
+##      멀쩡하고 웹에서만 글자가 사라진다 — 판정기가 도는 데스크톱에서는
+##      그 결함이 보이지 않으므로, **폰트의 출처**를 직접 물어야 한다.
+##   ② 서브셋에 글리프가 다 있는가. 문구에 새 음절을 쓰면 그 글자만 조용히
+##      사라진다. 지금 그려지는 문자열과, 판정기가 **따로 든** 문구 규격
+##      양쪽으로 본다 — 구현체의 문자열만 보면 문구를 통째로 영문으로 되돌린
+##      빌드가 자기 값끼리 일치해 그대로 통과한다.
+##   ③ 한글이 실제로 화면에 잉크를 남기는가. 라벨을 비운 프레임과 채운 프레임을
+##      찍어 라벨 영역의 **다른 픽셀 수**를 센다. 밝기 문턱으로 세면 3D 장면의
+##      밝은 부분이 섞인다.
+func judge_hud_font() -> bool:
+	# update_hud() 가 매 프레임 `hud_over.visible = (state == OVER)` 를 다시 쓴다.
+	# 판정 중에는 그것을 멈춰야 한다 — 안 그러면 라벨을 켜 두어도 다음 프레임에
+	# 꺼져 잉크가 0 이 된다(실측: 첫 판이 그래서 떨어졌다).
+	_main.judging = true
+	var labels := {
+		"Label": _main.hud, "Timer": _main.hud_timer,
+		"Board": _main.hud_board, "Over": _main.hud_over,
+	}
+	# ① 폰트 출처
+	var src_ok := true
+	for k in labels:
+		var f: Font = (labels[k] as Label).get_theme_font("font")
+		var p := "" if f == null else f.resource_path
+		if p != HUD_FONT_PATH:
+			src_ok = false
+			print("JUDGE 5 T8 %s 의 폰트가 번들본이 아니다: '%s'" % [k, p])
+	# ② 글리프 커버리지
+	var font: Font = (labels["Label"] as Label).get_theme_font("font")
+	var shown := ""
+	for k in labels:
+		shown += str((labels[k] as Label).text)
+	var need := SPEC_HUD_CHARS + shown
+	# ②-b HUD 가 실제로 한글을 그리고 있는가. ①~③ 은 폰트만 보므로, 문구를 통째로
+	# 영문으로 되돌린 빌드(= §21 이전 상태)가 전부 통과한다 — 그것도 회귀다.
+	var kr := {}
+	for i in shown.length():
+		if SPEC_HUD_CHARS.contains(shown[i]):
+			kr[shown[i]] = true
+	var kr_ok: bool = kr.size() >= HUD_KR_MIN
+	if not kr_ok:
+		print("JUDGE 5 T8 HUD 에 한글이 %d 자뿐이다(>= %d 이어야 한다)" % [kr.size(), HUD_KR_MIN])
+	var missing := ""
+	if font != null:
+		for i in need.length():
+			var c := need.unicode_at(i)
+			if c > 32 and not font.has_char(c) and not missing.contains(need[i]):
+				missing += need[i]
+	var glyph_ok: bool = font != null and missing.is_empty()
+	if not glyph_ok:
+		print("JUDGE 5 T8 글리프 없음: '%s'" % missing)
+	# ③ 잉크
+	var over: Label = labels["Over"]
+	var kept := str(over.text)
+	over.visible = true
+	over.text = SPEC_HUD_CHARS
+	var with_ink := await capture("hud_kr")
+	over.text = ""
+	var blank := await capture("hud_blank")
+	over.text = kept
+	var rect := over.get_global_rect()
+	var ink := 0
+	var x0 := maxi(int(rect.position.x), 0)
+	var y0 := maxi(int(rect.position.y), 0)
+	var x1 := mini(int(rect.end.x), with_ink.get_width())
+	var y1 := mini(int(rect.end.y), with_ink.get_height())
+	for y in range(y0, y1):
+		for x in range(x0, x1):
+			if with_ink.get_pixel(x, y).is_equal_approx(blank.get_pixel(x, y)):
+				continue
+			ink += 1
+	var ink_ok: bool = ink >= HUD_INK_MIN
+	print("JUDGE 5 T8: 폰트출처=%s 글리프=%s 한글=%d(>=%d) 잉크=%d(>=%d) 영역=%dx%d"
+		% [pf(src_ok), pf(glyph_ok), kr.size(), HUD_KR_MIN, ink, HUD_INK_MIN,
+		   x1 - x0, y1 - y0])
+	return src_ok and glyph_ok and kr_ok and ink_ok
 ```
 
 ### 이 판정기의 유효 전제 (1b 확장 시 반드시 손봐야 할 곳)
@@ -3781,6 +4370,8 @@ C:\vibecoding\holeio\
     city.gd             (§13 전문, 3b — 절차적 도시 배치)
   shaders/
     ground_hole.gdshader (§4-A 전문)
+  tools/
+    web_judge.mjs       (§24 — 브라우저 판정 하네스. build/ 정적 서빙 + 판정 결과 수집)
   assets/                (Quaternius 클래식 팩, CC0 — §1-A. OBJ+MTL 76모델, 9.4MB)
     cars/ buildings/ simplebuildings/ streets/ transport/ nature/
   shots/                 (판정 산출물, screenshot.gd 가 자동 생성)
@@ -4071,6 +4662,9 @@ const LANE_GAP := 0.75
 const PLAZA_R := 26.0
 ## 오브젝트 사이에 두는 최소 여유(월드 단위).
 const GAP := 0.3
+## 블록 내부 산포 반경의 상한. 실제 반경은 블록의 사용 가능 구간에서 유도하고
+## 이 값으로 자른다(§22 — plan_block 참조).
+const SPREAD_MAX := 8.5
 
 @export var city_seed := 20260728
 @export var enabled := true
@@ -4132,8 +4726,10 @@ const CATALOG := [
 	{ "path": "res://assets/transport/TrafficCone.obj", "scale": 0.6, "zone": "road" },
 ]
 
-## 콜라이더 XZ 를 딸 밑동의 높이 비율. 나무의 몸통은 잡고 가지는 놓아준다.
+## 콜라이더 XZ 를 딸 밑동의 높이 비율. 아래 35% 는 밑동 셰이프, 나머지는 수관 셰이프다.
 const BASE_FRAC := 0.35
+## 수관 셰이프를 다는 기준. 전체 반폭이 밑동 반폭의 이 배 이상이면 "가지가 있다".
+const CANOPY_RATIO := 1.5
 
 var _mesh_cache := {}
 var _r_cache := {}
@@ -4258,9 +4854,21 @@ func plan_block(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
 	var c := Vector3((sx.x + sx.y) * 0.5, 0.0, (sz.x + sz.y) * 0.5)
 	if rng.randf() < 0.45:
 		add_slot(rng, c, "block", out, "", 3.5)
+	# 산포 반경을 **사용 가능 구간에서 유도한다**(§22). 상수 8.5 를 그대로 쓰면 대로가
+	# 붙은 블록(반폭 7.95)에서 축당 6.5% 의 시도가 구간 밖으로 나가 add_slot 이 조용히
+	# 거절한다 — 지도의 92%(196블록 중 180)가 그런 블록이라 그만큼 덜 찬다.
+	# 구간 반폭을 그대로 쓰지 않고 상한을 씌우는 이유: 이 값은 **중심**의 범위이고
+	# 에셋에는 폭이 있어서, 구간 끝까지 벌리면 가장자리 시도가 폭만큼 거절된다.
+	#
+	# **이 변경은 도시 전체를 다시 흔든다.** 산포 반경이 달라진 블록에서 add_slot 이
+	# 고르는 후보가 달라지고, 후보 수에 따라 난수 소비량이 달라져 그 뒤의 시드 흐름이
+	# 통째로 어긋나기 때문이다. 대로가 안 붙은 블록(16개)의 산포 반경은 8.5 그대로인데도
+	# 블록당 프롭이 6.38 → 5.69 로 바뀐 것이 그 증거다(실측). 계측 결과는 §22 에 있다.
+	var spread := Vector2(minf(SPREAD_MAX, (sx.y - sx.x) * 0.5),
+		minf(SPREAD_MAX, (sz.y - sz.x) * 0.5))
 	for _i in 16:
-		add_slot(rng, c + Vector3(rng.randf_range(-8.5, 8.5), 0.0,
-			rng.randf_range(-8.5, 8.5)), "block", out)
+		add_slot(rng, c + Vector3(rng.randf_range(-spread.x, spread.x), 0.0,
+			rng.randf_range(-spread.y, spread.y)), "block", out)
 
 
 ## 보도: 블록 네 변의 중앙선 위에 일정 간격으로 놓는다.
@@ -4491,10 +5099,24 @@ func make_prop(it: Dictionary, idx: int) -> RigidBody3D:
 	var base := base_extent(it["path"], ab)
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(base.x * 2.0 * s, ab.size.y * s, base.y * 2.0 * s)
+	box.size = Vector3(base.x * 2.0 * s, ab.size.y * s * BASE_FRAC, base.y * 2.0 * s)
 	cs.shape = box
-	cs.position = Vector3(base.z * s, ab.size.y * s * 0.5, base.w * s)
+	cs.position = Vector3(base.z * s, ab.size.y * s * BASE_FRAC * 0.5, base.w * s)
 	body.add_child(cs)
+
+	# 수관: 밑동보다 확연히 넓은 모델(나무 등)은 **위쪽에 셰이프를 하나 더** 단다(§23).
+	# §17 은 이것을 달 수 없었다 — 그때는 크기 게이트가 콜라이더의 외접반경을 보고
+	# 있어서, 수관을 달면 나무가 통째로 거절됐다. 이제 구멍 둘레에 물리적 림이 있고
+	# 통과 여부를 물리가 정하므로, 수관은 **가지가 림에 걸리는** 진짜 이유가 된다.
+	var top_half := Vector2(ab.size.x, ab.size.z) * 0.5 * s
+	if maxf(top_half.x, top_half.y) >= maxf(base.x, base.y) * s * CANOPY_RATIO:
+		var cc := CollisionShape3D.new()
+		var cbox := BoxShape3D.new()
+		cbox.size = Vector3(top_half.x * 2.0, ab.size.y * s * (1.0 - BASE_FRAC),
+			top_half.y * 2.0)
+		cc.shape = cbox
+		cc.position = Vector3(0.0, ab.size.y * s * (1.0 + BASE_FRAC) * 0.5, 0.0)
+		body.add_child(cc)
 
 	# 질량은 부피 비례. pull() 이 mass 를 곱하므로 가속도가 크기와 무관해진다.
 	var vol: float = ab.size.x * ab.size.y * ab.size.z * s * s * s
@@ -4701,7 +5323,9 @@ func choose_target() -> Node3D:
 	for o in get_tree().get_nodes_in_group("swallowable"):
 		if not is_instance_valid(o) or o.falling:
 			continue
-		if not _hole.can_swallow(float(o.radius)):
+		# 척도는 좁은 쪽 반폭이다(§23) — 외접반경으로 고르면 원 안에 들어가는
+		# 길쭉한 물체를 AI 가 통째로 무시한다.
+		if not _hole.can_swallow(float(o.fit_radius)):
 			continue
 		var d2: float = flat_dist(o.global_position, _hole.global_position)
 		if d2 < sight and d2 < bd:
@@ -5306,6 +5930,8 @@ godot --rendering-driver opengl3 --path . -- --judge…
 
 **아홉 종 전부 PASS.** 착시(H1·H2·H7·H8), 도시 지면(D1~D6), 흡입·성장·아레나·게임루프·수관 걸림이 전부 성립한다.
 
+> **이 초록은 §23 뒤로 재현되지 않았다.** §23이 우물·림을 갈아엎고 이 Compatibility 회귀를 다시 돌리지 않아, 1a가 H6에서 탈락한 채로 남아 있었다(§24에서 발견·처분). 백엔드를 하나 더 돌리기로 한 규율은 **바꿀 때마다** 지켜야 의미가 있다.
+
 | | Forward+ | Compatibility |
 |---|---|---|
 | 판정 아홉 종 | 전부 PASS | **전부 PASS** |
@@ -5357,6 +5983,7 @@ Forward+ 아홉 종 · Compatibility 아홉 종 전부 PASS. `RESTART_PROPS`를 
 
 - **브라우저에서 실제로 도는 것은 여전히 판정하지 않는다.** `--rendering-driver opengl3`는 같은 렌더링 백엔드를 쓸 뿐, WASM·emscripten·브라우저 합성은 재현하지 않는다. 웹 전용 결함(§21의 폰트 폴백 같은 것)은 설정·자원을 직접 읽어 잡는 수밖에 없다.
 - ~~한글 HUD가 브라우저에서 그려지는지 눈으로도 확인하지 못했다.~~ → **2026-07-29 유저가 배포본에서 육안 확인했다("한글 HUD도 잘 보임").** 기계 판정은 여전히 데스크톱까지다(T8) — 브라우저에서 그려진다는 것은 이 육안 확인 하나가 근거다.
+> → **둘 다 §24에서 해소됐다.** 판정 아홉 종이 실제 Chrome 안에서 돌고, T8은 WebGL2 프레임버퍼에서 잉크 2515픽셀을 센다.
 
 ---
 
@@ -5451,6 +6078,8 @@ func rim_faces() -> PackedVector3Array:
 
 판정 **아홉 종 전부 PASS**. 3c 성능 dense 2.03ms(494fps) · boul 1.88ms(532fps) — 림 트라이메시(구멍당 96삼각형)는 계측에 나타나지 않는다.
 
+> **이 초록에 구멍이 둘 있었다(§24에서 드러남).** ① Forward+ 판정 2가 실제로는 FAIL이다 — C2가 크기 게이트 시절의 전제 위에 서 있었는데 §23이 그 게이트를 걷어냈다. ② Compatibility 회귀를 돌리지 않아 1a의 H6 탈락을 놓쳤다. 둘 다 §24에서 고쳤다. **"전부 PASS"는 그것을 적은 시점에 실제로 아홉 종을 다 돌렸을 때만 참이다.**
+
 **게임에 미치는 영향**: 같은 물체를 훨씬 작은 구멍으로 먹는다. 차량 5.05 → 2.27, 검은 돌 2.42 → 1.09, 대형 건물 18.17 → 8.18. 나무는 반대로 수관이 걸려 늦어진다(밑동 1.83 → 수관 2.7~4.4).
 
 ### 남긴 한계
@@ -5459,3 +6088,159 @@ func rim_faces() -> PackedVector3Array:
 - **림은 평평한 판이라 우물 벽이 없다.** 빠진 물체는 벽을 긁지 않고 자유낙하한다. 벽을 세우면 구멍이 자랄 때 벽에 낀 물체를 밀어내야 해서, 지금은 두지 않았다.
 - **구멍이 떠난 자리의 낙하물은 지면 아래에서 끌려온다.** 보이지 않는 자리라 눈에 띄지 않지만, 물리적으로는 지면을 통과해 이동한다.
 - **`snag_*`·`swallow_ratio` 계열이 규격에서 사라졌다.** `swallow_ratio`는 AI 목표 선정용 조언으로만 남았다.
+
+---
+
+## §24. 브라우저에서 판정을 돌린다 (구현·검증 완료, rev.23)
+
+§22가 남긴 한계가 그대로 남아 있었다 — **"브라우저에서 실제로 도는 것은 여전히 판정하지 않는다."** `--rendering-driver opengl3`는 같은 렌더링 백엔드를 쓸 뿐 WASM·emscripten·브라우저 합성을 재현하지 않는다. 그래서 한글 HUD가 브라우저에서 그려진다는 근거는 **유저 육안 확인 하나**였고, 그것이 이 프로젝트에 남은 마지막 "눈으로 본 것" 이었다.
+
+이제 **판정 아홉 종이 전부 실제 Chrome 안에서 돈다.** 그중 여덟이 게이트이고, 3c(성능)는 브라우저에서 게이트가 될 수 없어 계측만 한다(아래 따로).
+
+### 브라우저에는 명령줄이 없다
+
+판정은 `OS.get_cmdline_user_args()`에서 이름을 받는다. 브라우저에는 그것이 없다 — 그래서 웹 판정 횟수가 0이었다. 쿼리 문자열을 같은 자리로 옮긴다.
+
+```gdscript
+	if OS.has_feature("web"):
+		var q := str(JavaScriptBridge.eval("window.location.search", true))
+```
+
+`?judge=6` → `--judge6`, `?judge=` → `--judge`. 쿼리는 **외부 입력**이므로 `JUDGE_ORDER` 화이트리스트를 거친 것만 분기로 들어간다. 그 상수는 화이트리스트이자 **고르는 우선순위**다 — 인자가 둘 이상 들어와도 도는 판정은 하나인데, 분기와 하네스 보고가 각자 고르면 "판정 A의 결과" 자리에 판정 B의 결과가 기록된다. 고르는 자리를 `judge_flag()` 하나로 뒀다.
+
+### 결과가 오지 않는 것을 통과로 읽지 않는다
+
+데스크톱 판정은 종료 코드로 결과를 낸다. 브라우저에는 종료 코드가 없다. Godot의 `print`는 `console.log`로 나가므로(엔진의 `onPrint`가 **호출 시점에** `console.log`를 찾는다 — 나중에 감싸도 걸린다) 그것을 감싸 판정 줄을 전부 모으고, `JUDGE RESULT ->`를 보는 순간 하네스(`tools/web_judge.mjs`)로 되돌려 보낸다.
+
+**이 판정의 가장 큰 위험은 페이지가 안 뜬 것이 "지적사항 없음"으로 둔갑하는 것이다.** 하네스는 신호가 도착해야만 판정을 마치고, 오지 않으면 `FAIL(무응답)`으로 끝난다. 판정이 결과 줄을 내지 못하고 죽는 길(`setup()` 실패 등)도 침묵으로 남지 않게, `quit` 요청 뒤에도 끝까지 도는 그 프레임에서 판정기가 대신 FAIL을 낸다.
+
+하네스는 정적 서버를 겸한다. `Cache-Control: no-store` — 다시 익스포트한 빌드를 브라우저가 옛 wasm/pck로 대신하면 **고장 주입이 통과해 버린다.** 시간 초과는 전체가 아니라 **판정 하나마다** 잰다(전체에 한 번 걸면 앞 판정이 길어질수록 뒤 판정의 예산이 줄어 같은 빌드가 실행마다 다른 결과를 낸다). 판정이 끝난 페이지는 `/next`로 돌아오고 서버가 다음 판정으로 302한다 — 브라우저는 처음 한 번만 띄우면 아홉 종이 이어서 돈다.
+
+### 판정기가 세 곳에서 어긋나 있었다 — 둘은 이미 red였다
+
+**§23·§22가 "전부 PASS"로 적어 둔 것이 지금 재현되지 않는다.** 브라우저 판정이 그 둘을 끌어냈다. 아래 ②·③은 `main`을 그대로 받아 돌려도 탈락한다(pristine HEAD 실측). 새 환경에서 판정을 돌린다는 것은 **기존 판정이 무엇을 근거로 초록이었는지** 다시 묻는 일이기도 했다.
+
+**① H10 — 기대값이 실행 플랫폼의 함수다.** `rendering_method`를 무조건 `forward_plus`로 단언하고 있었다. 웹 익스포트본에서 그 키는 `gl_compatibility`로 읽히므로 **정상 빌드가 탈락했다.** 데스크톱에서는 관측할 수 없는 사실이다. 웹에서는 기대값을 `gl_compatibility`로 바꾸고, 대신 **런타임 렌더러까지** 단언한다 — 설정만 보는 것보다 강하다.
+
+**② C2 — 없어진 게이트 위에 서 있던 기준.** (③ H6은 아래 따로) `main`이 이미 red였다(실측: 데스크톱 단독 2회, 브라우저 1회 모두 같은 값으로 FAIL). §23이 크기 게이트를 걷어내기 전, C2는 "1차(소형 흡입)가 끝날 때까지 대형이 하나도 안 사라진다"를 단언했다. 게이트가 있던 시절에는 대형이 **반경과 무관하게** 거절되었으므로 그것이 참이었다. 게이트가 사라진 뒤로는 1차에서 구멍이 2.3 → 5.79로 자라고, 소형 (11,−4)로 가는 경로가 대형 (16,−2)에서 5.4m까지 접근한다 — 거절 반경 2.83을 한참 넘긴 구멍이 그것을 삼키는 것은 **규격대로다.** 기준이 물리가 아니라 **픽스처 배치라는 우연**에 기대고 있었다.
+
+고친 자리는 "언제 묻는가"다.
+
+| 구간 | 묻는 것 |
+|---|---|
+| 0차 (반경 고정 2.3) | 거절 규격 물체가 전부 살아 있는가 — **여기서 묻는다** |
+| 1차 (2.3 → 5.79로 성장) | `gate_breaches`가 **매 물리 프레임** 반경과 물체를 그때그때 비교한다 |
+| 2차 (성장 후) | 이제 열리는가 (`left == 0`) |
+
+분류도 셋으로 갈랐다. 통과 규격(XZ 외접반경 < R) 6개 · 거절 규격(통과반경 > R) 2개 · **회색 지대 0개** — §23이 "단언하지 않는다"고 못 박은 구간에 픽스처가 하나도 없다는 것을 판정기가 매번 보고한다. 어느 한쪽이 비면(`c2set`) 시나리오가 조용히 아무것도 시험하지 않는 것이므로 그 상태를 통과로 읽지 않는다.
+
+### ③ H6 — 자기가 이름 붙인 결함을 잡지 못하고 있었다
+
+브라우저 아홉 종이 전부 통과한 뒤, §22가 세운 규율("배포본과 같은 백엔드로도 돌려라")대로 데스크톱 `--rendering-driver opengl3`를 다시 돌렸다. **1a가 탈락했다 — H6.** `main`도 똑같이 탈락한다(pristine HEAD 실측). §23이 우물·림을 갈아엎고 §22의 Compatibility 회귀를 다시 돌리지 않은 것이다. **두 번째 stale green이다.**
+
+H6은 `|중심 휘도 − 배경 휘도| ≥ 0.03` — "구멍 안이 배경이 비쳐 보이는 구멍이 아닌가"를 묻는다. 정상 빌드의 실측은 이렇다.
+
+| 백엔드 | 중심 | 배경 | 차 | H6 |
+|---|---|---|---|---|
+| Forward+ | 0.1548 | 0.2115 | 0.0567 | 통과 |
+| 브라우저 WebGL2 | 0.1817 | 0.0905 | 0.0912 | 통과 |
+| 데스크톱 opengl3 | 0.1817 | 0.1849 | **0.0032** | **탈락** |
+
+세 값에서 움직인 것은 **배경 휘도뿐**이다. 같은 빌드·같은 렌더링 백엔드인데 클리어 색이 데스크톱과 브라우저에서 다르게 읽힌다.
+
+**표본 좌표가 틀린 것은 아니다.** `bg=(50,2)`는 화면 꼭대기의 하늘이고, 저장된 프레임을 판정기 밖에서 직접 읽어도 같은 값이 나온다(`shot.png (50,2) = RGB 46,47,52` → 0.1846). 재는 자리가 아니라 **렌더된 하늘과 우물 안의 휘도가 실제로 붙어 있다.**
+
+여기서 임계를 낮추고 싶어지는데, **먼저 물어야 할 것은 "이 기준이 무엇을 잡는가"** 였다. 우물 메시를 숨겨 배경이 원반 안으로 그대로 비치게 하는 주입 — H6이 이름 붙인 바로 그 결함 — 을 넣었다.
+
+```
+JUDGE hole0 lum c=0.0905 g=0.6396 bg=0.2115 dRing=0.0000 dCB=0.1210
+JUDGE hole0 H1=P H2=F H6=P H7=F H8=P H9=P -> FAIL      (leak=1862/2)
+```
+
+**H6은 통과했다.** 두 백엔드 모두에서. 그 프레임에서 중심은 0.0905로 읽히는데 꼭대기 하늘은 0.2115다 — 같은 배경인데 두 자리의 값이 다르다. **왜 다른지는 규명하지 않았다**(여기서 더 파는 것은 이 절의 목적이 아니다). 다만 그 차이가 있는 한 "중심 == 배경"은 성립하지 않고, H6은 배경이 그대로 비치는 프레임을 통과시킨다. 잡은 것은 **H7**(마젠타 누출 1862/2)과 **H2**(내부 그라디언트 0.0000)다.
+
+그래서 H6은 **완화가 아니라 폐기**다(H3와 같은 처분, 같은 이유). 같은 질문의 강한 판본이 이미 있다 — H7은 배경을 마젠타로 바꿔 놓고 원반 안의 마젠타를 센다. 마젠타는 어떤 씬 팔레트와도 겹치지 않으므로 우물 색을 바꿔도, 백엔드를 바꿔도 흔들리지 않는다. 값은 진단용으로 계속 찍는다.
+
+### 주석이 또 고장 주입에 반증당했다
+
+H10을 고치며 "익스포트가 `.web` 오버라이드를 기본 키에 적용해서 웹에서는 그 키가 `gl_compatibility`로 읽힌다"고 근거를 적었다. **주입 4가 그것을 반증했다**: `.web`을 `forward_plus`로 바꾼 빌드에서도 기본 키는 그대로 `gl_compatibility`였다(설정=gl_compatibility, 웹=forward_plus). 오버라이드가 적용된 것이 아니라 **익스포터가 웹 기본값을 그 키에 써 넣는다 — 두 키는 독립이다.**
+
+§13의 `start_frozen`, §18의 성능 지점, §22의 산포 반경에 이어 **네 번째로 그럴듯한 근거가 실측에 뒤집혔다.** 이번에도 커밋 전에 잡혔고, 잡은 것은 고장 주입이다.
+
+### 고장 주입 5종 — 전부 검출
+
+| # | 주입 | 결과 |
+|---|---|---|
+| 1 | 브라우저를 아예 안 띄운다 | 하네스 `FAIL(무응답)` · exit 1 — **무응답이 통과로 새지 않는다** |
+| 2 | HUD를 시스템 폰트(Malgun Gothic)로 바꾸고 T8①(폰트 출처)을 무력화 | **데스크톱 PASS(잉크 2590) / 브라우저 FAIL** — 글리프=F, 규격 26자 전부 없음 |
+| 3 | 림 바닥판을 비운다 | 판정 2 C2 FAIL — 거절생존=F(0/2) · `gate_violations=11` |
+| 4 | `rendering_method.web`을 `forward_plus`로 | 브라우저 H10 FAIL — 실행 렌더러가 실제로 `forward_plus`로 떴다 |
+| 5 | 우물 메시를 숨긴다(배경이 원반 안으로 비친다) | H7 FAIL(leak 1862/2 · 1856/2) · H2 FAIL — **두 백엔드 모두. H6은 통과했다** |
+
+**주입 2가 이 절의 존재 이유다.** 데스크톱은 Windows에 Malgun Gothic이 있어 한글을 멀쩡히 그린다 — 화면을 봐도, T8③(잉크)을 재도 결함이 안 보인다. 브라우저에는 시스템 폰트 폴백이 없다.
+
+그리고 그 브라우저 실행에서 **잉크는 2312로 통과했다.** 폴백이 두부(tofu) 상자를 그려 픽셀을 남기기 때문이다. 잡은 것은 T8②(글리프 커버리지)다 — **"글자가 보이는가"를 잉크로만 물으면 두부를 통과시킨다.**
+
+주입 3은 §23의 주입 1과 같은 고장이지만 기준이 바뀌었으므로 다시 주입했다. 옛 c2a가 잡던 "무조건 삼키는 빌드"를 새 기준도 **두 갈래로** 잡는다(0차 생존 + 매 프레임 감시).
+
+### 계측 — 브라우저 대 데스크톱
+
+| | 데스크톱 Forward+ | 데스크톱 Compatibility | **브라우저(Chrome 150 / WebGL2)** |
+|---|---|---|---|
+| 판정 | 아홉 종 전부 PASS | 아홉 종 전부 PASS(§24에서 재실측 — §22의 초록은 §23 뒤로 깨져 있었다) | **게이트 여덟 종 전부 PASS** (3c는 계측) |
+| T8 잉크 | 2568 | — | **2515** (규격 하한 640) |
+| T8 한글 음절 | 21 | — | **21** (하한 10) |
+| 판정 6 tree 최저 y | −3.00 | — | **−3.00** (프레임 수까지 동일: 55/82/87) |
+| 3c dense draws | 2527 | — | **10102** |
+| 3c dense avg | 1.99ms | 5.31ms | **16.67ms (60fps — rAF 상한)** |
+
+물리는 WASM에서 **프레임 단위로 같은 값**을 낸다(판정 6의 삼킴 프레임 55·82·87이 §23의 데스크톱 표와 일치). 한글 HUD는 이제 육안이 아니라 **WebGL2 프레임버퍼에서 센 잉크 2515픽셀**이 근거다.
+
+### 3c는 브라우저에서 게이트가 아니다
+
+브라우저는 `requestAnimationFrame`으로 루프를 묶는다. `window_set_vsync_mode(VSYNC_DISABLED)`도 `Engine.max_fps = 0`도 그 위에서는 효력이 없다. 그래서 avg가 정확히 **16.67ms = 60fps**로 나온다 — 이것은 여유분이 아니라 **모니터 주사율**이다. 예산 16.67ms와 그 값이 우연히 같아서, F1은 사실상 동전 던지기가 된다.
+
+**같은 빌드를 두 번 돌려 그것을 실제로 봤다.**
+
+| 실행 | dense avg | F1 | 결과 |
+|---|---|---|---|
+| 1회차 | 16.67ms | P | PASS |
+| 2회차 (같은 커밋·같은 익스포트본) | **16.72ms** | **F** | **FAIL** |
+
+0.05ms 차이로 판정이 뒤집힌다. 144Hz 화면에서는 6.9ms로 거저 통과하고, 50Hz 화면에서는 20ms로 결함 없이 탈락한다. **재는 사람의 모니터가 결과를 정하는 수는 게이트가 될 수 없다.**
+
+그래서 브라우저의 3c는 **계측만 한다** — `--expect` 목록에 넣지 않는다. 데스크톱 3c는 그대로 게이트로 남는다(vsync를 실제로 끌 수 있다). 여기서 읽을 것은 avg가 아니라 **worst**다: dense 20.10~30.70ms · boul 17.10~19.40ms — 60fps 주기의 2배(F2 예산) 안이므로 프레임을 흘리고 있지는 않다. 드로우콜이 데스크톱의 4배(10102 대 2527)인 것도 이 표의 소득이다.
+
+### 이 문서의 코드 블록도 어긋나 있었다 — 열 중 여덟
+
+세 번째 stale green은 문서 자신이었다. 이 문서는 서두에서 **"이 문서의 모든 코드 블록은 그 파일들과 바이트 단위로 동일하다(기계 대조 — rev.16에서 12개 파일 전부 재확인)"** 고 단언한다. §24에서 대조해 보니 **열 블록 중 여덟이 어긋나 있었다.**
+
+| 블록 | 문서 | 파일 |
+|---|---|---|
+| `scripts/screenshot.gd` | 2110줄 | **2612줄** |
+| `scripts/main.gd` | 344줄 | 372줄 |
+| `scripts/city.gd` | 479줄 | 510줄 |
+| `scripts/swallowable.gd` | 72줄 | **136줄** |
+| `scenes/main.tscn` | 130줄 | 111줄 |
+| `scenes/hole.tscn` | 38줄 | 48줄 |
+| `scripts/hole_ai.gd` · `project.godot` | 114 · 30줄 | 116 · 32줄 |
+
+rev.16 이후의 §17~§23이 파일만 고치고 문서의 사본을 두고 갔다. **손으로 지키는 규율은 이렇게 조용히 깨진다** — 이 절이 판정기에 대해 말한 것과 같은 이야기다. 그래서 사람이 아니라 기계가 확인하게 했다.
+
+```powershell
+pwsh tools/sync_plan_blocks.ps1          # 대조 (어긋나면 exit 1)
+pwsh tools/sync_plan_blocks.ps1 -Fix     # 문서를 파일에 맞춘다
+```
+
+열 블록을 전부 맞췄고, 대조가 `어긋난 블록 0개 / 전체 10개`로 끝난다. **코드를 고친 커밋에서는 이것을 돌린다.**
+
+### 회귀
+
+**데스크톱 Forward+ 아홉 종 · 데스크톱 Compatibility 아홉 종 · 브라우저 게이트 여덟 종 — 스물여섯 번 전부 PASS.** 배포본에는 판정 코드가 이미 실려 있었고(§20 이후 픽스처만 판정 모드에 갇혀 있다), §24가 더한 것은 **트리거**뿐이다 — 쿼리가 없으면 `_ready`가 즉시 돌아가 아무 일도 하지 않는다. 자동 이동(`/next`)은 `127.0.0.1`/`localhost`에서만 도므로, 배포본에 `?judge=`를 붙여 연 사람을 있지도 않은 경로로 보내지 않는다.
+
+### 남긴 한계
+
+- **브라우저 하나·기계 하나에서만 돌렸다.** Chrome 150 / Windows / RTX 4060 Ti다. Firefox·Safari·모바일 GPU는 여전히 판정 밖이고, 특히 Safari의 WebGL2와 모바일의 정밀도 차이는 이 판정이 아무것도 말해 주지 않는다.
+- **브라우저를 띄우는 것은 자동화되지 않았다.** 하네스는 URL을 열어 주지 않는다 — 사람이든 스크립트든 한 번은 띄워야 한다. 대신 그 한 번 뒤로는 아홉 종이 스스로 이어진다.
+- **3c는 게이트가 아니다**(위 참조). 브라우저에서 성능 여유분을 재려면 rAF 밖의 계측 수단이 필요하다.
+- **판정 스크린샷이 남지 않는다.** `save_png`는 브라우저에서도 `err=0`을 돌려주지만(실측 — "익스포트본의 `res://`는 읽기 전용이라 실패할 것"이라는 예상은 틀렸다) 그 파일은 브라우저의 메모리 파일시스템에 있고 새로고침과 함께 사라진다. 판정은 이미지를 메모리에서 재므로 결과에는 영향이 없지만, **데스크톱과 달리 나중에 열어 볼 그림이 없다.** 어긋난 자리를 눈으로 대조하려면 그 판정을 데스크톱에서 다시 돌려야 한다.
