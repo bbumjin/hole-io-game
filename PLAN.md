@@ -5483,7 +5483,9 @@ func flat_dist(a: Vector3, b: Vector3) -> float:
 
 - **저장소**: https://github.com/bbumjin/hole-io-game
 - **플레이**: https://hole-io-game-delta.vercel.app (Vercel 프로덕션)
-- GitHub Pages(`gh-pages` 브랜치)에도 같은 빌드를 올려 두었다 — 예비 경로다.
+- GitHub Pages 는 **폐기했다**(2026-07-29). `gh-pages` 브랜치가 stale 한 옛 빌드를 계속
+  서빙하고 있었다 — 브랜치를 지웠고 `bbumjin.github.io/hole-io-game` 은 404 다.
+  배포 경로는 Vercel 하나뿐이다.
 
 **웹은 Forward+ 를 지원하지 않는다**(WebGL2 = Compatibility 뿐). `project.godot` 에 `rendering_method.web="gl_compatibility"` 오버라이드를 두었다. 그 렌더러에서도 착시가 성립하는 것을 **실측으로 확인했다** — `--rendering-driver opengl3` 로 1a 판정을 돌려 H1·H2·H7·H8(`rim_aa=16/32`)·H9 가 전부 통과했다. 데스크톱 Forward+ 의 `rim_aa` 는 13~18 이므로 엣지 품질도 같은 수준이다.
 

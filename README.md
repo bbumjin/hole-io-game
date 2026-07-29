@@ -78,8 +78,8 @@ pwsh tools/sync_plan_blocks.ps1 -Fix     # 문서를 파일에 맞춘다
 & $GODOT --headless --path . --export-release "Web" build/index.html
 ```
 
-스레드를 쓰지 않는 변형으로 내보내므로 `COOP`/`COEP` 헤더가 필요 없다 — GitHub Pages
-같은 헤더 설정이 불가능한 정적 호스팅에서도 그대로 돈다.
+스레드를 쓰지 않는 변형으로 내보내므로 `COOP`/`COEP` 헤더가 필요 없다 — 헤더 설정이
+불가능한 정적 호스팅에서도 그대로 돈다.
 
 ### 브라우저에서 판정을 돌린다 (§24)
 
