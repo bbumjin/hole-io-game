@@ -102,8 +102,10 @@ const CATALOG := [
 	{ "path": "res://assets/transport/TrafficCone.obj", "scale": 0.6, "zone": "road" },
 ]
 
-## 콜라이더 XZ 를 딸 밑동의 높이 비율. 나무의 몸통은 잡고 가지는 놓아준다.
+## 콜라이더 XZ 를 딸 밑동의 높이 비율. 아래 35% 는 밑동 셰이프, 나머지는 수관 셰이프다.
 const BASE_FRAC := 0.35
+## 수관 셰이프를 다는 기준. 전체 반폭이 밑동 반폭의 이 배 이상이면 "가지가 있다".
+const CANOPY_RATIO := 1.5
 
 var _mesh_cache := {}
 var _r_cache := {}
@@ -473,10 +475,24 @@ func make_prop(it: Dictionary, idx: int) -> RigidBody3D:
 	var base := base_extent(it["path"], ab)
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	box.size = Vector3(base.x * 2.0 * s, ab.size.y * s, base.y * 2.0 * s)
+	box.size = Vector3(base.x * 2.0 * s, ab.size.y * s * BASE_FRAC, base.y * 2.0 * s)
 	cs.shape = box
-	cs.position = Vector3(base.z * s, ab.size.y * s * 0.5, base.w * s)
+	cs.position = Vector3(base.z * s, ab.size.y * s * BASE_FRAC * 0.5, base.w * s)
 	body.add_child(cs)
+
+	# 수관: 밑동보다 확연히 넓은 모델(나무 등)은 **위쪽에 셰이프를 하나 더** 단다(§23).
+	# §17 은 이것을 달 수 없었다 — 그때는 크기 게이트가 콜라이더의 외접반경을 보고
+	# 있어서, 수관을 달면 나무가 통째로 거절됐다. 이제 구멍 둘레에 물리적 림이 있고
+	# 통과 여부를 물리가 정하므로, 수관은 **가지가 림에 걸리는** 진짜 이유가 된다.
+	var top_half := Vector2(ab.size.x, ab.size.z) * 0.5 * s
+	if maxf(top_half.x, top_half.y) >= maxf(base.x, base.y) * s * CANOPY_RATIO:
+		var cc := CollisionShape3D.new()
+		var cbox := BoxShape3D.new()
+		cbox.size = Vector3(top_half.x * 2.0, ab.size.y * s * (1.0 - BASE_FRAC),
+			top_half.y * 2.0)
+		cc.shape = cbox
+		cc.position = Vector3(0.0, ab.size.y * s * (1.0 + BASE_FRAC) * 0.5, 0.0)
+		body.add_child(cc)
 
 	# 질량은 부피 비례. pull() 이 mass 를 곱하므로 가속도가 크기와 무관해진다.
 	var vol: float = ab.size.x * ab.size.y * ab.size.z * s * s * s

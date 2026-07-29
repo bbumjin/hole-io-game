@@ -60,6 +60,12 @@ const SPEC_START_R := 1.5
 ## 이 시나리오들이 묻는 것은 "흡입·성장 파이프라인이 규격대로 도는가" 이지
 ## "시작 반경이 얼마인가" 가 아니므로, 픽스처를 고정하는 편이 옳다.
 const FIXTURE_R := 5.0
+## 2단계의 "거절 → 성장 → 통과" 시나리오가 쓰는 반경(§23).
+## 물리가 통과를 정하게 된 뒤로는 **구멍 지름과 물체 폭**의 관계가 곧 규격이다.
+## 2.3 은 소형 픽스처는 눕히지 않고도 통과시키고(XZ 외접반경 1.838 < 2.3), 대형은
+## 어떤 자세로도 막는다(통과 반경 2.828 > 2.3).
+## 소형 6개를 삼키면 R = sqrt(2.3^2 + 6*1.838^2) = 5.06 으로 자라 대형도 열린다.
+const GATE_R := 2.3
 const MIN_PROPS := 300                             # E1: 도시가 실제로 생성됐는가
 ## E7a: 대로 규격에서만 가능한 자리에 선 프롭의 하한. 실측값의 절반이다.
 ## **이 하한이 잡는 것은 "위계가 통째로 사라졌는가"(그때 0 이 된다) 하나뿐이다.**
@@ -91,8 +97,12 @@ const MIN_ELEV := deg_to_rad(30.0)
 const SPEC_BITE_RATIO := 1.05
 const SPEC_BITE_DEPTH := 0.8
 ## G7: AI 구멍이 자유 실행 동안 최소한 이만큼은 움직여야 한다(월드 단위).
-## 속도 12 로 15초면 최대 180m 다 — 30m 는 "멈춰 있지 않다" 를 보는 낮은 문턱이다.
-const AI_MIN_PATH := 30.0
+## 속도 12 로 15초면 최대 180m 다 — "멈춰 있지 않다" 를 보는 낮은 문턱이다.
+## 30 이었다가 §23 에서 11 로 내렸다. 통과를 물리가 정하게 되면서 AI 가 **자기 자리
+## 근처의 것을 바로 먹을 수 있게 됐고**, 그만큼 덜 돌아다닌다(실측: 세 AI 의 이동이
+## 44.7 / 37.2 / 21.9, 그동안 반경은 각각 +0.41 / +0.57 / +0.70 자랐다).
+## 11 은 그 최솟값 21.9 의 절반이다. 굳은 AI 는 0 이 되므로 변별력은 그대로다.
+const AI_MIN_PATH := 11.0
 const OVERLAP_FRAMES := 300                        # G6 시나리오: 사냥이 성사될 때까지
 
 # --- 4b 게임 루프 판정 ----------------------------------------------------
@@ -109,58 +119,26 @@ const RESTART_PROPS := 3876
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
 
-# --- §19 수관 걸림 판정 ----------------------------------------------------
-## §19 의 걸림 규격. 구현체의 snag_grip·snag_cap 을 읽으면 계수를 바꾼 빌드가
-## 자기 값끼리 일치해 그대로 통과한다 — 판정기가 따로 들고 있어야 한다.
-const SPEC_SNAG_GRIP := 0.45
-const SPEC_SNAG_CAP := 0.85
-## 픽스처 치수 = **Tree3 의 실제 반경**이다(밑동 0.821 / 수관 3.340, 계측표 §19).
-## 처음에는 §17 표의 1.8 / 7.4 를 그대로 썼는데 그 둘은 오브젝트 반경이 아니라
-## "먹는 데 필요한 구멍 반경"(= r / 0.45) 이었다. 비율(4.07)은 같아도 절대 치수가
-## 2.22배라, 절대 속력 상한(snag_speed)이 걸린 시간을 정하는 이 모형에서는
-## **실제보다 2.2배 긴 마찰**을 재고 있었다. 판정은 출시되는 치수로 해야 한다.
-const SNAG_BASE_R := 0.821
-const SNAG_CANOPY_R := 3.340
-const SNAG_FIX_H := 3.0                            # 픽스처 높이(거동과 무관)
-## 밑동의 게이트(0.821 / 0.45 = 1.825)가 막 열린 직후의 구멍 반경.
-## 정확히 게이트에 두면 부동소수 반올림으로 게이트가 닫힐 수 있어 조금 위로 잡는다.
-const SNAG_R := 1.9
-## 수관보다 넓은 구멍 — 여기서는 걸림이 스스로 사라져야 한다(원작에서 큰 구멍은
-## 나무를 즉시 삼킨다). 3.34 보다 크면 ov = 0 이다.
-const SNAG_BIG_R := 6.0
-## 극단 수관. 밑동의 13배 — 이 폭이라야 유효반경이 상한(snag_cap)에 걸린다.
-## 실측: 나무 비율(4.07배) 시나리오에서는 유효반경이 상한에 닿지 않아, 상한을
-## 통째로 지운 빌드가 어떤 기준에도 안 걸렸다. **상한이 실제로 무는 자리를
-## 시나리오에 넣지 않으면 그 상한은 판정되지 않는다.**
-const SNAG_EXTREME_R := 11.0
-const SNAG_FRAMES := 600                           # 한 시행에 허용하는 물리 프레임
-## K1: 정지 상태에서 시작한 수관 프롭이 갈려야 하는 최소 프레임. 실측(90)의 절반이다.
-const SNAG_MIN_STILL := 45
-## K2: 흡입 관성을 실은 채 들어온 수관 프롭이 갈려야 하는 최소 프레임. 실측(38)의 절반이다.
-## 이 기준이 잡는 것은 **감속 없이 힘만 줄인 모형**이다 — 그 빌드에서는 오브젝트가
-## 9~13 m/s 로 들어와 7프레임 만에 통과했다(실측).
-const SNAG_MIN_RUSH := 19
-## K3·K5: 걸림이 없어야 하는 시행에서 허용하는 전환 지연(프레임).
-## 0 이 아닌 이유는 Area3D 등록이 한두 프레임 걸리기 때문이다(실측 최대 2).
-const SNAG_NO_DELAY := 3
-## 픽스처를 "통과 가능해지는 지점" 보다 이만큼 안쪽에 놓는다. 전환 마진의 하한이
-## 곧 이 값이다 — 시행 시작부터 이미 조건을 넘겨 둔 만큼은 마진으로 나타난다.
-const SNAG_START_SLACK := 0.1
-## 전환 마진의 허용 상한은 **고정 상수가 아니라 시행에서 유도한다**:
-##   SNAG_START_SLACK(시작 여유) + 한 프레임 이동(v/60) + SNAG_EPS
-## 고정값 0.30 으로 두었더니 grip 을 2배로 주입한 빌드가 0.309 로 간신히 걸렸다 —
-## 판정이 아니라 우연이다. 유도한 상한에서는 같은 주입이 0.144 대 0.309 로 갈린다.
-## v 는 전환 **후**의 속력이라(낙하는 마찰 없이 전 흡입력을 받는다) 실제보다 크게
-## 잡히고, 그만큼 상한이 관대해진다 — 안전한 방향이다.
-const SNAG_EPS := 0.02
-## E8: 수관/밑동 비가 이 이상인 도시 프롭을 "가지가 있는 것" 으로 센다.
+# --- §23 물리 통과 판정 ----------------------------------------------------
+## 통과 판정 시행의 기본 구멍 반경. 픽스처 치수가 이 값 둘레에서 정해진다:
+##   flat 2x2x2  — XZ 외접반경 1.414 < 2.0  → 눕히지 않고도 통과(K1)
+##   wide 6x2x6  — 통과 반경 3.162 > 2.0    → 어떤 자세로도 거절(K2)
+##   pole 0.6x8  — 통과 반경 0.424 < 2.0    → 길어도 통과(K6)
+const FALL_R := 2.0
+## 수관보다 넓은 구멍. 나무 픽스처의 수관(6x6, 외접반경 4.243)보다 커야 한다.
+const FALL_BIG_R := 5.0
+## 나무 픽스처: 밑동 0.8 각 3m + 수관 6x6 2m. 밑동만 보면 FALL_R 을 여유 있게
+## 통과하지만(0.566 < 2.0) 수관이 걸린다(3.162 > 2.0).
+const FALL_TREE := [Vector3(0.8, 3.0, 0.8), Vector3(6.0, 2.0, 6.0)]
+## 한 시행에 허용하는 물리 프레임. 통과하는 것은 이보다 훨씬 빨리 빠지고(실측),
+## 거절되는 것은 이 내내 남아야 한다.
+const FALL_FRAMES := 240
+## E8: 메시 반폭이 밑동 셰이프 반폭의 이 배 이상이면 "가지가 있는 프롭" 이다.
+## city.gd 의 CANOPY_RATIO 와 같은 값을 판정기가 따로 든다.
 const CANOPY_RATIO := 1.5
-## E8: 그런 프롭의 하한. 실측 951(프롭 3804 중)의 절반이다. 이 하한이 잡는 것은
-## "콜라이더가 다시 메시 전체가 되어(§17 이전) 걸림이 통째로 사라졌는가" 하나뿐이다
-## — 그때 0 이 된다. 부분 회귀는 E8 의 앞 절반(메시 실측과의 일치)이 본다.
+## E8: 그런 프롭의 하한. 실측 955 의 절반이다. 이 하한이 잡는 것은
+## "밑동 셰이프가 다시 메시 전체가 되어 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
 const MIN_CANOPY_PROPS := 475
-## E8: snag_radius 가 메시에서 나왔는가를 보는 허용 오차(월드 단위).
-const SNAG_R_TOL := 0.01
 
 # --- §21 한글 HUD 판정 -----------------------------------------------------
 ## 번들 폰트의 경로. 라벨이 이것을 쓰지 않으면 데스크톱에서는 시스템 폴백으로
@@ -503,15 +481,17 @@ func run_judge_1b() -> void:
 				_was_falling[id] = true
 				var dxz: float = Vector2(o.global_position.x - hole.global_position.x,
 					o.global_position.z - hole.global_position.z).length()
-				# 오브젝트 반경은 구현체의 값을 믿지 않고 콜라이더에서 직접 잰다.
-				# 구현이 잘못된 산출식을 쓰면 판정도 같은 값으로 오염되어 검출력이 사라진다
-				# (실측: XZ 최대 절반값으로 바꾼 빌드가 그대로 통과했다).
-				var margin: float = hole.radius - (dxz + true_radius(o))
+				# §23 이후 전환 시점은 **물리**가 정한다("지면 아래로 내려갔다").
+				# 그러니 물을 것은 "기하 조건을 만족했는가" 가 아니라
+				# **"그때 물체가 구멍 위에 있었는가"** 다 — 구멍 밖 지면 아래로
+				# 내려간 채 전환됐다면 그것이 곧 "땅에서 녹아 사라진" 것이다.
+				# 반경은 구현체를 믿지 않고 콜라이더에서 직접 잰다.
+				var margin: float = hole.radius - (dxz - true_fit(o))
 				worst = minf(worst, margin)
 				if margin < 0.0:
 					sink += 1
-					print("JUDGE 1b  early-convert: dist=%.3f + r=%.3f > R=%.3f (margin %.3f, 구현이 쓴 r=%.3f)"
-						% [dxz, true_radius(o), hole.radius, margin, o.radius])
+					print("JUDGE 1b  구멍 밖에서 낙하 전환: dist=%.3f - fit=%.3f > R=%.3f (margin %.3f)"
+						% [dxz, true_fit(o), hole.radius, margin])
 				# B4: 낙하 전환 후에는 지면·다른 오브젝트 어느 쪽과도 충돌하면 안 된다.
 				# Godot 판정은 OR 이므로 양방향을 모두 본다.
 				for other in objs:
@@ -524,8 +504,15 @@ func run_judge_1b() -> void:
 							% [o.collision_layer, o.collision_mask,
 							   other.collision_layer, other.collision_mask])
 						break
-			elif not o.falling and o.global_position.y < SINK_LIMIT:
-				sink += 1     # 전환 없이 지면을 뚫고 내려갔다
+			elif not o.falling and o.global_position.y < SINK_LIMIT \
+					and not over_hole(o, hole):
+				# 구멍 위가 아닌데 지면 아래로 내려갔다 = 단단한 지면을 뚫었다.
+				# 구멍 위에서 기울며 잠기는 것은 §23 이 노린 정상 거동이다.
+				sink += 1
+				print("JUDGE 1b  지면 관통: %s y=%.3f dist=%.3f fit=%.3f R=%.3f"
+					% [o.name, o.global_position.y,
+					   flat_dist(o.global_position, hole.global_position),
+					   true_fit(o), hole.radius])
 		await get_tree().physics_frame
 		frames += 1
 
@@ -1312,18 +1299,30 @@ func run_judge_3b() -> void:
 				print("JUDGE 3b E5 %s: %s" % [n3.name, why5])
 		if Vector2(n3.global_position.x, n3.global_position.z).length() < SPEC_PLAZA_R:
 			e6_bad += 1
-		# --- E8: 수관 반경(§19) ---
-		# 밑동은 콜라이더, 수관은 **보이는 메시**. 판정기가 양쪽을 직접 재고
-		# 구현체의 snag_radius 와 대조한다.
-		var rb8: float = true_radius(n3)
-		var rs8: float = maxf(mesh_snag_radius(n3), rb8)
-		if absf(float(n3.snag_radius) - rs8) > SNAG_R_TOL:
-			e8_bad += 1
-			if e8_bad <= 5:
-				print("JUDGE 3b E8 %s: snag_radius=%.3f 인데 메시 실측=%.3f (밑동 %.3f)"
-					% [n3.name, float(n3.snag_radius), rs8, rb8])
-		elif rs8 >= rb8 * CANOPY_RATIO:
+		# --- E8: 수관 셰이프(§23) ---
+		# 가지가 림에 걸리려면 **가지에 콜라이더가 있어야 한다.** 보이는 메시가
+		# 밑동 셰이프보다 확연히 넓은 프롭은 셰이프가 둘이어야 한다(밑동 + 수관).
+		# 메시와 셰이프를 판정기가 직접 재고 개수를 센다 — 구현체의 필드를 안 믿는다.
+		var shapes: Array = n3.find_children("", "CollisionShape3D", false, false)
+		var base_half: float = 0.0
+		if not shapes.is_empty() and (shapes[0] as CollisionShape3D).shape != null:
+			var bsz := (shapes[0] as CollisionShape3D).shape.get_debug_mesh().get_aabb().size
+			base_half = maxf(bsz.x, bsz.z) * 0.5
+		var mesh_half: float = 0.0
+		for c in n3.find_children("", "MeshInstance3D", false, false):
+			var mi := c as MeshInstance3D
+			if mi.mesh == null:
+				continue
+			var ms: Vector3 = mi.mesh.get_aabb().size * mi.scale.abs()
+			mesh_half = maxf(mesh_half, maxf(ms.x, ms.z) * 0.5)
+		if base_half > 0.0 and mesh_half >= base_half * CANOPY_RATIO:
 			canopy_n += 1
+			if shapes.size() < 2:
+				e8_bad += 1
+				if e8_bad <= 5:
+					print("JUDGE 3b E8 %s: 메시 반폭 %.2f 가 밑동 %.2f 의 %.1f배인데 셰이프가 %d개다"
+						% [n3.name, mesh_half, base_half, mesh_half / base_half,
+						   shapes.size()])
 
 	# --- E3: 겹침 (SAT). 반경으로 1차 걸러 쌍 수를 줄인다 ---
 	var e3_bad := 0
@@ -1378,9 +1377,9 @@ func run_judge_3b() -> void:
 	var e7: bool = boul_n["road"] >= MIN_BOUL_ROAD and boul_n["walk"] >= MIN_BOUL_WALK \
 		and boul_bands.size() >= 3
 	# E8: §19 의 걸림 모형이 실제로 입력을 갖는가. 두 질문을 함께 묻는다.
-	#   ① snag_radius 가 메시에서 나왔는가 (구현체 값과 판정기 실측의 일치)
-	#   ② 수관이 밑동보다 확연히 넓은 프롭이 하한 이상 있는가 — 콜라이더를 다시
-	#      메시 전체로 되돌리면(§17 이전) 둘이 같아져 걸림이 조용히 사라진다.
+	#   ① 수관이 넓은 프롭에 수관 셰이프가 달려 있는가 (셰이프 개수)
+	#   ② 그런 프롭이 하한 이상 있는가 — 밑동 셰이프를 다시
+	#      메시 전체로 되돌리면 둘이 같아져 걸림이 조용히 사라진다.
 	var e8: bool = e8_bad == 0 and canopy_n >= MIN_CANOPY_PROPS
 	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7 and e8
 	print("JUDGE 3b props=%d catalog=%d albedos=%d zones road=%d walk=%d block=%d"
@@ -2075,6 +2074,36 @@ func alive_count(objs: Array) -> int:
 	return n
 
 
+## 물체가 **어떤 자세로든** 통과하려면 구멍 반경이 이보다 커야 한다(§23).
+## 가장 작은 두 반extent 가 만드는 단면의 외접반경 — 판정기가 콜라이더에서 직접 잰다.
+## 이 값보다 구멍이 작으면 그 물체는 **어떻게 해도 못 들어간다**(거절 규격).
+## 반대로 XZ 외접반경(true_radius)보다 구멍이 크면 눕히지 않고도 들어간다(통과 규격).
+## 그 사이는 물리가 정하는 회색 지대이고, 판정기는 그 구간을 단언하지 않는다.
+func true_fit(o: Node3D) -> float:
+	var key: int = -o.get_instance_id()
+	if _r_cache.has(key):
+		return _r_cache[key]
+	var r := INF
+	for c in o.find_children("", "CollisionShape3D", false, false):
+		var col := c as CollisionShape3D
+		if col.shape == null:
+			continue
+		var s := col.shape.get_debug_mesh().get_aabb().size
+		var h := [s.x * 0.5, s.y * 0.5, s.z * 0.5]
+		h.sort()
+		r = minf(r, sqrt(h[0] * h[0] + h[1] * h[1]))
+	if is_inf(r):
+		r = true_radius(o)
+	_r_cache[key] = r
+	return r
+
+
+## 물체의 XZ 원반이 구멍 원반과 겹치는가. 지면 아래로 내려가도 되는 자리인지를 가른다.
+func over_hole(o: Node3D, hole: Node3D) -> bool:
+	return flat_dist(o.global_position, hole.global_position) \
+		< float(hole.radius) + true_radius(o)
+
+
 ## 오브젝트의 XZ 외접반경을 콜라이더에서 직접 잰다(구현체의 radius 필드와 독립).
 ## get_debug_mesh() 는 비싸므로 인스턴스별로 한 번만 계산한다.
 func true_radius(o: Node3D) -> float:
@@ -2106,7 +2135,7 @@ func run_judge_2() -> void:
 		return
 	await get_tree().process_frame
 	var hole: Node3D = _reg.holes()[0]
-	hole.set_radius(FIXTURE_R)          # 성장 시나리오도 픽스처 반경에서 돈다
+	hole.set_radius(GATE_R)             # 거절 → 성장 → 통과 시나리오의 시작 반경
 	var r0: float = hole.radius
 	var objs: Array = get_tree().get_nodes_in_group("judge_set")
 
@@ -2121,18 +2150,20 @@ func run_judge_2() -> void:
 		# 점수도 판정기가 규격대로 직접 계산한다 — 구현체의 score_value 를 믿으면
 		# 산출식을 통째로 바꾼 빌드가 자기 값끼리 일치해 그대로 통과한다(실측).
 		score_of[id] = int(round(float(r_of[id]) * float(r_of[id]) * 100.0))
-		# 게이트 분류도 can_swallow() 에 묻지 않는다 — 게이트를 제거한 빌드에서는
-		# 그 함수가 항상 true 라 검사 대상이 사라진다(실측).
-		if float(r_of[id]) <= r0 * hole.swallow_ratio:
+		# 분류는 구현체에 묻지 않고 **물리 규격**으로 한다(§23):
+		# 좁은 쪽 반폭이 구멍 반경보다 크면 그 물체는 구멍을 통과할 수 없다.
+		# can_swallow() 에 물으면 안 된다 — 이제 그 함수는 AI 조언일 뿐이라
+		# 흡입을 막지 않는다.
+		if true_radius(o) < r0:
 			small.append(o)
 		else:
 			big.append(o)
-	print("JUDGE 2 start R=%.4f objects=%d over_gate=%d (gate=%.4f)"
-		% [r0, objs.size(), big.size(), r0 * hole.swallow_ratio])
+	print("JUDGE 2 start R=%.4f objects=%d 통과불가=%d (통과반경 >= %.4f)"
+		% [r0, objs.size(), big.size(), r0])
 
 	# --- 0차: 반경이 작은 상태로 큰 오브젝트 위에 머문다 ---
-	# 이 단계가 없으면 시나리오가 게이트를 한 번도 건드리지 않아,
-	# 게이트를 통째로 제거한 빌드도 그대로 통과한다(실측).
+	# 이 단계가 없으면 시나리오가 "거절"을 한 번도 건드리지 않아,
+	# 물체를 무조건 삼키는 빌드도 그대로 통과한다(실측).
 	var gate_violation := 0
 	for b in big:
 		gate_violation += await hover(hole, objs, b, HOVER_FRAMES)
@@ -2166,7 +2197,7 @@ func run_judge_2() -> void:
 	for o in big:
 		if not is_instance_valid(o):
 			continue
-		if true_radius(o) > hole.radius * hole.swallow_ratio:
+		if true_radius(o) >= hole.radius:
 			c2b = false
 	gate_violation += await suck(hole, objs, big)
 	var left := alive_count(objs)
@@ -2212,17 +2243,8 @@ func suck(hole: Node3D, objs: Array, only: Array) -> int:
 			var step: float = minf(to.length(), _main.MOVE_SPEED / 60.0)
 			if step > 0.0001:
 				_main.set_hole_position(hole.global_position + to.normalized() * step)
-		# 게이트 위반 감시: 상한을 넘는 오브젝트는 낙하하지도 가라앉지도 않아야 한다
-		for o in objs:
-			if not is_instance_valid(o):
-				continue
-			if true_radius(o) <= hole.radius * hole.swallow_ratio:
-				continue
-			if o.falling or o.global_position.y < SINK_LIMIT:
-				violations += 1
-				print("JUDGE 2  gate breach: r=%.3f > R*%.2f=%.3f falling=%s y=%.3f"
-					% [true_radius(o), hole.swallow_ratio,
-					   hole.radius * hole.swallow_ratio, o.falling, o.global_position.y])
+		# 거절 감시: 통과할 수 없는 물체는 빠지지도, 지면을 뚫지도 않아야 한다
+		violations += gate_breaches(hole, objs)
 		await get_tree().physics_frame
 		frames += 1
 	return violations
@@ -2244,90 +2266,63 @@ func hover(hole: Node3D, objs: Array, target: Node3D, frames: int) -> int:
 	return violations
 
 
-## 상한을 넘는 오브젝트가 낙하했거나 지면 아래로 내려갔는가.
-## 판정 기준을 can_swallow() 에 묻지 않는다 — 게이트를 제거한 빌드에서는 항상 true 다.
+## **통과할 수 없는** 물체(좁은 쪽 반폭 >= 구멍 반경)가 빠졌거나 지면을 뚫었는가.
+## 규격을 구현체에 묻지 않는다 — §23 이후 `can_swallow()` 는 AI 조언일 뿐이고
+## 흡입을 막지 않으므로, 그 함수로 판정하면 검사 대상이 통째로 사라진다.
 func gate_breaches(hole: Node3D, objs: Array) -> int:
 	var n := 0
 	for o in objs:
 		if not is_instance_valid(o):
 			continue
-		if true_radius(o) <= hole.radius * hole.swallow_ratio:
-			continue
-		if o.falling or o.global_position.y < SINK_LIMIT:
+		if true_fit(o) < float(hole.radius):
+			continue                              # 통과 가능 — 검사 대상이 아니다
+		if o.falling or (o.global_position.y < SINK_LIMIT and not over_hole(o, hole)):
 			n += 1
-			print("JUDGE 2  gate breach: r=%.3f > R*%.2f=%.3f falling=%s y=%.3f"
-				% [true_radius(o), hole.swallow_ratio,
-				   hole.radius * hole.swallow_ratio, o.falling, o.global_position.y])
+			print("JUDGE 2  거절 위반: fit=%.3f >= R=%.3f falling=%s y=%.3f dist=%.3f"
+				% [true_fit(o), hole.radius, o.falling, o.global_position.y,
+				   flat_dist(o.global_position, hole.global_position)])
 	return n
 
 
-# --- §19: 수관 걸림 판정 ---------------------------------------------------
+# --- §23: 물리 통과 판정 ---------------------------------------------------
 
-## K1: 밑동은 들어왔는데 가지가 구멍보다 넓으면, 정지 상태에서 갈리는 시간이 생긴다.
-## K2: 흡입 관성을 실은 채 들어와도 갈린다 — 힘만 줄이고 감속을 안 하면 그대로
-##     미끄러져 들어가 걸림이 체감되지 않는다(실측: 접근 속도 9.5 m/s).
-## K3: 수관 = 밑동인 오브젝트(상자·건물·차량)의 거동은 §17 과 **완전히** 같다.
-##     지연 0 프레임이고 전환 마진이 딱 붙어 있어야 한다.
-## K4: 전환 순간이 판정기가 독립으로 계산한 규격 유효반경과 일치하는가.
-## K5: 구멍이 수관보다 넓어지면 걸림이 스스로 사라진다.
-## K6: 걸린 것이 예산 안에 반드시 전환된다 — 게이트는 열렸는데 영원히 안 먹히는
-##     오브젝트를 만들지 않는다(snag_cap 이 지키는 성질).
+## K1 통과 규격 — XZ 외접반경이 구멍 반경보다 작은 물체는 **눕히지 않고도** 들어간다.
+##    반드시 예산 안에 삼켜져야 한다.
+## K2 거절 규격 — 통과 반경(가장 작은 두 반extent 의 외접반경)이 구멍 반경보다 큰
+##    물체는 **어떤 자세로도** 못 들어간다. 예산 내내 림 위에 남아야 한다.
+## K3 수관 걸림 — 밑동은 들어가고도 남지만 가지가 구멍보다 넓은 물체는 걸려서 남는다.
+##    §19 는 이것을 통과 조건에 계수를 곱해 흉내냈다. 지금은 **가지에 콜라이더가
+##    있고 구멍 둘레에 물리적 림이 있어서** 그냥 걸린다.
+## K4 해소 — 구멍이 수관보다 커지면 그 물체도 들어간다.
+## K5 지면 관통 없음 — 어느 시행에서도, 지면 아래로 내려간 물체는 **구멍 위**에 있다.
+##    플레이 피드백의 "땅 위에서 녹아 사라진다" 가 이 기준이다.
+## K6 긴 물체 — 폭이 구멍보다 좁으면 길이가 아무리 길어도 결국 들어간다(전봇대).
 func run_judge_6() -> void:
 	if not setup():
 		get_tree().quit(1)
 		return
 	await get_tree().process_frame
 	var hole: Node3D = _reg.holes()[0]
-
-	# 광장의 판정 대상 8개를 먼저 치운다. 이것이 없으면 R=12 시행에서 그것들이
-	# 함께 삼켜지고, **그 낙하가 다음 시행 도중에 소멸에 도달해** 구멍이 4.00 →
-	# 4.77 로 자라 버린다(실측). 판정기가 든 규격은 4.00 으로 계산되므로 정상
-	# 빌드가 K4 에서 떨어졌다 — 시나리오가 스스로 만든 함정이다.
+	# 광장의 판정 대상 8개를 치운다 — 시행 도중 함께 삼켜져 구멍이 자라면
+	# 시나리오의 전제(반경 고정)가 깨진다(§19 에서 밟은 함정).
 	for o in get_tree().get_nodes_in_group("judge_set"):
 		o.queue_free()
 	await get_tree().physics_frame
 
-	# 시행 여섯 번. 구멍은 **가만히 있고** 픽스처 하나만 놓는다 —
-	# 둘을 동시에 놓으면 먼저 삼켜진 쪽의 성장이 남은 쪽의 조건을 바꾼다.
-	#   still : 밑동이 막 들어온 자리에서 정지 시작 (걸림 자체를 잰다)
-	#   rush  : 감지 범위 가장자리에서 시작 (흡입 관성을 실은 채 걸리는가)
-	#   big   : 수관보다 넓은 구멍 (걸림이 사라지는가)
-	# rush 의 시작 거리는 **외접반경이 아니라 상자의 반폭**으로 잡아야 한다.
-	# 감지는 Area3D 원기둥과 콜라이더 상자의 겹침이라, 외접반경으로 잡으면
-	# (4.0 + 1.8 - 0.15 = 5.65) 상자의 최근접면이 4.38 로 원기둥 밖이라 감지되지
-	# 않는다 — 픽스처가 그 자리에서 영원히 서 있게 된다(설계 단계에서 밟은 함정).
-	var still_fit: float = SNAG_R - SNAG_BASE_R - SNAG_START_SLACK
-	var rush_fit: float = SNAG_R + SNAG_BASE_R * 0.5
-	var big_fit: float = SNAG_BIG_R - SNAG_BASE_R - SNAG_START_SLACK
-	var plain_still := await snag_run(hole, "still_plain", SNAG_R, still_fit, SNAG_BASE_R)
-	var canopy_still := await snag_run(hole, "still_canopy", SNAG_R, still_fit, SNAG_CANOPY_R)
-	var plain_rush := await snag_run(hole, "rush_plain", SNAG_R, rush_fit, SNAG_BASE_R)
-	var canopy_rush := await snag_run(hole, "rush_canopy", SNAG_R, rush_fit, SNAG_CANOPY_R)
-	var plain_big := await snag_run(hole, "big_plain", SNAG_BIG_R, big_fit, SNAG_BASE_R)
-	var canopy_big := await snag_run(hole, "big_canopy", SNAG_BIG_R, big_fit, SNAG_CANOPY_R)
-	# 상한이 무는 자리. 상한이 없으면 유효반경 8.28 > 구멍 4.0 이라 **중심에 와도**
-	# 통과 조건이 성립하지 않는다 — 게이트는 열렸는데 영원히 안 먹히는 오브젝트다.
-	var extreme := await snag_run(hole, "extreme", SNAG_R, still_fit, SNAG_EXTREME_R)
+	var flat := await fall_run(hole, "flat", FALL_R, [Vector3(2.0, 2.0, 2.0)])
+	var wide := await fall_run(hole, "wide", FALL_R, [Vector3(6.0, 2.0, 6.0)])
+	var pole := await fall_run(hole, "pole", FALL_R, [Vector3(0.6, 8.0, 0.6)])
+	var tree := await fall_run(hole, "tree", FALL_R, FALL_TREE)
+	var tree_big := await fall_run(hole, "tree_big", FALL_BIG_R, FALL_TREE)
 
-	var k1: bool = int(canopy_still["delay"]) >= SNAG_MIN_STILL
-	var k2: bool = int(canopy_rush["delay"]) >= SNAG_MIN_RUSH
-	# K3: 무캐노피 셋은 지연도 0 이고 마진도 딱 붙는다.
-	var k3 := true
-	for r in [plain_still, plain_rush, plain_big]:
-		k3 = k3 and int(r["delay"]) <= SNAG_NO_DELAY \
-			and float(r["margin"]) >= 0.0 and float(r["margin"]) <= float(r["tol"])
-	# K4: 전환 순간이 규격과 맞는가. 마진 = R - (d + 규격유효반경) 이 0 이상(일찍
-	# 전환하지 않았다)이고 한 프레임 이동보다 작다(늦게 전환하지도 않았다).
-	# 시행 도중 구멍이 자랐다면 규격 계산의 전제가 깨진 것이므로 함께 떨어뜨린다.
-	var k4 := true
-	for r in [canopy_still, canopy_rush, canopy_big, plain_still, plain_rush, plain_big, extreme]:
-		k4 = k4 and float(r["spec_margin"]) >= 0.0 and float(r["spec_margin"]) <= float(r["tol"]) \
-			and absf(float(r["r_conv"]) - float(r["r_set"])) < 0.001
-	var k5: bool = int(canopy_big["delay"]) <= SNAG_NO_DELAY \
-		and float(canopy_big["margin"]) <= float(canopy_big["tol"])
-	var k6 := true
-	for r in [canopy_still, canopy_rush, canopy_big, extreme]:
-		k6 = k6 and int(r["conv"]) >= 0
+	var k1: bool = bool(flat["gone"])
+	var k2: bool = not bool(wide["gone"])
+	var k3: bool = not bool(tree["gone"])
+	var k4: bool = bool(tree_big["gone"])
+	var k5 := true
+	for r in [flat, wide, pole, tree, tree_big]:
+		k5 = k5 and int(r["sink_bad"]) == 0
+	var k6: bool = bool(pole["gone"])
 
 	var ok: bool = k1 and k2 and k3 and k4 and k5 and k6
 	print("JUDGE 6 K1=%s K2=%s K3=%s K4=%s K5=%s K6=%s -> %s"
@@ -2336,112 +2331,65 @@ func run_judge_6() -> void:
 	get_tree().quit(0 if ok else 1)
 
 
-## 시행 하나. 구멍을 r 로 되돌리고 원점에 세운 뒤, 픽스처를 거리 d 에 정지 상태로
-## 놓고 구멍을 **움직이지 않은 채** 전환까지의 거동을 잰다.
+## 시행 하나. 구멍을 r 로 되돌려 원점에 세우고, 픽스처를 **구멍 한가운데**에 놓은 뒤
+## 구멍을 움직이지 않고 예산만큼 돌린다. 가운데에 놓는 것이 가장 강한 시험이다 —
+## "가운데 놓아도 안 빠진다" 와 "가운데 놓으면 빠진다" 를 각각 단언할 수 있다.
 ##
-## 반환:
-##   fit    — 밑동이 구멍 안에 들어온(= §17 규격이라면 삼켜졌을) 프레임
-##   conv   — 낙하로 전환된 프레임 (-1 = 예산 안에 전환되지 않았다)
-##   delay  — conv - fit. 이것이 곧 "갈린 시간" 이다.
-##   margin — 전환 순간의 `R - (d + 밑동반경)`. 옛 규격 기준 여유.
-##   spec_margin — 전환 순간의 `R - (d + 규격 유효반경)`.
-func snag_run(hole: Node3D, tag: String, r: float, d: float, canopy_r: float) -> Dictionary:
+## 반환: gone(삼켜졌는가) / frames(삼켜진 프레임) / sink_bad(구멍 밖 지면 관통 횟수)
+func fall_run(hole: Node3D, tag: String, r: float, boxes: Array) -> Dictionary:
 	hole.set_radius(r)
 	hole.move_to(Vector3.ZERO)
-	var body := snag_fixture("Snag_" + tag, SNAG_BASE_R, canopy_r, Vector3(0.0, 0.0, d))
+	var body := fall_fixture("Fall_" + tag, boxes)
 	_main.add_child(body)
-	# 반경은 구현체의 필드가 아니라 콜라이더·메시에서 판정기가 직접 잰다.
 	await get_tree().physics_frame
-	var rb: float = true_radius(body)
-	var rs: float = maxf(mesh_snag_radius(body), rb)
-	var spec_r: float = spec_pass_radius(rb, rs, r)
-	var fit := -1
-	var conv := -1
-	var margin := 0.0
-	var spec_margin := 0.0
-	var v_conv := 0.0
-	var r_conv := r
+	var rr: float = true_radius(body)
+	var rf: float = true_fit(body)
+	var gone := -1
+	var sink_bad := 0
+	var min_y := 0.0
 	var f := 0
-	# 전환을 관측한 프레임의 위치를 쓰면 안 된다. `physics_frame` 은 _physics_process
-	# **직전**에 발화하므로, 내가 f 에서 읽은 위치가 곧 구멍이 f 에서 판단에 쓴 위치이고,
-	# 전환은 f+1 에서야 보인다. 한 프레임 늦게 재면 오브젝트가 그사이 중심을 지나쳐
-	# 거리가 다시 벌어진 자리를 재게 된다(실측: extreme 시나리오에서 마진이 0.075
-	# 음수로 나와 K4 가 정상 빌드를 떨어뜨렸다).
-	var prev_dl := INF
-	while f < SNAG_FRAMES and conv < 0 and is_instance_valid(body):
-		var dl: float = flat_dist(body.global_position, hole.global_position)
-		if fit < 0 and dl + rb < r:
-			fit = f
-		if body.falling:
-			conv = f
-			var dc: float = dl if prev_dl == INF else prev_dl
-			margin = r - (dc + rb)
-			spec_margin = r - (dc + spec_r)
-			v_conv = Vector2(body.linear_velocity.x, body.linear_velocity.z).length()
-			r_conv = float(hole.radius)
-		prev_dl = dl
+	while f < FALL_FRAMES and gone < 0:
+		if not is_instance_valid(body):
+			gone = f
+			break
+		min_y = minf(min_y, body.global_position.y)
+		if body.global_position.y < SINK_LIMIT and not over_hole(body, hole):
+			sink_bad += 1
+			if sink_bad == 1:
+				print("JUDGE 6 %s 구멍 밖 지면 관통: y=%.3f dist=%.3f R=%.3f"
+					% [tag, body.global_position.y,
+					   flat_dist(body.global_position, hole.global_position), r])
 		await get_tree().physics_frame
 		f += 1
-	var delay: int = (conv - fit) if (conv >= 0 and fit >= 0) else SNAG_FRAMES
-	var tol: float = SNAG_START_SLACK + v_conv / 60.0 + SNAG_EPS
-	print("JUDGE 6 %-13s R=%5.2f(%5.2f) r=%.3f snag=%.3f spec_pass=%.3f fit=%d conv=%d delay=%d margin=%.3f spec_margin=%.3f (tol %.3f) v=%.2f"
-		% [tag, r, r_conv, rb, rs, spec_r, fit, conv, delay, margin, spec_margin, tol, v_conv])
+	print("JUDGE 6 %-9s R=%5.2f 외접=%.3f 통과반경=%.3f 삼킴=%s(%d프레임) 최저y=%.2f 관통=%d"
+		% [tag, r, rr, rf, "예" if gone >= 0 else "아니오", gone, min_y, sink_bad])
 	if is_instance_valid(body):
 		body.queue_free()
-	# 성장으로 반경이 바뀐 채 다음 시행에 들어가지 않도록 한 프레임 비운다.
 	await get_tree().physics_frame
-	return { "fit": fit, "conv": conv, "delay": delay,
-		"margin": margin, "spec_margin": spec_margin, "r_conv": r_conv, "r_set": r,
-		"tol": tol }
+	return { "gone": gone >= 0, "frames": gone, "sink_bad": sink_bad }
 
 
-## §19 판정용 픽스처. 밑동(콜라이더)과 수관(메시)을 따로 지정한 흡입 대상을 만든다.
+## 판정용 픽스처. 상자 셰이프를 아래에서부터 쌓는다(밑동 + 수관).
 ## 도시 프롭과 같은 규약(레이어 2, swallowable.gd)을 따르되 치수는 판정기가 정한다.
-## 정사각 상자의 한 변 = 외접반경 × √2 다 — 반경 척도가 콜라이더·메시 양쪽에서 같다.
-func snag_fixture(name: String, base_r: float, canopy_r: float, pos: Vector3) -> RigidBody3D:
+func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 	var body := RigidBody3D.new()
 	body.set_script(SWALLOWABLE)
 	body.collision_layer = 2
 	body.collision_mask = 1 | 2
 	body.name = name
 	body.mass = 10.0
-	body.position = pos
 	body.add_to_group("swallowable")
-	var cs := CollisionShape3D.new()
-	var box := BoxShape3D.new()
-	box.size = Vector3(base_r * sqrt(2.0), SNAG_FIX_H, base_r * sqrt(2.0))
-	cs.shape = box
-	cs.position.y = SNAG_FIX_H * 0.5
-	body.add_child(cs)
-	var mi := MeshInstance3D.new()
-	var bm := BoxMesh.new()
-	bm.size = Vector3(canopy_r * sqrt(2.0), SNAG_FIX_H, canopy_r * sqrt(2.0))
-	mi.mesh = bm
-	mi.position.y = SNAG_FIX_H * 0.5
-	body.add_child(mi)
+	var y := 0.0
+	for b in boxes:
+		var size: Vector3 = b
+		var cs := CollisionShape3D.new()
+		var box := BoxShape3D.new()
+		box.size = size
+		cs.shape = box
+		cs.position.y = y + size.y * 0.5
+		body.add_child(cs)
+		y += size.y
 	return body
-
-
-## 오브젝트의 수관 반경을 **보이는 메시**에서 직접 잰다(구현체의 snag_radius 와 독립).
-func mesh_snag_radius(o: Node3D) -> float:
-	var r := 0.0
-	for c in o.find_children("", "MeshInstance3D", false, false):
-		var mi := c as MeshInstance3D
-		if mi.mesh == null:
-			continue
-		var s: Vector3 = mi.mesh.get_aabb().size * mi.scale.abs()
-		r = maxf(r, Vector2(s.x, s.z).length() * 0.5)
-	return r
-
-
-## §19 의 통과 유효반경 — 판정기가 규격에서 **따로** 계산한다.
-func spec_pass_radius(base_r: float, snag_r: float, hole_r: float) -> float:
-	if snag_r <= hole_r:
-		return base_r
-	var ov: float = (snag_r - hole_r) / snag_r
-	var eff: float = base_r + (snag_r - base_r) * SPEC_SNAG_GRIP * ov
-	return maxf(base_r, minf(eff, hole_r * SPEC_SNAG_CAP))
-
 
 # --- §21: 한글 HUD 판정 ----------------------------------------------------
 

@@ -95,7 +95,9 @@ func choose_target() -> Node3D:
 	for o in get_tree().get_nodes_in_group("swallowable"):
 		if not is_instance_valid(o) or o.falling:
 			continue
-		if not _hole.can_swallow(float(o.radius)):
+		# 척도는 좁은 쪽 반폭이다(§23) — 외접반경으로 고르면 원 안에 들어가는
+		# 길쭉한 물체를 AI 가 통째로 무시한다.
+		if not _hole.can_swallow(float(o.fit_radius)):
 			continue
 		var d2: float = flat_dist(o.global_position, _hole.global_position)
 		if d2 < sight and d2 < bd:
