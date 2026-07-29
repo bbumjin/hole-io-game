@@ -22,6 +22,10 @@ const LEVEL_R := [1.5, 2.5, 4.0, 6.0, 9.0, 13.0, 18.0, 25.0, 34.0, 45.0]
 const FEED_SEC := 3.0
 ## 점수 팝업이 떠 있는 시간(초).
 const POP_SEC := 1.0
+## 가상 조이스틱의 베이스·노브 반경(픽셀). 노브가 베이스 밖으로 나가지 않게
+## 이동량을 (베이스 - 노브) 로 자른다.
+const STICK_R := 56.0
+const STICK_KNOB_R := 24.0
 
 ## 화면 문구. **여기의 한글 음절은 전부 `tools/font_subset.mjs` 의 집합 안에 있어야
 ## 한다** — 없는 글자는 에러 없이 사라진다. 문구를 고치면 폰트를 다시 굽고
@@ -29,7 +33,7 @@ const POP_SEC := 1.0
 const TXT_TITLE := "HOLE.IO"
 const TXT_SUB := "도시를 삼켜라"
 const TXT_START := "시작"
-const TXT_HINT := "이동   WASD   화살표   드래그"
+const TXT_HINT := "이동   WASD   화살표   드래그"   # 마우스는 누른 채 커서 쪽으로
 const TXT_AGAIN := "다시 하기"
 const TXT_HOME := "홈으로"
 
@@ -45,6 +49,8 @@ var _level: Label
 var _bar: ProgressBar
 var _feed: Label
 var _pop: Label
+var _stick_base: Panel
+var _stick_knob: Panel
 
 var _feed_t := 0.0
 var _pop_t := 0.0
@@ -71,7 +77,7 @@ func build() -> void:
 	add_child(_dim)
 
 	_title = make_label("_title", TXT_TITLE, 64, Vector2(0.5, 0.28), Color(1, 1, 1))
-	_sub = make_label("_sub", TXT_SUB, 26, Vector2(0.5, 0.38), Color(0.75, 0.82, 0.95))
+	_sub = make_label("_sub", TXT_SUB, 26, Vector2(0.5, 0.42), Color(0.75, 0.82, 0.95))
 	_hint = make_label("_hint", TXT_HINT, 18, Vector2(0.5, 0.78), Color(0.62, 0.68, 0.78))
 
 	_start_btn = make_button("_start_btn", TXT_START, Vector2(0.5, 0.55), Vector2(220, 62), 28)
@@ -92,6 +98,10 @@ func build() -> void:
 
 	_bar = ProgressBar.new()
 	_bar.name = "_bar"
+	# **Control 의 기본 mouse_filter 는 STOP 이다.** 그대로 두면 좌하단 246x12 px —
+	# 휴대폰 엄지가 놓이기 쉬운 자리 — 에서 시작한 터치가 `_unhandled_input` 에
+	# 도달하지 못해 구멍이 움직이지 않는다. 딤·라벨은 IGNORE 인데 이것만 빠져 있었다.
+	_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bar.show_percentage = false
 	_bar.min_value = 0.0
 	_bar.max_value = 1.0
@@ -124,6 +134,25 @@ func build() -> void:
 	_pop.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_pop.size = Vector2(160, 40)
 	_pop.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	# 가상 조이스틱의 시각 피드백. 플로팅이라 원점이 매번 다른데 아무것도 안 그리면
+	# **어디를 기준으로 미는지도, 데드존 안인지도 보이지 않는다.**
+	# 원은 StyleBoxFlat 의 모서리 반경을 절반으로 줘서 만든다 — 이미지 에셋이 필요 없다.
+	_stick_base = make_ring("_stick_base", STICK_R, Color(1, 1, 1, 0.16))
+	_stick_knob = make_ring("_stick_knob", STICK_KNOB_R, Color(1, 1, 1, 0.34))
+
+
+func make_ring(nm: String, r: float, col: Color) -> Panel:
+	var p := Panel.new()
+	p.name = nm
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.size = Vector2(r * 2.0, r * 2.0)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = col
+	sb.set_corner_radius_all(int(r))
+	p.add_theme_stylebox_override("panel", sb)
+	add_child(p)
+	return p
 
 
 ## 노드 이름은 **판정과의 계약**이다(§26). 코드로 만든 노드는 이름을 안 주면
@@ -182,7 +211,8 @@ func make_button(nm: String, t: String, anchor: Vector2, sz: Vector2, size: int)
 ## 판정 모드용. 이 노드가 그리는 것을 전부 숨긴다.
 func hide_all() -> void:
 	for c in get_children():
-		(c as CanvasItem).visible = false
+		if c is CanvasItem:
+			(c as CanvasItem).visible = false
 
 
 func _on_start() -> void:
@@ -197,6 +227,7 @@ func _on_home() -> void:
 	_main.restart()
 	_main.state = _main.State.HOME
 	_main.set_ai(false)
+	_main.set_holes_physics(false)     # 시작 화면에서 세계가 계속 먹지 않게
 
 
 func kill_feed(eater: String, prey: String) -> void:
@@ -243,6 +274,19 @@ func _process(dt: float) -> void:
 		var lo: float = float(LEVEL_R[lv - 1])
 		var hi: float = float(LEVEL_R[mini(lv, LEVEL_R.size() - 1)])
 		_bar.value = 1.0 if lv >= LEVEL_R.size() else clampf((r - lo) / maxf(hi - lo, 1e-3), 0.0, 1.0)
+
+	# 가상 조이스틱: 손가락이 눌려 있는 동안만 보인다. 원점은 main.gd 가 쥐고 있고
+	# 여기서는 그리기만 한다 — 입력을 해석하는 자리는 하나여야 한다.
+	var stick: bool = play and int(_main._touch_id) >= 0
+	_stick_base.visible = stick
+	_stick_knob.visible = stick
+	if stick:
+		var o: Vector2 = _main._touch_start
+		var d: Vector2 = _main._touch_cur - o
+		if d.length() > STICK_R - STICK_KNOB_R:
+			d = d.normalized() * (STICK_R - STICK_KNOB_R)
+		_stick_base.position = o - Vector2(STICK_R, STICK_R)
+		_stick_knob.position = o + d - Vector2(STICK_KNOB_R, STICK_KNOB_R)
 
 	_feed_t = maxf(_feed_t - dt, 0.0)
 	_feed.visible = _feed_t > 0.0 and play

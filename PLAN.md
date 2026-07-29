@@ -1330,11 +1330,13 @@ var ai_holes: Array[Node3D] = []
 
 ## 포인터 입력 상태(§26). 터치는 손가락 하나만 조종에 쓴다 — 둘째 손가락이
 ## 방향을 빼앗으면 조작이 튄다.
+## 마우스 눌림은 **이벤트로 기억하지 않고 매번 물어본다.** 포커스를 잃으면
+## (알트탭·탭 전환) Godot 은 눌림 상태를 비우면서 릴리즈 이벤트를 트리로 보내지
+## 않는다 — 기억해 두면 참으로 남아 구멍이 마지막 커서 방향으로 계속 흘러간다.
 const TOUCH_DEAD_PX := 18.0
 var _touch_id := -1
 var _touch_start := Vector2.ZERO
 var _touch_cur := Vector2.ZERO
-var _mouse_held := false
 
 @onready var ui: CanvasLayer = get_node_or_null("UI")
 @onready var hud_root: CanvasLayer = $HUD
@@ -1418,7 +1420,17 @@ func _ready() -> void:
 	state = State.HOME if not judging else State.PLAYING
 	if state == State.HOME:
 		set_ai(false)
+		set_holes_physics(false)
 	update_hud()
+
+
+## 모든 구멍의 물리를 켜고 끈다. **AI 조종자만 멈추는 것으로는 부족하다** —
+## 구멍 자신의 `_physics_process` 가 흡입·삼킴을 돌리므로, 시작 화면에 머무는 동안
+## 스폰 지점에 걸친 프롭이 삼켜지고 점수·반경이 오른 채로 판이 시작한다.
+func set_holes_physics(on: bool) -> void:
+	for h in registry.holes():
+		if is_instance_valid(h):
+			h.set_physics_process(on)
 
 
 ## 시작 화면에서 한 판을 연다. UI 버튼이 부른다.
@@ -1426,6 +1438,7 @@ func begin_round() -> void:
 	state = State.PLAYING
 	time_left = round_seconds
 	set_ai(true)
+	set_holes_physics(true)
 
 
 ## 판정 대상 8개를 규격대로 세운다. **판정 모드가 아니면 아무것도 만들지 않는다** —
@@ -1673,7 +1686,8 @@ func input_dir() -> Vector3:
 			return screen_to_world(d)
 
 	# 마우스: 커서 쪽으로 간다. 데스크톱에서는 이쪽이 조이스틱보다 자연스럽다.
-	if _mouse_held and is_instance_valid(hole) and not cam.is_position_behind(hole.global_position):
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) \
+			and is_instance_valid(hole) and not cam.is_position_behind(hole.global_position):
 		var d2 := get_viewport().get_mouse_position() - cam.unproject_position(hole.global_position)
 		if d2.length() >= TOUCH_DEAD_PX:
 			return screen_to_world(d2)
@@ -1699,10 +1713,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		var g := e as InputEventScreenDrag
 		if g.index == _touch_id:
 			_touch_cur = g.position
-	elif e is InputEventMouseButton:
-		var m := e as InputEventMouseButton
-		if m.button_index == MOUSE_BUTTON_LEFT:
-			_mouse_held = m.pressed
 
 
 func move_hole(dt: float) -> void:
@@ -1751,8 +1761,16 @@ func leaderboard_text() -> String:
 		if int(a.score) != int(b.score):
 			return int(a.score) > int(b.score)
 		return float(a.radius) > float(b.radius))
+	# 상위 셋 + 나만 보인다. 여섯 줄을 다 세우면 화면 오른쪽이 표로 덮이고,
+	# 정작 알고 싶은 것("내가 몇 등인가")은 그 안에 묻힌다.
 	var lines := PackedStringArray([" 순위  이름    점수    크기"])
+	var mine := -1
 	for i in hs.size():
+		if str(hs[i].label) == "P":
+			mine = i
+	for i in hs.size():
+		if i >= 3 and i != mine:
+			continue
 		var h: Node3D = hs[i]
 		lines.append("%2d.  %-4s %6d  %5.1f" % [i + 1, h.label, h.score, h.radius])
 	return "\n".join(lines)
@@ -2016,6 +2034,8 @@ const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고�
 ## 빌드가 자기 값끼리 일치해 통과한다. 판정기가 정수를 손으로 박아 두었던 자리를
 ## 이름으로 바꾼 것이기도 하다: HOME 이 앞에 붙으며 PLAYING·OVER 가 한 칸씩 밀렸고,
 ## 그 순간 T1·T5·T6 이 조용히 엉뚱한 상태를 보고 있었다(실측으로 셋 다 탈락했다).
+## 리더보드에 싣는 상위 인원(§26). 그 아래로는 **나만** 더 싣는다.
+const SPEC_BOARD_TOP := 3
 const SPEC_STATE_HOME := 0
 const SPEC_STATE_PLAYING := 1
 const SPEC_STATE_OVER := 2
@@ -2064,7 +2084,8 @@ const HUD_FONT_PATH := "res://assets/fonts/hud_kr.ttf"
 ## 사본을 든다. 어긋나면 T8 이 글리프 없음으로 잡는다.
 const SPEC_HUD_CHARS := "점수크기삼킴먹힘순위이름시간종료혔다승리패배나키로작" \
 	+ "도를켜라동화살표드래그레벨하홈으"
-## T8③: 한글 26자를 그린 라벨이 남겨야 할 최소 잉크 픽셀. 실측 2568 의 1/4 이다.
+## T8③: SPEC_HUD_CHARS 를 그린 라벨이 남겨야 할 최소 잉크 픽셀.
+## §21 실측 2568 의 1/4 로 잡았고, §26 에서 음절이 42자로 늘어 실측은 3434 다.
 const HUD_INK_MIN := 640
 ## T8②-b: HUD 네 라벨이 그 순간 실제로 그리고 있어야 할 서로 다른 한글 음절 수.
 ## 실측 21 의 절반이다. 처음에 1/3(7)로 잡았더니 **네 문구 중 셋을 영문으로
@@ -3604,15 +3625,30 @@ func run_judge_5() -> void:
 		if a[1] != b[1]:
 			return a[1] > b[1]
 		return a[2] > b[2])
+	# §26: 보드는 **상위 셋 + 나**만 싣는다. 여섯 줄을 다 세우면 화면 오른쪽이 표로
+	# 덮이고 정작 알고 싶은 것("내가 몇 등인가")이 그 안에 묻힌다.
+	# 판정기가 기대 목록을 **따로 계산한다** — 구현체의 출력을 파싱해 자기 자신과
+	# 비교하면 무엇을 싣든 통과한다.
+	var want_rows := []
+	var mine := -1
+	for i in scored.size():
+		if str(scored[i][0]) == "P":
+			mine = i
+	for i in scored.size():
+		if i < SPEC_BOARD_TOP or i == mine:
+			want_rows.append(i)
 	var board: String = _main.hud_board.text
 	var rows := board.split("\n", false)
-	var t2: bool = rows.size() == scored.size() + 1
-	for i in scored.size():
+	var t2: bool = rows.size() == want_rows.size() + 1
+	for n in want_rows.size():
 		if not t2:
 			break
-		# 판정기가 정렬한 순서대로 이름이 그 줄에 있어야 한다
-		t2 = t2 and rows[i + 1].contains(str(scored[i][0])) \
-			and rows[i + 1].contains(str(scored[i][1]))
+		# 판정기가 정렬한 순서대로 이름·점수·**등수**가 그 줄에 있어야 한다.
+		# 등수를 함께 보지 않으면 나를 4위가 아니라 4번째 줄이라고만 적어도 통과한다.
+		var i: int = want_rows[n]
+		t2 = t2 and rows[n + 1].contains(str(scored[i][0])) \
+			and rows[n + 1].contains(str(scored[i][1])) \
+			and rows[n + 1].strip_edges().begins_with("%d." % (i + 1))
 	var t4: bool = not scored.is_empty() and str(_main.winner) == str(scored[0][0]) \
 		and int(_main.winner_score) == int(scored[0][1])
 	print("JUDGE 5 T2/T4: 구멍=%d 보드행=%d 승자=%s(%d) 기대=%s(%d)"
@@ -4594,14 +4630,32 @@ const SPEC_DRAG := [
 const DRAG_TOL := 0.02
 
 
-## 이 노드가 그리는 것 중 보이는 것이 하나라도 있는가.
-func any_visible(node: Node, names: Array) -> bool:
+## 그 역할의 노드들이 보이는가. `want` 가 참이면 **전부** 보여야 하고, 거짓이면
+## **하나도** 보이면 안 된다.
+##
+## "하나라도 보이면 참" 으로 두면 안 된다 — 제목만 남기고 부제·안내를 꺼도, 레벨만
+## 남기고 진행 바를 꺼도 통과한다. 규격은 "그 화면이 성립한다" 이지
+## "그 화면의 무언가가 있다" 가 아니다.
+##
+## 라벨·버튼은 **문구가 비어 있지 않은지도** 함께 본다. `visible` 만 보면 이름만
+## 맞춰 두고 아무것도 안 그리는 구현이 그대로 통과한다(빈 문자열 노드는 T8 의
+## 글리프 검사에서도 제외되므로 어디에서도 안 걸린다).
+func role_ok(node: Node, names: Array, want: bool) -> bool:
+	var seen := 0
 	for c in node.get_children():
-		if not (c is CanvasItem):
+		if not (c is CanvasItem) or not names.has(str(c.name)):
 			continue
-		if names.has(str(c.name)) and (c as CanvasItem).visible:
-			return true
-	return false
+		seen += 1
+		var vis: bool = (c as CanvasItem).visible
+		if want:
+			if not vis:
+				return false
+			if (c is Label or c is Button) and str(c.text).strip_edges().is_empty():
+				print("JUDGE 8 U1 %s 가 보이지만 문구가 비어 있다" % str(c.name))
+				return false
+		elif vis:
+			return false
+	return seen == names.size()
 
 
 ## U1·U2. 게임 UI 가 규격대로 도는가.
@@ -4682,25 +4736,83 @@ func run_judge_8() -> void:
 		for _i in 3:
 			await get_tree().process_frame
 		var want: Array = SPEC_UI_VIS[st]
-		var got := [any_visible(ui, start_names), any_visible(ui, over_names),
-			any_visible(ui, play_names)]
-		var ok: bool = got[0] == want[0] and got[1] == want[1] and got[2] == want[2]
+		var got := [role_ok(ui, start_names, want[0]), role_ok(ui, over_names, want[1]),
+			role_ok(ui, play_names, want[2])]
+		var ok: bool = got[0] and got[1] and got[2]
 		u1 = u1 and ok
-		print("JUDGE 8 U1 상태=%d 시작화면=%s/%s 결과버튼=%s/%s 인게임=%s/%s %s"
-			% [st, pf(got[0]), pf(want[0]), pf(got[1]), pf(want[1]),
-			   pf(got[2]), pf(want[2]), pf(ok)])
+		print("JUDGE 8 U1 상태=%d 시작화면(%s)=%s 결과버튼(%s)=%s 인게임(%s)=%s %s"
+			% [st, pf(want[0]), pf(got[0]), pf(want[1]), pf(got[1]),
+			   pf(want[2]), pf(got[2]), pf(ok)])
 
 	# 재시작이 플레이 상태로 되돌리는가(결과 화면의 "다시 하기" 가 하는 일).
 	_main.restart()
 	for _i in 3:
 		await get_tree().process_frame
 	var back_ok: bool = int(_main.state) == SPEC_STATE_PLAYING \
-		and not any_visible(ui, over_names) and any_visible(ui, play_names)
+		and role_ok(ui, over_names, false) and role_ok(ui, play_names, true)
 	u1 = u1 and back_ok
 	print("JUDGE 8 U1 재시작 후 state=%d 인게임복귀 %s" % [_main.state, pf(back_ok)])
 
-	print("JUDGE 8 U1=%s U2=%s" % [pf(u1), pf(u2)])
-	var ok2 := u1 and u2
+	# --- U4: **동적 문구**의 글리프 ------------------------------------------
+	# T8 은 정적 상수(TXT_*)만 덮는다. 레벨·킬 피드·점수 팝업은 `_process` 가 채우므로
+	# 판정 모드에서는 빈 문자열이고, T8 이 빈 노드를 제외해 **어디에서도 안 걸린다** —
+	# `"레벨 %d"` 를 `"단계 %d"` 로 바꾸면 웹에서 두 글자가 조용히 사라지는데 열한 종이
+	# 전부 통과한다. 이 프로젝트가 가장 무서워하는 실패 모드가 정확히 이 자리에 있었다.
+	# 그래서 **문구가 실제로 채워진 상태에서** 글리프를 묻는다.
+	_main.state = SPEC_STATE_PLAYING
+	ui.kill_feed("P", "AI1")
+	if is_instance_valid(hole):
+		hole.score += 1234                     # 점수 팝업을 띄운다
+	for _i in 3:
+		await get_tree().process_frame
+	var font: Font = (_main.hud as Control).get_theme_font("font")
+	var dyn := ""
+	for c in ui.get_children():
+		if c is Label or c is Button:
+			dyn += str(c.text)
+	var miss := ""
+	if font != null:
+		for i in dyn.length():
+			var ch := dyn.unicode_at(i)
+			if ch > 32 and not font.has_char(ch) and not miss.contains(dyn[i]):
+				miss += dyn[i]
+	var u4: bool = font != null and miss.is_empty() and not dyn.strip_edges().is_empty()
+	print("JUDGE 8 U4 동적 문구 %d자 글리프없음='%s' %s" % [dyn.length(), miss, pf(u4)])
+
+	# --- U3: 버튼이 실제로 눌리는가 -----------------------------------------
+	# U1 은 `begin_round()` 를 직접 부르므로 **버튼이 클릭을 받는지**는 아무도 안 본다.
+	# 전체 화면 딤이나 라벨이 mouse_filter 를 STOP 으로 두면 화면은 멀쩡한데
+	# 아무 버튼도 안 눌린다 — 배포하고 나서야 알게 되는 종류의 결함이다.
+	# 그래서 **뷰포트에 진짜 마우스 이벤트를 밀어 넣어** 히트 테스트까지 통과시킨다.
+	_main.state = SPEC_STATE_HOME
+	for _i in 3:
+		await get_tree().process_frame
+	var btn: Button = ui.get_node_or_null("_start_btn")
+	var u3 := btn != null
+	if u3:
+		var at := btn.get_global_rect().get_center()
+		for pressed in [true, false]:
+			var mb := InputEventMouseButton.new()
+			mb.button_index = MOUSE_BUTTON_LEFT
+			mb.pressed = pressed
+			mb.position = at
+			mb.global_position = at
+			get_viewport().push_input(mb)
+			await get_tree().process_frame
+		for _i in 3:
+			await get_tree().process_frame
+		u3 = int(_main.state) == SPEC_STATE_PLAYING
+	print("JUDGE 8 U3 시작 버튼 클릭 -> state=%d (기대 %d) %s"
+		% [_main.state, SPEC_STATE_PLAYING, pf(u3)])
+
+	# 판정을 끝내기 전에 되돌린다. 지금은 곧바로 quit 하지만, 뒤에 기준을 하나만 더
+	# 붙여도 게임 루프가 밑에서 돌기 시작한다 — 타이머가 줄고, 포식이 해소되고,
+	# **move_hole 이 판정 실행자의 실제 키보드·마우스를 읽는다.**
+	_main.judging = true
+	ui.set_process(false)
+
+	print("JUDGE 8 U1=%s U2=%s U3=%s U4=%s" % [pf(u1), pf(u2), pf(u3), pf(u4)])
+	var ok2 := u1 and u2 and u3 and u4
 	print("JUDGE RESULT -> %s" % ("PASS" if ok2 else "FAIL"))
 	get_tree().quit(0 if ok2 else 1)
 
@@ -7553,22 +7665,39 @@ T8은 이제 시작·결과 화면의 라벨·버튼까지 본다. 그것들은 
 
 | 기준 | 묻는 것 | 주입 | 결과 |
 |---|---|---|---|
-| U1 | 상태마다 보여야 할 것과 보이면 안 되는 것 | 시작 화면을 늘 켜 둔다 | F ✓ |
-| U1 | 재시작이 플레이로 되돌린다 | (위와 같은 경로) | — |
+| U1 | 상태마다 **역할의 노드가 전부** 보이고 문구가 비어 있지 않다 | 시작 화면을 늘 켜 둔다 / 부제만 끈다 / 부제 문구를 비운다 | F ✓ (셋 다) |
+| U1 | 재시작이 플레이로 되돌린다 | (같은 경로) | — |
 | U2 | 화면 드래그 → 월드 방향 (5방향) | 화면→월드 축을 뒤집는다 | F ✓ |
 | U2 | 손을 뗀 뒤에는 멈춘다 | 손뗌 처리를 없앤다 | F ✓ |
-| T8확장 | UI 문구의 글리프가 전부 있다 | 서브셋 밖 음절을 문구에 넣는다 | F ✓ |
+| U3 | 시작 버튼이 **실제로 눌린다** | 버튼이 클릭을 무시하게 한다 | F ✓ |
+| U4 | **동적** 문구의 글리프가 전부 있다 | `"레벨 %d"` → `"단계 %d"` | F ✓ |
+| T8확장 | 정적 UI 문구의 글리프가 전부 있다 | 서브셋 밖 음절을 문구에 넣는다 | F ✓ |
+| T2개정 | 보드가 상위 셋 + 나이고 **등수**가 맞다 | 나를 뺀다 / 등수를 한 칸 민다 | F ✓ (둘 다) |
 
-U2는 `input_dir()`만 부르지 않는다. **구멍을 실제로 움직여 본다** — 방향 벡터만 확인하면 `move_hole`이 그것을 엉뚱하게 쓰는 회귀를 놓친다.
+U2는 `input_dir()`만 부르지 않는다. **구멍을 실제로 움직여 본다** — 방향 벡터만 확인하면 `move_hole`이 그것을 엉뚱하게 쓰는 회귀를 놓친다. U3도 같은 이유로 `pressed` 신호를 쏘지 않고 **뷰포트에 진짜 마우스 이벤트를 밀어 넣어** 히트 테스트까지 통과시킨다.
+
+### 독립 감사가 찾은 것 — 판정 셋과 실물 하나
+
+감사(81/100)가 지적한 자리 중 셋은 **판정이 통과시키면 안 되는 것을 통과시키는** 종류였다.
+
+**① 동적 문구는 어떤 판정에도 안 걸렸다.** `_level`·`_feed`·`_pop`은 `text=""`로 만들어지고 `_process`가 채우는데, 판정 모드에서는 `set_process(false)`라 T8 시점에 전부 빈 문자열이고 T8은 빈 노드를 제외한다. `"레벨 %d"`를 `"단계 %d"`로 바꾸면 웹에서 두 글자가 조용히 사라지는데 **열한 종이 전부 통과한다.** 이 프로젝트가 가장 무서워하는 실패 모드가 정확히 그 자리에 있었고, 위 표가 이미 막았다고 적고 있어 더 위험했다. U4가 문구를 실제로 채운 뒤 묻는다.
+
+**② U1이 `visible`만 봤다.** 이름만 맞춰 두고 아무것도 안 그리는 구현이 통과한다. 문구가 비어 있지 않은지도 함께 본다.
+
+**③ `any_visible`이 "하나라도 보이면 참"이었다.** 제목만 남기고 부제·안내를 꺼도 통과한다. "보여야 한다" 쪽은 **전부**, "보이면 안 된다" 쪽은 **하나도**로 갈랐다.
+
+실물 결함 하나: **`ProgressBar`의 `mouse_filter`가 기본값(STOP)이었다.** 딤과 라벨은 IGNORE로 두었는데 이것만 빠져서, 플레이 중 좌하단 246×12px — 휴대폰 엄지가 놓이기 쉬운 자리 — 에서 시작한 터치가 `_unhandled_input`에 닿지 못했다. 모바일 입력이 Phase C를 앞당긴 이유였으므로 가벼운 누락이 아니다.
+
+그 밖에 함께 고친 것: 마우스 눌림을 이벤트로 기억하지 않고 매번 묻는다(포커스를 잃으면 릴리즈가 안 와서 구멍이 흘러간다) · 시작 화면에서 구멍의 물리를 멈춘다(스폰 지점에 걸친 프롭이 판이 시작하기 전에 삼켜졌다) · `judge8`이 끝나며 `judging`을 되돌린다 · 계획에 있었으나 빠졌던 **조이스틱 시각 피드백**과 **보드 압축(상위 3 + 나)**.
 
 ### 회귀
 
-**데스크톱 Forward+ 열한 종 · 데스크톱 Compatibility 열한 종 · 브라우저 게이트 열 종 — 서른두 번 전부 PASS.** 신규 주입 4종을 더해 누적 101종이다.
+**데스크톱 Forward+ 열한 종 · 데스크톱 Compatibility 열한 종 · 브라우저 게이트 열 종 — 서른두 번 전부 PASS.** 신규 주입 10종(U1 셋 · U2 둘 · U3 · U4 · T8확장 · T2 둘)을 더해 누적 107종이다.
 
 ### 남긴 한계
 
 - **실기 검증은 사람 몫이다.** 터치 경로는 판정이 합성 이벤트로 시험하지만, 실제 휴대폰의 화면 크기·DPI·주소창 높이에서 버튼이 눌리는지는 기계가 답하지 않는다.
-- **UI 레이아웃은 앵커 기반이라 극단적 종횡비에서 겹칠 수 있다.** 세로로 아주 긴 화면에서 시작 버튼과 조작 안내가 가까워진다.
+- **UI 레이아웃은 앵커 기반이라 극단적 종횡비에서 겹칠 수 있다.** 세로로 아주 긴 화면에서 시작 버튼과 조작 안내가 가까워진다. 감사가 기본 해상도에서 제목·부제 상자가 약 24px 겹친다고 지적해 부제를 아래로 내렸지만, **상자 겹침 자체를 기계가 보지는 않는다.**
 - **결과 화면에 통계가 없다.** 파괴율·최다 포식 카테고리·신기록은 Phase D(리텐션)의 몫이고, 그 앞에 저장이 있어야 한다.
 - **InputMap 정식화는 여전히 미이행이다**(위 근거 참조).
 
@@ -7599,6 +7728,10 @@ const LEVEL_R := [1.5, 2.5, 4.0, 6.0, 9.0, 13.0, 18.0, 25.0, 34.0, 45.0]
 const FEED_SEC := 3.0
 ## 점수 팝업이 떠 있는 시간(초).
 const POP_SEC := 1.0
+## 가상 조이스틱의 베이스·노브 반경(픽셀). 노브가 베이스 밖으로 나가지 않게
+## 이동량을 (베이스 - 노브) 로 자른다.
+const STICK_R := 56.0
+const STICK_KNOB_R := 24.0
 
 ## 화면 문구. **여기의 한글 음절은 전부 `tools/font_subset.mjs` 의 집합 안에 있어야
 ## 한다** — 없는 글자는 에러 없이 사라진다. 문구를 고치면 폰트를 다시 굽고
@@ -7606,7 +7739,7 @@ const POP_SEC := 1.0
 const TXT_TITLE := "HOLE.IO"
 const TXT_SUB := "도시를 삼켜라"
 const TXT_START := "시작"
-const TXT_HINT := "이동   WASD   화살표   드래그"
+const TXT_HINT := "이동   WASD   화살표   드래그"   # 마우스는 누른 채 커서 쪽으로
 const TXT_AGAIN := "다시 하기"
 const TXT_HOME := "홈으로"
 
@@ -7622,6 +7755,8 @@ var _level: Label
 var _bar: ProgressBar
 var _feed: Label
 var _pop: Label
+var _stick_base: Panel
+var _stick_knob: Panel
 
 var _feed_t := 0.0
 var _pop_t := 0.0
@@ -7648,7 +7783,7 @@ func build() -> void:
 	add_child(_dim)
 
 	_title = make_label("_title", TXT_TITLE, 64, Vector2(0.5, 0.28), Color(1, 1, 1))
-	_sub = make_label("_sub", TXT_SUB, 26, Vector2(0.5, 0.38), Color(0.75, 0.82, 0.95))
+	_sub = make_label("_sub", TXT_SUB, 26, Vector2(0.5, 0.42), Color(0.75, 0.82, 0.95))
 	_hint = make_label("_hint", TXT_HINT, 18, Vector2(0.5, 0.78), Color(0.62, 0.68, 0.78))
 
 	_start_btn = make_button("_start_btn", TXT_START, Vector2(0.5, 0.55), Vector2(220, 62), 28)
@@ -7669,6 +7804,10 @@ func build() -> void:
 
 	_bar = ProgressBar.new()
 	_bar.name = "_bar"
+	# **Control 의 기본 mouse_filter 는 STOP 이다.** 그대로 두면 좌하단 246x12 px —
+	# 휴대폰 엄지가 놓이기 쉬운 자리 — 에서 시작한 터치가 `_unhandled_input` 에
+	# 도달하지 못해 구멍이 움직이지 않는다. 딤·라벨은 IGNORE 인데 이것만 빠져 있었다.
+	_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_bar.show_percentage = false
 	_bar.min_value = 0.0
 	_bar.max_value = 1.0
@@ -7701,6 +7840,25 @@ func build() -> void:
 	_pop.set_anchors_preset(Control.PRESET_TOP_LEFT)
 	_pop.size = Vector2(160, 40)
 	_pop.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+	# 가상 조이스틱의 시각 피드백. 플로팅이라 원점이 매번 다른데 아무것도 안 그리면
+	# **어디를 기준으로 미는지도, 데드존 안인지도 보이지 않는다.**
+	# 원은 StyleBoxFlat 의 모서리 반경을 절반으로 줘서 만든다 — 이미지 에셋이 필요 없다.
+	_stick_base = make_ring("_stick_base", STICK_R, Color(1, 1, 1, 0.16))
+	_stick_knob = make_ring("_stick_knob", STICK_KNOB_R, Color(1, 1, 1, 0.34))
+
+
+func make_ring(nm: String, r: float, col: Color) -> Panel:
+	var p := Panel.new()
+	p.name = nm
+	p.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	p.size = Vector2(r * 2.0, r * 2.0)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = col
+	sb.set_corner_radius_all(int(r))
+	p.add_theme_stylebox_override("panel", sb)
+	add_child(p)
+	return p
 
 
 ## 노드 이름은 **판정과의 계약**이다(§26). 코드로 만든 노드는 이름을 안 주면
@@ -7759,7 +7917,8 @@ func make_button(nm: String, t: String, anchor: Vector2, sz: Vector2, size: int)
 ## 판정 모드용. 이 노드가 그리는 것을 전부 숨긴다.
 func hide_all() -> void:
 	for c in get_children():
-		(c as CanvasItem).visible = false
+		if c is CanvasItem:
+			(c as CanvasItem).visible = false
 
 
 func _on_start() -> void:
@@ -7774,6 +7933,7 @@ func _on_home() -> void:
 	_main.restart()
 	_main.state = _main.State.HOME
 	_main.set_ai(false)
+	_main.set_holes_physics(false)     # 시작 화면에서 세계가 계속 먹지 않게
 
 
 func kill_feed(eater: String, prey: String) -> void:
@@ -7820,6 +7980,19 @@ func _process(dt: float) -> void:
 		var lo: float = float(LEVEL_R[lv - 1])
 		var hi: float = float(LEVEL_R[mini(lv, LEVEL_R.size() - 1)])
 		_bar.value = 1.0 if lv >= LEVEL_R.size() else clampf((r - lo) / maxf(hi - lo, 1e-3), 0.0, 1.0)
+
+	# 가상 조이스틱: 손가락이 눌려 있는 동안만 보인다. 원점은 main.gd 가 쥐고 있고
+	# 여기서는 그리기만 한다 — 입력을 해석하는 자리는 하나여야 한다.
+	var stick: bool = play and int(_main._touch_id) >= 0
+	_stick_base.visible = stick
+	_stick_knob.visible = stick
+	if stick:
+		var o: Vector2 = _main._touch_start
+		var d: Vector2 = _main._touch_cur - o
+		if d.length() > STICK_R - STICK_KNOB_R:
+			d = d.normalized() * (STICK_R - STICK_KNOB_R)
+		_stick_base.position = o - Vector2(STICK_R, STICK_R)
+		_stick_knob.position = o + d - Vector2(STICK_KNOB_R, STICK_KNOB_R)
 
 	_feed_t = maxf(_feed_t - dt, 0.0)
 	_feed.visible = _feed_t > 0.0 and play

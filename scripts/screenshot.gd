@@ -156,6 +156,8 @@ const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고�
 ## 빌드가 자기 값끼리 일치해 통과한다. 판정기가 정수를 손으로 박아 두었던 자리를
 ## 이름으로 바꾼 것이기도 하다: HOME 이 앞에 붙으며 PLAYING·OVER 가 한 칸씩 밀렸고,
 ## 그 순간 T1·T5·T6 이 조용히 엉뚱한 상태를 보고 있었다(실측으로 셋 다 탈락했다).
+## 리더보드에 싣는 상위 인원(§26). 그 아래로는 **나만** 더 싣는다.
+const SPEC_BOARD_TOP := 3
 const SPEC_STATE_HOME := 0
 const SPEC_STATE_PLAYING := 1
 const SPEC_STATE_OVER := 2
@@ -204,7 +206,8 @@ const HUD_FONT_PATH := "res://assets/fonts/hud_kr.ttf"
 ## 사본을 든다. 어긋나면 T8 이 글리프 없음으로 잡는다.
 const SPEC_HUD_CHARS := "점수크기삼킴먹힘순위이름시간종료혔다승리패배나키로작" \
 	+ "도를켜라동화살표드래그레벨하홈으"
-## T8③: 한글 26자를 그린 라벨이 남겨야 할 최소 잉크 픽셀. 실측 2568 의 1/4 이다.
+## T8③: SPEC_HUD_CHARS 를 그린 라벨이 남겨야 할 최소 잉크 픽셀.
+## §21 실측 2568 의 1/4 로 잡았고, §26 에서 음절이 42자로 늘어 실측은 3434 다.
 const HUD_INK_MIN := 640
 ## T8②-b: HUD 네 라벨이 그 순간 실제로 그리고 있어야 할 서로 다른 한글 음절 수.
 ## 실측 21 의 절반이다. 처음에 1/3(7)로 잡았더니 **네 문구 중 셋을 영문으로
@@ -1744,15 +1747,30 @@ func run_judge_5() -> void:
 		if a[1] != b[1]:
 			return a[1] > b[1]
 		return a[2] > b[2])
+	# §26: 보드는 **상위 셋 + 나**만 싣는다. 여섯 줄을 다 세우면 화면 오른쪽이 표로
+	# 덮이고 정작 알고 싶은 것("내가 몇 등인가")이 그 안에 묻힌다.
+	# 판정기가 기대 목록을 **따로 계산한다** — 구현체의 출력을 파싱해 자기 자신과
+	# 비교하면 무엇을 싣든 통과한다.
+	var want_rows := []
+	var mine := -1
+	for i in scored.size():
+		if str(scored[i][0]) == "P":
+			mine = i
+	for i in scored.size():
+		if i < SPEC_BOARD_TOP or i == mine:
+			want_rows.append(i)
 	var board: String = _main.hud_board.text
 	var rows := board.split("\n", false)
-	var t2: bool = rows.size() == scored.size() + 1
-	for i in scored.size():
+	var t2: bool = rows.size() == want_rows.size() + 1
+	for n in want_rows.size():
 		if not t2:
 			break
-		# 판정기가 정렬한 순서대로 이름이 그 줄에 있어야 한다
-		t2 = t2 and rows[i + 1].contains(str(scored[i][0])) \
-			and rows[i + 1].contains(str(scored[i][1]))
+		# 판정기가 정렬한 순서대로 이름·점수·**등수**가 그 줄에 있어야 한다.
+		# 등수를 함께 보지 않으면 나를 4위가 아니라 4번째 줄이라고만 적어도 통과한다.
+		var i: int = want_rows[n]
+		t2 = t2 and rows[n + 1].contains(str(scored[i][0])) \
+			and rows[n + 1].contains(str(scored[i][1])) \
+			and rows[n + 1].strip_edges().begins_with("%d." % (i + 1))
 	var t4: bool = not scored.is_empty() and str(_main.winner) == str(scored[0][0]) \
 		and int(_main.winner_score) == int(scored[0][1])
 	print("JUDGE 5 T2/T4: 구멍=%d 보드행=%d 승자=%s(%d) 기대=%s(%d)"
@@ -2734,14 +2752,32 @@ const SPEC_DRAG := [
 const DRAG_TOL := 0.02
 
 
-## 이 노드가 그리는 것 중 보이는 것이 하나라도 있는가.
-func any_visible(node: Node, names: Array) -> bool:
+## 그 역할의 노드들이 보이는가. `want` 가 참이면 **전부** 보여야 하고, 거짓이면
+## **하나도** 보이면 안 된다.
+##
+## "하나라도 보이면 참" 으로 두면 안 된다 — 제목만 남기고 부제·안내를 꺼도, 레벨만
+## 남기고 진행 바를 꺼도 통과한다. 규격은 "그 화면이 성립한다" 이지
+## "그 화면의 무언가가 있다" 가 아니다.
+##
+## 라벨·버튼은 **문구가 비어 있지 않은지도** 함께 본다. `visible` 만 보면 이름만
+## 맞춰 두고 아무것도 안 그리는 구현이 그대로 통과한다(빈 문자열 노드는 T8 의
+## 글리프 검사에서도 제외되므로 어디에서도 안 걸린다).
+func role_ok(node: Node, names: Array, want: bool) -> bool:
+	var seen := 0
 	for c in node.get_children():
-		if not (c is CanvasItem):
+		if not (c is CanvasItem) or not names.has(str(c.name)):
 			continue
-		if names.has(str(c.name)) and (c as CanvasItem).visible:
-			return true
-	return false
+		seen += 1
+		var vis: bool = (c as CanvasItem).visible
+		if want:
+			if not vis:
+				return false
+			if (c is Label or c is Button) and str(c.text).strip_edges().is_empty():
+				print("JUDGE 8 U1 %s 가 보이지만 문구가 비어 있다" % str(c.name))
+				return false
+		elif vis:
+			return false
+	return seen == names.size()
 
 
 ## U1·U2. 게임 UI 가 규격대로 도는가.
@@ -2822,25 +2858,83 @@ func run_judge_8() -> void:
 		for _i in 3:
 			await get_tree().process_frame
 		var want: Array = SPEC_UI_VIS[st]
-		var got := [any_visible(ui, start_names), any_visible(ui, over_names),
-			any_visible(ui, play_names)]
-		var ok: bool = got[0] == want[0] and got[1] == want[1] and got[2] == want[2]
+		var got := [role_ok(ui, start_names, want[0]), role_ok(ui, over_names, want[1]),
+			role_ok(ui, play_names, want[2])]
+		var ok: bool = got[0] and got[1] and got[2]
 		u1 = u1 and ok
-		print("JUDGE 8 U1 상태=%d 시작화면=%s/%s 결과버튼=%s/%s 인게임=%s/%s %s"
-			% [st, pf(got[0]), pf(want[0]), pf(got[1]), pf(want[1]),
-			   pf(got[2]), pf(want[2]), pf(ok)])
+		print("JUDGE 8 U1 상태=%d 시작화면(%s)=%s 결과버튼(%s)=%s 인게임(%s)=%s %s"
+			% [st, pf(want[0]), pf(got[0]), pf(want[1]), pf(got[1]),
+			   pf(want[2]), pf(got[2]), pf(ok)])
 
 	# 재시작이 플레이 상태로 되돌리는가(결과 화면의 "다시 하기" 가 하는 일).
 	_main.restart()
 	for _i in 3:
 		await get_tree().process_frame
 	var back_ok: bool = int(_main.state) == SPEC_STATE_PLAYING \
-		and not any_visible(ui, over_names) and any_visible(ui, play_names)
+		and role_ok(ui, over_names, false) and role_ok(ui, play_names, true)
 	u1 = u1 and back_ok
 	print("JUDGE 8 U1 재시작 후 state=%d 인게임복귀 %s" % [_main.state, pf(back_ok)])
 
-	print("JUDGE 8 U1=%s U2=%s" % [pf(u1), pf(u2)])
-	var ok2 := u1 and u2
+	# --- U4: **동적 문구**의 글리프 ------------------------------------------
+	# T8 은 정적 상수(TXT_*)만 덮는다. 레벨·킬 피드·점수 팝업은 `_process` 가 채우므로
+	# 판정 모드에서는 빈 문자열이고, T8 이 빈 노드를 제외해 **어디에서도 안 걸린다** —
+	# `"레벨 %d"` 를 `"단계 %d"` 로 바꾸면 웹에서 두 글자가 조용히 사라지는데 열한 종이
+	# 전부 통과한다. 이 프로젝트가 가장 무서워하는 실패 모드가 정확히 이 자리에 있었다.
+	# 그래서 **문구가 실제로 채워진 상태에서** 글리프를 묻는다.
+	_main.state = SPEC_STATE_PLAYING
+	ui.kill_feed("P", "AI1")
+	if is_instance_valid(hole):
+		hole.score += 1234                     # 점수 팝업을 띄운다
+	for _i in 3:
+		await get_tree().process_frame
+	var font: Font = (_main.hud as Control).get_theme_font("font")
+	var dyn := ""
+	for c in ui.get_children():
+		if c is Label or c is Button:
+			dyn += str(c.text)
+	var miss := ""
+	if font != null:
+		for i in dyn.length():
+			var ch := dyn.unicode_at(i)
+			if ch > 32 and not font.has_char(ch) and not miss.contains(dyn[i]):
+				miss += dyn[i]
+	var u4: bool = font != null and miss.is_empty() and not dyn.strip_edges().is_empty()
+	print("JUDGE 8 U4 동적 문구 %d자 글리프없음='%s' %s" % [dyn.length(), miss, pf(u4)])
+
+	# --- U3: 버튼이 실제로 눌리는가 -----------------------------------------
+	# U1 은 `begin_round()` 를 직접 부르므로 **버튼이 클릭을 받는지**는 아무도 안 본다.
+	# 전체 화면 딤이나 라벨이 mouse_filter 를 STOP 으로 두면 화면은 멀쩡한데
+	# 아무 버튼도 안 눌린다 — 배포하고 나서야 알게 되는 종류의 결함이다.
+	# 그래서 **뷰포트에 진짜 마우스 이벤트를 밀어 넣어** 히트 테스트까지 통과시킨다.
+	_main.state = SPEC_STATE_HOME
+	for _i in 3:
+		await get_tree().process_frame
+	var btn: Button = ui.get_node_or_null("_start_btn")
+	var u3 := btn != null
+	if u3:
+		var at := btn.get_global_rect().get_center()
+		for pressed in [true, false]:
+			var mb := InputEventMouseButton.new()
+			mb.button_index = MOUSE_BUTTON_LEFT
+			mb.pressed = pressed
+			mb.position = at
+			mb.global_position = at
+			get_viewport().push_input(mb)
+			await get_tree().process_frame
+		for _i in 3:
+			await get_tree().process_frame
+		u3 = int(_main.state) == SPEC_STATE_PLAYING
+	print("JUDGE 8 U3 시작 버튼 클릭 -> state=%d (기대 %d) %s"
+		% [_main.state, SPEC_STATE_PLAYING, pf(u3)])
+
+	# 판정을 끝내기 전에 되돌린다. 지금은 곧바로 quit 하지만, 뒤에 기준을 하나만 더
+	# 붙여도 게임 루프가 밑에서 돌기 시작한다 — 타이머가 줄고, 포식이 해소되고,
+	# **move_hole 이 판정 실행자의 실제 키보드·마우스를 읽는다.**
+	_main.judging = true
+	ui.set_process(false)
+
+	print("JUDGE 8 U1=%s U2=%s U3=%s U4=%s" % [pf(u1), pf(u2), pf(u3), pf(u4)])
+	var ok2 := u1 and u2 and u3 and u4
 	print("JUDGE RESULT -> %s" % ("PASS" if ok2 else "FAIL"))
 	get_tree().quit(0 if ok2 else 1)
 

@@ -31,11 +31,13 @@ var ai_holes: Array[Node3D] = []
 
 ## 포인터 입력 상태(§26). 터치는 손가락 하나만 조종에 쓴다 — 둘째 손가락이
 ## 방향을 빼앗으면 조작이 튄다.
+## 마우스 눌림은 **이벤트로 기억하지 않고 매번 물어본다.** 포커스를 잃으면
+## (알트탭·탭 전환) Godot 은 눌림 상태를 비우면서 릴리즈 이벤트를 트리로 보내지
+## 않는다 — 기억해 두면 참으로 남아 구멍이 마지막 커서 방향으로 계속 흘러간다.
 const TOUCH_DEAD_PX := 18.0
 var _touch_id := -1
 var _touch_start := Vector2.ZERO
 var _touch_cur := Vector2.ZERO
-var _mouse_held := false
 
 @onready var ui: CanvasLayer = get_node_or_null("UI")
 @onready var hud_root: CanvasLayer = $HUD
@@ -119,7 +121,17 @@ func _ready() -> void:
 	state = State.HOME if not judging else State.PLAYING
 	if state == State.HOME:
 		set_ai(false)
+		set_holes_physics(false)
 	update_hud()
+
+
+## 모든 구멍의 물리를 켜고 끈다. **AI 조종자만 멈추는 것으로는 부족하다** —
+## 구멍 자신의 `_physics_process` 가 흡입·삼킴을 돌리므로, 시작 화면에 머무는 동안
+## 스폰 지점에 걸친 프롭이 삼켜지고 점수·반경이 오른 채로 판이 시작한다.
+func set_holes_physics(on: bool) -> void:
+	for h in registry.holes():
+		if is_instance_valid(h):
+			h.set_physics_process(on)
 
 
 ## 시작 화면에서 한 판을 연다. UI 버튼이 부른다.
@@ -127,6 +139,7 @@ func begin_round() -> void:
 	state = State.PLAYING
 	time_left = round_seconds
 	set_ai(true)
+	set_holes_physics(true)
 
 
 ## 판정 대상 8개를 규격대로 세운다. **판정 모드가 아니면 아무것도 만들지 않는다** —
@@ -374,7 +387,8 @@ func input_dir() -> Vector3:
 			return screen_to_world(d)
 
 	# 마우스: 커서 쪽으로 간다. 데스크톱에서는 이쪽이 조이스틱보다 자연스럽다.
-	if _mouse_held and is_instance_valid(hole) and not cam.is_position_behind(hole.global_position):
+	if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) \
+			and is_instance_valid(hole) and not cam.is_position_behind(hole.global_position):
 		var d2 := get_viewport().get_mouse_position() - cam.unproject_position(hole.global_position)
 		if d2.length() >= TOUCH_DEAD_PX:
 			return screen_to_world(d2)
@@ -400,10 +414,6 @@ func _unhandled_input(e: InputEvent) -> void:
 		var g := e as InputEventScreenDrag
 		if g.index == _touch_id:
 			_touch_cur = g.position
-	elif e is InputEventMouseButton:
-		var m := e as InputEventMouseButton
-		if m.button_index == MOUSE_BUTTON_LEFT:
-			_mouse_held = m.pressed
 
 
 func move_hole(dt: float) -> void:
@@ -452,8 +462,16 @@ func leaderboard_text() -> String:
 		if int(a.score) != int(b.score):
 			return int(a.score) > int(b.score)
 		return float(a.radius) > float(b.radius))
+	# 상위 셋 + 나만 보인다. 여섯 줄을 다 세우면 화면 오른쪽이 표로 덮이고,
+	# 정작 알고 싶은 것("내가 몇 등인가")은 그 안에 묻힌다.
 	var lines := PackedStringArray([" 순위  이름    점수    크기"])
+	var mine := -1
 	for i in hs.size():
+		if str(hs[i].label) == "P":
+			mine = i
+	for i in hs.size():
+		if i >= 3 and i != mine:
+			continue
 		var h: Node3D = hs[i]
 		lines.append("%2d.  %-4s %6d  %5.1f" % [i + 1, h.label, h.score, h.radius])
 	return "\n".join(lines)
