@@ -1,4 +1,4 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 (rev.26)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 (rev.27)
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
 >
@@ -275,7 +275,7 @@ rev.8까지 "Downtown City MegaKit(glTF) 단독"으로 적어 두었으나, **3�
 ### `scenes/main.tscn` (전문 — 실행 검증본)
 
 ```
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
 [ext_resource type="Shader" path="res://shaders/ground_hole.gdshader" id="2"]
@@ -288,6 +288,7 @@ rev.8까지 "Downtown City MegaKit(glTF) 단독"으로 적어 두었으나, **3�
 [ext_resource type="FontFile" uid="uid://b3x3lllwaes5u" path="res://assets/fonts/hud_kr.ttf" id="9"]
 [ext_resource type="Script" path="res://scripts/ui.gd" id="10"]
 [ext_resource type="Script" path="res://scripts/traffic.gd" id="11"]
+[ext_resource type="Script" path="res://scripts/citizens.gd" id="12"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -341,6 +342,9 @@ shape = SubResource("Shape_1")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("8")
+
+[node name="Citizens" type="Node3D" parent="."]
+script = ExtResource("12")
 
 [node name="Traffic" type="Node3D" parent="."]
 script = ExtResource("11")
@@ -1425,6 +1429,9 @@ func _ready() -> void:
 	var tr := get_node_or_null("Traffic")
 	if tr != null and not judging:
 		tr.boot()
+	var cz := get_node_or_null("Citizens")
+	if cz != null and not judging:
+		cz.boot()
 	# 게임은 시작 화면에서 열리고, 판정은 곧바로 플레이 상태에서 시작한다.
 	# Judge._ready 가 Main._ready 보다 먼저 돌아 judging 을 세워 두므로 여기서 읽을 수 있다.
 	state = State.HOME if not judging else State.PLAYING
@@ -1601,6 +1608,9 @@ func restart() -> void:
 	var tr := get_node_or_null("Traffic")
 	if tr != null and not judging:
 		tr.reset()
+	var cz := get_node_or_null("Citizens")
+	if cz != null and not judging:
+		cz.reset()
 
 	state = State.PLAYING
 	time_left = round_seconds
@@ -4159,6 +4169,9 @@ func run_judge_3c() -> void:
 	var tr: Node = _main.get_node_or_null("Traffic")
 	if tr != null:
 		tr.spawn_for_judge(int(tr.car_count))
+		var czp: Node = _main.get_node_or_null("Citizens")
+		if czp != null:
+			czp.spawn_for_judge(int(czp.citizen_count))
 		_main.set_hole_position(PERF_SPOTS["dense"])
 		_reg.flush()
 		_cam.follow(hole, hole.radius, true)
@@ -4177,8 +4190,10 @@ func run_judge_3c() -> void:
 		var s2 := worst <= FRAME_BUDGET_MS * 2.0
 		f1 = f1 and s1
 		f2 = f2 and s2
-		print("JUDGE 3c [traffic] 차=%d avg=%.2fms (%.0f fps) worst=%.2fms F1=%s F2=%s"
-			% [tr.car_total(), avg, 1000.0 / maxf(avg, 0.001), worst, pf(s1), pf(s2)])
+		var czn: Node = _main.get_node_or_null("Citizens")
+		print("JUDGE 3c [dynamic] 차=%d 시민=%d avg=%.2fms (%.0f fps) worst=%.2fms F1=%s F2=%s"
+			% [tr.car_total(), 0 if czn == null else czn.citizen_total(),
+			   avg, 1000.0 / maxf(avg, 0.001), worst, pf(s1), pf(s2)])
 
 	var ok := f1 and f2
 	print("JUDGE 3c F1=%s F2=%s -> %s" % [pf(f1), pf(f2), ("PASS" if ok else "FAIL")])
@@ -4694,6 +4709,11 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 ## M 시나리오가 띄우는 차의 수. 게임 기본값과 달라도 된다 — 묻는 것은 "규격대로
 ## 도는가" 이지 "몇 대인가" 가 아니다.
 const TRAFFIC_N := 24
+## M8·M9 시나리오의 시민 수.
+const CITIZEN_N := 60
+## M8: 300프레임(5초) 동안 걸어야 할 경로장의 중앙값(m). 보행 1.8 m/s x 5s = 9m 이므로
+## 4 는 "굳지 않았다" 를 보는 낮은 문턱이다(구간 끝에서 되돌아서느라 왕복이 섞인다).
+const CITIZEN_MIN_PATH := 4.0
 ## M1: 이 프레임 동안 돌리고 평균 변위를 잰다.
 const TRAFFIC_FRAMES := 300
 ## M1: 그동안 차가 최소한 이만큼은 움직여야 한다(m). 속도 하한 6.0 × 5초 = 30m 이므로
@@ -4714,6 +4734,23 @@ const JUMP_MAX_N := 40
 func spec_driving_u(k: int) -> float:
 	var m := spec_median(k)
 	return m + (spec_road_half(k) - m) * 0.25
+
+
+## 시민이 걷는 보도 중심선의 오프셋. 아스팔트와 커브의 한가운데다.
+func spec_walk_u(k: int) -> float:
+	return (spec_road_half(k) + spec_curb_half(k)) * 0.5
+
+
+## 이 사람이 규격 보도 위에 있는가. 도로가 **존재하는** 세그먼트여야 한다 —
+## 걷힌 도로의 보도는 맨땅이고, 거기를 걸으면 허공을 걷는 것으로 보인다.
+func on_spec_walk(p: Vector3) -> bool:
+	var kx := spec_line_index(p.x)
+	var kz := spec_line_index(p.z)
+	var on_ew: bool = absf(absf(p.z - float(kz) * SPEC_PITCH) - spec_walk_u(kz)) < LANE_U_TOL \
+		and spec_seg_ew(kz, spec_cell_of(p.x))
+	var on_ns: bool = absf(absf(p.x - float(kx) * SPEC_PITCH) - spec_walk_u(kx)) < LANE_U_TOL \
+		and spec_seg_ns(kx, spec_cell_of(p.z))
+	return on_ew or on_ns
 
 
 ## 이 차가 규격 차선 위에 있는가. 대로여야 하고, 오프셋이 규격 한 점이어야 하며,
@@ -4767,9 +4804,13 @@ func run_judge_9() -> void:
 	# --- M4: 판정 격리 -------------------------------------------------------
 	# **전용 요청이 없으면 판정 모드에는 동적 개체가 하나도 없다.** 이것을 먼저 묻는다 —
 	# 아래에서 직접 띄우고 나면 다시 물을 수 없다.
+	var cz: Node = _main.get_node_or_null("Citizens")
 	var m4: bool = int(tr.car_total()) == 0 and tr.get_child_count() == 0
-	print("JUDGE 9 M4 판정 격리: 요청 전 차=%d 자식=%d %s"
-		% [tr.car_total(), tr.get_child_count(), pf(m4)])
+	var cz_pre: bool = cz == null or (int(cz.citizen_total()) == 0 and cz.get_child_count() == 0)
+	print("JUDGE 9 M4 판정 격리: 요청 전 차=%d/%d 시민=%d/%d %s"
+		% [tr.car_total(), tr.get_child_count(),
+		   0 if cz == null else cz.citizen_total(),
+		   0 if cz == null else cz.get_child_count(), pf(m4 and cz_pre)])
 
 	# 구멍을 지도 구석으로 치운다. 대로에서 멀어야 차를 먹지 않는다.
 	var hole: Node3D = _reg.holes()[0]
@@ -4914,9 +4955,52 @@ func run_judge_9() -> void:
 	print("JUDGE 9 M7 인계 중 규격이탈=%d 최소 대수=%d(>= %d) %s"
 		% [m7_bad, m7_min, TRAFFIC_N, pf(m7)])
 
-	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s"
-		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7)])
-	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7
+	# --- M8·M9: 시민 (§28) ---------------------------------------------------
+	# 판정 격리는 위의 M4 와 같은 자리에서 이미 쟀다(cz_pre).
+	# M8: 실제로 걷는가 — 도약을 버린 경로장의 중앙값으로 본다(M1 과 같은 이유).
+	# M9: 보도 규격 위인가 — 걷힌 도로의 보도(맨땅)를 걷지 않는가.
+	var m8 := true
+	var m9 := true
+	if cz != null:
+		hole.set_radius(SPEC_START_R)
+		hole.move_to(Vector3(-176.0, 0.0, -176.0))
+		_reg.flush()
+		cz.spawn_for_judge(CITIZEN_N)
+		await get_tree().physics_frame
+		var cpath := {}
+		var clast := {}
+		var m9_bad := 0
+		for i in int(cz.citizen_total()):
+			clast[int(cz.citizen_id(i))] = cz.citizen_pos(i)
+		for _f in TRAFFIC_FRAMES:
+			await get_tree().physics_frame
+			for i in int(cz.citizen_total()):
+				var p: Vector3 = cz.citizen_pos(i)
+				var id: int = int(cz.citizen_id(i))
+				if clast.has(id):
+					var st: float = (p - (clast[id] as Vector3)).length()
+					if st <= JUMP_MAX:
+						cpath[id] = float(cpath.get(id, 0.0)) + st
+				clast[id] = p
+				if not on_spec_walk(p):
+					if m9_bad < 5:
+						print("JUDGE 9 M9 보도 규격 밖: %s" % str(p))
+					m9_bad += 1
+					m9 = false
+		var cp := []
+		for id in cpath:
+			cp.append(float(cpath[id]))
+		cp.sort()
+		var cmed: float = 0.0 if cp.is_empty() else float(cp[cp.size() / 2])
+		m8 = cmed >= CITIZEN_MIN_PATH
+		print("JUDGE 9 M8 시민 경로장 중앙값=%.1fm (>= %.0f) 인원=%d %s"
+			% [cmed, CITIZEN_MIN_PATH, cz.citizen_total(), pf(m8)])
+		print("JUDGE 9 M9 보도 규격이탈=%d %s" % [m9_bad, pf(m9)])
+	m4 = m4 and cz_pre
+
+	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s M8=%s M9=%s"
+		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7), pf(m8), pf(m9)])
+	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7 and m8 and m9
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -5645,6 +5729,7 @@ C:\vibecoding\holeio\
     city.gd             (§13 전문, 3b — 절차적 도시 배치)
     ui.gd               (§26 전문, 게임 UI — 시작·결과 화면, 코드 생성)
     traffic.gd          (§27 전문, 대로를 달리는 차)
+    citizens.gd         (§28 전문, 보도를 걷는 시민)
   shaders/
     ground_hole.gdshader (§4-A 전문)
   tools/
@@ -8804,4 +8889,325 @@ func reset() -> void:
 	_cars.clear()
 	_orphans.clear()
 	boot()
+```
+
+---
+
+## §28. 보도를 걷는 시민 (구현·검증 완료, rev.27)
+
+유저 지적 (2) 의 둘째 줄이다 — "시민 등 동적 오브젝트 추가 필요". 이것으로 유저가 지적한 네 축 중 **(1) 도시 디자인 · (2) 정적인 배경 · (3) 게임 UI** 가 닫힌다.
+
+### 에셋을 조달하지 않고 절차로 만든다
+
+저장소에 사람 모델이 없다. 외부 팩을 들이면 라이선스·임포트·스케일 맞추기가 따라오고, 그 셋 다 이 프로젝트에서 이미 비용을 치른 항목이다. **캡슐 몸통 + 구 머리** 둘이면 이 카메라 고도에서 충분히 사람으로 읽힌다. 걷기 애니메이션 대신 **위아래 흔들림(bob)** 과 진행 방향 기울임을 준다 — 뼈대 없이 움직임이 읽히는 가장 싼 방법이다.
+
+옷 색은 지구의 함수다. 도심은 무채색 정장, 주거는 알록달록하다. 지구제(§25)가 배치뿐 아니라 **분위기**에도 쓰인 첫 자리다.
+
+키는 한 번 고쳤다. 처음 1.52m 로 잡았더니 화면에서 승용차와 키가 비슷해 "사람" 으로 안 읽혔다 — 1.665m 로 올렸다. 이것은 기계가 답할 질문이 아니라 **눈으로 보고 고친 것**이고, 전역 원칙 §1 이 말하는 휴먼 검수의 자리다.
+
+### 이동은 교통과 같은 1D 다
+
+보도 중심선 위를 오가고 구간 끝에서 **되돌아선다**(교통은 재스폰하지만 사람은 돌아서는 편이 자연스럽다). 구간은 §25 의 도로 마스크에서 유도한다 — **걷힌 도로의 보도는 맨땅**이고, 거기를 걸으면 허공을 걷는 것으로 보인다.
+
+구멍이 자기 반경의 3.5배 안에 들어오면 **반대 방향으로 도망친다.** hole.io 의 재미가 여기 있다 — 도시가 나를 무서워하는 것이 보여야 한다. 겁먹는 거리를 절대값이 아니라 **구멍 반경의 배수**로 둔 이유: 절대 거리면 작은 구멍이 지도 반대편 사람까지 놀래거나, 큰 구멍이 코앞에 와도 안 놀란다.
+
+**보도를 벗어나지는 않는다.** 자유 2D 로 풀면 건물·차도로 파고들고, 그것을 막으려면 충돌 회피가 통째로 필요해진다. 도망은 "돌아서서 빨리 걷는다" 로 표현한다.
+
+### 수를 두 번 잡았다
+
+90명으로 시작했는데 **한 화면에 한 명도 안 보였다.** 384×384m 도시에 90명은 밀도가 아니라 희소성이다. 260명으로 올렸다. 프레임 예산에 여유가 컸기에 가능한 선택이다.
+
+| 지점 | avg | worst |
+|---|---|---|
+| dense (정적) | 1.53ms | 2.14ms |
+| boul (정적) | 1.50ms | 2.60ms |
+| **dynamic (차 36 + 시민 258)** | **1.92ms** | **4.07ms** |
+
+예산 16.67ms 대비 여유가 여전히 크다.
+
+### 새 기준 — 전부 고장 주입으로 검증했다
+
+`--judge9` 에 셋을 더했다.
+
+| 기준 | 묻는 것 | 주입 | 결과 |
+|---|---|---|---|
+| M4확장 | 전용 요청 없이는 판정에 **시민도** 0 | 판정 모드에서도 시민을 낸다 | F ✓ (258 검출) |
+| M8 | 실제로 걷는가(도약 제외 경로장 중앙값 ≥ 4m) | 이동 틱을 끈다 | F ✓ |
+| M9 | 규격 보도 위인가 · 걷힌 도로의 보도를 걷지 않는가 | 보도 마스크를 무시한다 | F ✓ |
+
+M8 은 M1 과 같은 이유로 **도약을 버린 경로장의 중앙값**을 본다 — 직선 변위를 재면 되돌아서는 왕복이 상쇄되어 굳은 사람과 구분되지 않고, 평균은 다수가 굳어도 통과시킨다.
+
+### 회귀
+
+**데스크톱 Forward+ 열두 종 · 데스크톱 Compatibility 열두 종 · 브라우저 게이트 열한 종 — 서른다섯 번 전부 PASS.** 신규 주입 3종을 더해 누적 121종이다.
+
+### 남긴 한계
+
+- **시민이 서로를 피하지 않는다.** 같은 보도 구간에서 겹쳐 지나간다(교통의 1D 추종에 해당하는 것이 없다). 사람은 차보다 작고 겹침이 덜 눈에 띄지만, 밀도를 더 올리면 보일 것이다.
+- **횡단보도를 건너지 않는다.** 한 보도 구간 안에서만 오간다 — 구간을 갈아타려면 교차로 통과 규칙이 필요하고, 그것은 교통의 교차로 문제와 같은 크기다.
+- **도망이 축 방향으로만 일어난다.** 구멍이 보도에 수직으로 다가오면 방향 전환이 약하게 읽힌다.
+- **키·비율·옷 색은 휴먼 검수의 몫이다**(전역 원칙 §1). 판정이 보는 것은 "걷는가 · 규격 위인가 · 판정에 안 섞이는가" 셋뿐이다.
+
+### `scripts/citizens.gd` (전문)
+
+```gdscript
+extends Node3D
+
+## §28: 보도를 걷는 시민.
+##
+## 유저 지적 (2) 의 둘째 줄이다 — "시민 등 동적 오브젝트 추가 필요".
+##
+## **에셋을 조달하지 않고 절차로 만든다.** 저장소에 사람 모델이 없고, 외부 팩을 들이면
+## 라이선스·임포트·스케일 맞추기가 따라온다. 캡슐 몸통 + 구 머리 둘이면 이 카메라
+## 고도에서 충분히 "사람" 으로 읽힌다. 걷기 애니메이션 대신 **위아래 흔들림(bob)** 과
+## 진행 방향 기울임을 준다 — 뼈대 없이 움직임이 읽히는 가장 싼 방법이다.
+##
+## 이동 모형은 교통(§27)과 같은 1D 다. 보도 중심선 위를 오가고, 구간 끝에서 **되돌아선다**
+## (교통은 재스폰하지만 사람은 돌아서는 편이 자연스럽다).
+##
+## 구멍이 다가오면 **반대 방향으로 도망친다.** hole.io 의 재미가 여기 있다 — 도시가
+## 나를 무서워하는 것이 보여야 한다. 다만 보도를 벗어나지는 않는다: 자유 2D 로 풀면
+## 건물·차도로 파고들고, 그것을 막으려면 충돌 회피가 통째로 필요해진다.
+
+const CITY := preload("res://scripts/city.gd")
+const SWALLOWABLE := preload("res://scripts/swallowable.gd")
+
+@export var enabled := true
+@export var citizen_seed := 20260731
+@export var citizen_count := 260
+@export var walk_speed := 1.8
+## 도망칠 때의 배속. 걷기와 확연히 달라야 "놀랐다" 로 읽힌다.
+@export var flee_mult := 2.6
+## 구멍이 **자기 반경의 이 배수** 안에 들어오면 도망친다. 절대 거리로 두면 작은 구멍이
+## 지도 반대편 시민까지 놀래거나, 큰 구멍이 코앞에 와도 안 놀란다.
+@export var fear_k := 3.5
+## 시야 밖(구멍에서 이 거리 이상)은 네 프레임에 한 번만 갱신한다.
+@export var lod_dist := 80.0
+
+## 몸 치수(m). 총 키 = BODY_H + HEAD_R*1.75 = 1.665 — 승용차 지붕(1.4)보다 확실히 크다.
+## 처음 1.52 로 잡았더니 화면에서 승용차와 키가 비슷해 "사람" 으로 안 읽혔다.
+const BODY_R := 0.20
+const BODY_H := 1.28
+const HEAD_R := 0.22
+
+## 지구별 옷 색. 도심은 무채색 정장, 주거는 알록달록하다.
+const COATS := {
+	0: [Color(0.22, 0.24, 0.30), Color(0.30, 0.31, 0.34), Color(0.16, 0.18, 0.24)],
+	1: [Color(0.72, 0.36, 0.28), Color(0.28, 0.44, 0.62), Color(0.66, 0.58, 0.26)],
+	2: [Color(0.80, 0.42, 0.44), Color(0.36, 0.62, 0.44), Color(0.74, 0.66, 0.36)],
+	3: [Color(0.36, 0.60, 0.38), Color(0.70, 0.52, 0.30), Color(0.44, 0.50, 0.68)],
+}
+const SKIN := Color(0.85, 0.70, 0.58)
+
+var _rng := RandomNumberGenerator.new()
+## 각 원소: { rb, mesh, axis, line, u, lo, hi, s, dir, speed, phase }
+var _people := []
+var _tick := 0
+
+
+func _ready() -> void:
+	pass
+
+
+func boot() -> void:
+	if enabled:
+		spawn_all()
+
+
+## 보도 구간 목록. 도로가 **존재하는** 세그먼트의 양쪽 보도만 쓴다(§25 마스크) —
+## 걷힌 도로의 보도는 맨땅이고, 거기를 걸으면 허공을 걷는 것으로 보인다.
+## 한 구간은 [축, 중심선 인덱스, 보도 오프셋, 시작 셀, 끝 셀] 이다.
+func build_walks() -> Array:
+	var out := []
+	for k in range(CITY.CELL_MIN, CITY.CELL_MAX + 2):
+		var wc := CITY.walk_center_at(k)
+		for axis in ["x", "z"]:
+			# 열린 셀이 이어지는 구간마다 하나씩 만든다.
+			var run_lo := 9999
+			for c in range(CITY.CELL_MIN, CITY.CELL_MAX + 2):
+				var open: bool = c <= CITY.CELL_MAX and (
+					CITY.seg_ew(k, c) if axis == "x" else CITY.seg_ns(k, c))
+				if open and run_lo == 9999:
+					run_lo = c
+				elif not open and run_lo != 9999:
+					for side in [-1.0, 1.0]:
+						out.append({ "axis": axis, "line": k, "u": side * wc,
+							"lo": float(run_lo) * CITY.PITCH + 2.0,
+							"hi": float(c) * CITY.PITCH - 2.0 })
+					run_lo = 9999
+	# 너무 짧은 구간은 버린다 — 한 걸음에 양 끝을 오가면 제자리에서 떠는 것으로 보인다.
+	var keep := []
+	for w in out:
+		if float(w["hi"]) - float(w["lo"]) >= 12.0:
+			keep.append(w)
+	return keep
+
+
+func walk_pos(p: Dictionary, s: float) -> Vector3:
+	var w := float(p["line"]) * CITY.PITCH + float(p["u"])
+	if str(p["axis"]) == "x":
+		return Vector3(s, 0.0, w)
+	return Vector3(w, 0.0, s)
+
+
+func spawn_all() -> void:
+	_rng.seed = citizen_seed
+	var walks := build_walks()
+	if walks.is_empty():
+		return
+	for i in citizen_count:
+		var w: Dictionary = walks[_rng.randi_range(0, walks.size() - 1)]
+		var s := _rng.randf_range(float(w["lo"]), float(w["hi"]))
+		var pos := walk_pos(w, s)
+		# 판정 광장은 비운다(§13 과 같은 이유 — 판정 시나리오에 섞이면 안 된다).
+		if Vector2(pos.x, pos.z).length() < CITY.PLAZA_R:
+			continue
+		var dz := CITY.zone_at(CITY.cell_of(pos.x), CITY.cell_of(pos.z))
+		var rb := make_person(dz, pos, i)
+		add_child(rb)
+		_people.append({ "rb": rb, "mesh": rb.get_child(0),
+			"axis": w["axis"], "line": w["line"], "u": w["u"],
+			"lo": w["lo"], "hi": w["hi"], "s": s,
+			"dir": 1.0 if _rng.randf() < 0.5 else -1.0,
+			"speed": walk_speed * _rng.randf_range(0.8, 1.25),
+			"phase": _rng.randf() * TAU })
+
+
+## 판정용. 판정 모드에서도 시민을 낸다 — M 계열이 명시적으로 요청한다.
+func spawn_for_judge(n: int) -> void:
+	citizen_count = n
+	spawn_all()
+
+
+func make_person(dz: int, pos: Vector3, idx: int) -> RigidBody3D:
+	var body := RigidBody3D.new()
+	body.set_script(SWALLOWABLE)
+	body.collision_layer = 2
+	body.collision_mask = 1 | 2
+	body.name = "Citizen_%d" % idx
+	body.position = pos
+	body.add_to_group("swallowable")
+	body.start_frozen = true
+
+	# 몸통과 머리를 한 노드 아래 묶는다. 흔들림은 이 노드만 움직이므로
+	# 콜라이더는 제자리에 있고 **접지 판정(E5)이 흔들리지 않는다.**
+	var pivot := Node3D.new()
+	pivot.name = "Body"
+	body.add_child(pivot)
+
+	var coat: Color = (COATS[dz] if COATS.has(dz) else COATS[2])[idx % 3]
+	var torso := MeshInstance3D.new()
+	var cm := CapsuleMesh.new()
+	cm.radius = BODY_R
+	cm.height = BODY_H
+	torso.mesh = cm
+	torso.position.y = BODY_H * 0.5
+	var mt := StandardMaterial3D.new()
+	mt.albedo_color = coat
+	torso.material_override = mt
+	pivot.add_child(torso)
+
+	var head := MeshInstance3D.new()
+	var sm := SphereMesh.new()
+	sm.radius = HEAD_R
+	sm.height = HEAD_R * 2.0
+	head.mesh = sm
+	head.position.y = BODY_H + HEAD_R * 0.75
+	var mh := StandardMaterial3D.new()
+	mh.albedo_color = SKIN
+	head.material_override = mh
+	pivot.add_child(head)
+
+	# 콜라이더는 몸 전체를 덮는 상자 하나다. 캡슐로 두면 구멍 가장자리에서 굴러
+	# 나가고, 삼킴 판정(§23)이 보는 것은 **꼭대기 높이**뿐이라 상자로 충분하다.
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	var top := BODY_H + HEAD_R * 1.75
+	box.size = Vector3(BODY_R * 2.0, top, BODY_R * 2.0)
+	cs.shape = box
+	cs.position.y = top * 0.5
+	body.add_child(cs)
+
+	body.mass = 3.0
+	return body
+
+
+func _physics_process(dt: float) -> void:
+	if _people.is_empty():
+		return
+	_tick += 1
+	var holes: Array = get_node("/root/HoleRegistry").holes()
+	for n in range(_people.size() - 1, -1, -1):
+		var p: Dictionary = _people[n]
+		var rb: RigidBody3D = p["rb"]
+		if not is_instance_valid(rb):
+			_people.remove_at(n)
+			continue
+		# 구멍이 붙잡은 사람은 물리에 넘긴다(§27 의 차와 같은 신호).
+		if not rb.freeze:
+			_people.remove_at(n)
+			continue
+		var here := walk_pos(p, float(p["s"]))
+		# 멀리 있는 사람은 네 프레임에 한 번만 갱신한다. 갱신할 때 네 배로 걸으므로
+		# 평균 속도는 같다 — 가까이 왔을 때 갑자기 위치가 튀지 않는다.
+		var far := true
+		var scare := Vector3.ZERO
+		for h in holes:
+			if not is_instance_valid(h):
+				continue
+			var d := Vector2(here.x - h.global_position.x, here.z - h.global_position.z)
+			if d.length() < lod_dist:
+				far = false
+			if d.length() < float(h.radius) * fear_k:
+				scare = Vector3(d.x, 0.0, d.y)
+		if far and _tick % 4 != 0:
+			continue
+		var step: float = float(p["speed"]) * dt * (4.0 if far else 1.0)
+		if scare != Vector3.ZERO:
+			# 구멍 반대쪽으로 돈다. 보도를 벗어나지 않으므로 진행 축의 성분만 본다.
+			var away: float = scare.x if str(p["axis"]) == "x" else scare.z
+			if away != 0.0:
+				p["dir"] = signf(away)
+			step *= flee_mult
+		var s: float = float(p["s"]) + float(p["dir"]) * step
+		if s < float(p["lo"]):
+			s = float(p["lo"])
+			p["dir"] = 1.0
+		elif s > float(p["hi"]):
+			s = float(p["hi"])
+			p["dir"] = -1.0
+		p["s"] = s
+		rb.global_position = walk_pos(p, s)
+		# 진행 방향으로 돌려 세우고, 걸음에 맞춰 위아래로 흔든다.
+		var yaw: float = 0.0
+		if str(p["axis"]) == "x":
+			yaw = PI * 0.5 if float(p["dir"]) > 0.0 else -PI * 0.5
+		else:
+			yaw = 0.0 if float(p["dir"]) > 0.0 else PI
+		rb.rotation.y = yaw
+		var mesh: Node3D = p["mesh"]
+		var t: float = float(_tick) * 0.18 + float(p["phase"])
+		mesh.position.y = absf(sin(t)) * 0.06
+		mesh.rotation.x = sin(t * 2.0) * 0.05
+
+
+## 판을 되돌린다. main.gd 의 restart() 가 부른다(§27 의 교통과 같은 이유).
+func reset() -> void:
+	for c in get_children():
+		c.free()
+	_people.clear()
+	boot()
+
+
+## 판정용.
+func citizen_total() -> int:
+	return _people.size()
+
+
+func citizen_pos(i: int) -> Vector3:
+	return (_people[i]["rb"] as Node3D).global_position
+
+
+func citizen_id(i: int) -> int:
+	return (_people[i]["rb"] as Node).get_instance_id()
 ```

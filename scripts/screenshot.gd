@@ -2264,6 +2264,9 @@ func run_judge_3c() -> void:
 	var tr: Node = _main.get_node_or_null("Traffic")
 	if tr != null:
 		tr.spawn_for_judge(int(tr.car_count))
+		var czp: Node = _main.get_node_or_null("Citizens")
+		if czp != null:
+			czp.spawn_for_judge(int(czp.citizen_count))
 		_main.set_hole_position(PERF_SPOTS["dense"])
 		_reg.flush()
 		_cam.follow(hole, hole.radius, true)
@@ -2282,8 +2285,10 @@ func run_judge_3c() -> void:
 		var s2 := worst <= FRAME_BUDGET_MS * 2.0
 		f1 = f1 and s1
 		f2 = f2 and s2
-		print("JUDGE 3c [traffic] 차=%d avg=%.2fms (%.0f fps) worst=%.2fms F1=%s F2=%s"
-			% [tr.car_total(), avg, 1000.0 / maxf(avg, 0.001), worst, pf(s1), pf(s2)])
+		var czn: Node = _main.get_node_or_null("Citizens")
+		print("JUDGE 3c [dynamic] 차=%d 시민=%d avg=%.2fms (%.0f fps) worst=%.2fms F1=%s F2=%s"
+			% [tr.car_total(), 0 if czn == null else czn.citizen_total(),
+			   avg, 1000.0 / maxf(avg, 0.001), worst, pf(s1), pf(s2)])
 
 	var ok := f1 and f2
 	print("JUDGE 3c F1=%s F2=%s -> %s" % [pf(f1), pf(f2), ("PASS" if ok else "FAIL")])
@@ -2799,6 +2804,11 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 ## M 시나리오가 띄우는 차의 수. 게임 기본값과 달라도 된다 — 묻는 것은 "규격대로
 ## 도는가" 이지 "몇 대인가" 가 아니다.
 const TRAFFIC_N := 24
+## M8·M9 시나리오의 시민 수.
+const CITIZEN_N := 60
+## M8: 300프레임(5초) 동안 걸어야 할 경로장의 중앙값(m). 보행 1.8 m/s x 5s = 9m 이므로
+## 4 는 "굳지 않았다" 를 보는 낮은 문턱이다(구간 끝에서 되돌아서느라 왕복이 섞인다).
+const CITIZEN_MIN_PATH := 4.0
 ## M1: 이 프레임 동안 돌리고 평균 변위를 잰다.
 const TRAFFIC_FRAMES := 300
 ## M1: 그동안 차가 최소한 이만큼은 움직여야 한다(m). 속도 하한 6.0 × 5초 = 30m 이므로
@@ -2819,6 +2829,23 @@ const JUMP_MAX_N := 40
 func spec_driving_u(k: int) -> float:
 	var m := spec_median(k)
 	return m + (spec_road_half(k) - m) * 0.25
+
+
+## 시민이 걷는 보도 중심선의 오프셋. 아스팔트와 커브의 한가운데다.
+func spec_walk_u(k: int) -> float:
+	return (spec_road_half(k) + spec_curb_half(k)) * 0.5
+
+
+## 이 사람이 규격 보도 위에 있는가. 도로가 **존재하는** 세그먼트여야 한다 —
+## 걷힌 도로의 보도는 맨땅이고, 거기를 걸으면 허공을 걷는 것으로 보인다.
+func on_spec_walk(p: Vector3) -> bool:
+	var kx := spec_line_index(p.x)
+	var kz := spec_line_index(p.z)
+	var on_ew: bool = absf(absf(p.z - float(kz) * SPEC_PITCH) - spec_walk_u(kz)) < LANE_U_TOL \
+		and spec_seg_ew(kz, spec_cell_of(p.x))
+	var on_ns: bool = absf(absf(p.x - float(kx) * SPEC_PITCH) - spec_walk_u(kx)) < LANE_U_TOL \
+		and spec_seg_ns(kx, spec_cell_of(p.z))
+	return on_ew or on_ns
 
 
 ## 이 차가 규격 차선 위에 있는가. 대로여야 하고, 오프셋이 규격 한 점이어야 하며,
@@ -2872,9 +2899,13 @@ func run_judge_9() -> void:
 	# --- M4: 판정 격리 -------------------------------------------------------
 	# **전용 요청이 없으면 판정 모드에는 동적 개체가 하나도 없다.** 이것을 먼저 묻는다 —
 	# 아래에서 직접 띄우고 나면 다시 물을 수 없다.
+	var cz: Node = _main.get_node_or_null("Citizens")
 	var m4: bool = int(tr.car_total()) == 0 and tr.get_child_count() == 0
-	print("JUDGE 9 M4 판정 격리: 요청 전 차=%d 자식=%d %s"
-		% [tr.car_total(), tr.get_child_count(), pf(m4)])
+	var cz_pre: bool = cz == null or (int(cz.citizen_total()) == 0 and cz.get_child_count() == 0)
+	print("JUDGE 9 M4 판정 격리: 요청 전 차=%d/%d 시민=%d/%d %s"
+		% [tr.car_total(), tr.get_child_count(),
+		   0 if cz == null else cz.citizen_total(),
+		   0 if cz == null else cz.get_child_count(), pf(m4 and cz_pre)])
 
 	# 구멍을 지도 구석으로 치운다. 대로에서 멀어야 차를 먹지 않는다.
 	var hole: Node3D = _reg.holes()[0]
@@ -3019,9 +3050,52 @@ func run_judge_9() -> void:
 	print("JUDGE 9 M7 인계 중 규격이탈=%d 최소 대수=%d(>= %d) %s"
 		% [m7_bad, m7_min, TRAFFIC_N, pf(m7)])
 
-	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s"
-		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7)])
-	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7
+	# --- M8·M9: 시민 (§28) ---------------------------------------------------
+	# 판정 격리는 위의 M4 와 같은 자리에서 이미 쟀다(cz_pre).
+	# M8: 실제로 걷는가 — 도약을 버린 경로장의 중앙값으로 본다(M1 과 같은 이유).
+	# M9: 보도 규격 위인가 — 걷힌 도로의 보도(맨땅)를 걷지 않는가.
+	var m8 := true
+	var m9 := true
+	if cz != null:
+		hole.set_radius(SPEC_START_R)
+		hole.move_to(Vector3(-176.0, 0.0, -176.0))
+		_reg.flush()
+		cz.spawn_for_judge(CITIZEN_N)
+		await get_tree().physics_frame
+		var cpath := {}
+		var clast := {}
+		var m9_bad := 0
+		for i in int(cz.citizen_total()):
+			clast[int(cz.citizen_id(i))] = cz.citizen_pos(i)
+		for _f in TRAFFIC_FRAMES:
+			await get_tree().physics_frame
+			for i in int(cz.citizen_total()):
+				var p: Vector3 = cz.citizen_pos(i)
+				var id: int = int(cz.citizen_id(i))
+				if clast.has(id):
+					var st: float = (p - (clast[id] as Vector3)).length()
+					if st <= JUMP_MAX:
+						cpath[id] = float(cpath.get(id, 0.0)) + st
+				clast[id] = p
+				if not on_spec_walk(p):
+					if m9_bad < 5:
+						print("JUDGE 9 M9 보도 규격 밖: %s" % str(p))
+					m9_bad += 1
+					m9 = false
+		var cp := []
+		for id in cpath:
+			cp.append(float(cpath[id]))
+		cp.sort()
+		var cmed: float = 0.0 if cp.is_empty() else float(cp[cp.size() / 2])
+		m8 = cmed >= CITIZEN_MIN_PATH
+		print("JUDGE 9 M8 시민 경로장 중앙값=%.1fm (>= %.0f) 인원=%d %s"
+			% [cmed, CITIZEN_MIN_PATH, cz.citizen_total(), pf(m8)])
+		print("JUDGE 9 M9 보도 규격이탈=%d %s" % [m9_bad, pf(m9)])
+	m4 = m4 and cz_pre
+
+	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s M8=%s M9=%s"
+		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7), pf(m8), pf(m9)])
+	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7 and m8 and m9
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 

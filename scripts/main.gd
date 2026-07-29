@@ -122,6 +122,9 @@ func _ready() -> void:
 	var tr := get_node_or_null("Traffic")
 	if tr != null and not judging:
 		tr.boot()
+	var cz := get_node_or_null("Citizens")
+	if cz != null and not judging:
+		cz.boot()
 	# 게임은 시작 화면에서 열리고, 판정은 곧바로 플레이 상태에서 시작한다.
 	# Judge._ready 가 Main._ready 보다 먼저 돌아 judging 을 세워 두므로 여기서 읽을 수 있다.
 	state = State.HOME if not judging else State.PLAYING
@@ -298,6 +301,9 @@ func restart() -> void:
 	var tr := get_node_or_null("Traffic")
 	if tr != null and not judging:
 		tr.reset()
+	var cz := get_node_or_null("Citizens")
+	if cz != null and not judging:
+		cz.reset()
 
 	state = State.PLAYING
 	time_left = round_seconds

@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3]
+[gd_scene load_steps=16 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
 [ext_resource type="Shader" path="res://shaders/ground_hole.gdshader" id="2"]
@@ -11,6 +11,7 @@
 [ext_resource type="FontFile" uid="uid://b3x3lllwaes5u" path="res://assets/fonts/hud_kr.ttf" id="9"]
 [ext_resource type="Script" path="res://scripts/ui.gd" id="10"]
 [ext_resource type="Script" path="res://scripts/traffic.gd" id="11"]
+[ext_resource type="Script" path="res://scripts/citizens.gd" id="12"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -64,6 +65,9 @@ shape = SubResource("Shape_1")
 
 [node name="City" type="Node3D" parent="."]
 script = ExtResource("8")
+
+[node name="Citizens" type="Node3D" parent="."]
+script = ExtResource("12")
 
 [node name="Traffic" type="Node3D" parent="."]
 script = ExtResource("11")
