@@ -2805,10 +2805,16 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 ## 도는가" 이지 "몇 대인가" 가 아니다.
 const TRAFFIC_N := 24
 ## M8·M9 시나리오의 시민 수.
-const CITIZEN_N := 60
-## M8: 300프레임(5초) 동안 걸어야 할 경로장의 중앙값(m). 보행 1.8 m/s x 5s = 9m 이므로
-## 4 는 "굳지 않았다" 를 보는 낮은 문턱이다(구간 끝에서 되돌아서느라 왕복이 섞인다).
-const CITIZEN_MIN_PATH := 4.0
+const CITIZEN_N := 120
+## M8: 300프레임(5초) 동안 걸어야 할 **경로장**의 중앙값(m).
+## 처음 근거를 틀리게 적었다 — "왕복이 섞여 짧아진다" 고 4.0 을 정당화했는데,
+## 상쇄되는 것은 변위이고 **경로장은 왕복에 영향받지 않는다**(감사가 잡았다).
+## 실제 하한은 walk_speed 1.8 x 0.8 = 1.44 m/s x 5s = 7.2m 이고 실측은 9.8m 다.
+## 6.0 이면 속도가 절반이 된 고장이 걸린다.
+const CITIZEN_MIN_PATH := 6.0
+## M10: 겁먹은 시민이 90프레임(1.5초) 동안 구멍에서 이만큼은 멀어져야 "도망쳤다" 로 본다.
+## 도망 속도 1.8 x 2.6 = 4.68 m/s 이므로 1.5 는 낮은 문턱이다(구간 끝에 몰린 사람이 섞인다).
+const FLEE_MIN_GAIN := 1.5
 ## M1: 이 프레임 동안 돌리고 평균 변위를 잰다.
 const TRAFFIC_FRAMES := 300
 ## M1: 그동안 차가 최소한 이만큼은 움직여야 한다(m). 속도 하한 6.0 × 5초 = 30m 이므로
@@ -2831,9 +2837,10 @@ func spec_driving_u(k: int) -> float:
 	return m + (spec_road_half(k) - m) * 0.25
 
 
-## 시민이 걷는 보도 중심선의 오프셋. 아스팔트와 커브의 한가운데다.
+## 시민이 걷는 보도 안의 오프셋. **보도 중심선이 아니다** — 거기에는 가로등·표지판이
+## 서 있어서, 시민이 그 자리를 걸으면 프롭을 통과한다(§28). 차도 쪽에 붙여 걷는다.
 func spec_walk_u(k: int) -> float:
-	return (spec_road_half(k) + spec_curb_half(k)) * 0.5
+	return spec_road_half(k) + 0.5
 
 
 ## 이 사람이 규격 보도 위에 있는가. 도로가 **존재하는** 세그먼트여야 한다 —
@@ -2901,7 +2908,11 @@ func run_judge_9() -> void:
 	# 아래에서 직접 띄우고 나면 다시 물을 수 없다.
 	var cz: Node = _main.get_node_or_null("Citizens")
 	var m4: bool = int(tr.car_total()) == 0 and tr.get_child_count() == 0
-	var cz_pre: bool = cz == null or (int(cz.citizen_total()) == 0 and cz.get_child_count() == 0)
+	# **노드가 없으면 탈락이다.** `cz == null` 을 통과로 두면 Citizens 를 통째로 지운
+	# 빌드에서 M4확장·M8·M9 셋이 조용히 P 로 인쇄되고 판정이 PASS 한다 —
+	# "기능이 아예 없다" 가 가장 센 고장인데 그것을 못 잡는다(감사가 잡았다).
+	var cz_pre: bool = cz != null \
+		and int(cz.citizen_total()) == 0 and cz.get_child_count() == 0
 	print("JUDGE 9 M4 판정 격리: 요청 전 차=%d/%d 시민=%d/%d %s"
 		% [tr.car_total(), tr.get_child_count(),
 		   0 if cz == null else cz.citizen_total(),
@@ -3054,8 +3065,8 @@ func run_judge_9() -> void:
 	# 판정 격리는 위의 M4 와 같은 자리에서 이미 쟀다(cz_pre).
 	# M8: 실제로 걷는가 — 도약을 버린 경로장의 중앙값으로 본다(M1 과 같은 이유).
 	# M9: 보도 규격 위인가 — 걷힌 도로의 보도(맨땅)를 걷지 않는가.
-	var m8 := true
-	var m9 := true
+	var m8 := cz != null
+	var m9 := cz != null
 	if cz != null:
 		hole.set_radius(SPEC_START_R)
 		hole.move_to(Vector3(-176.0, 0.0, -176.0))
@@ -3091,6 +3102,47 @@ func run_judge_9() -> void:
 		print("JUDGE 9 M8 시민 경로장 중앙값=%.1fm (>= %.0f) 인원=%d %s"
 			% [cmed, CITIZEN_MIN_PATH, cz.citizen_total(), pf(m8)])
 		print("JUDGE 9 M9 보도 규격이탈=%d %s" % [m9_bad, pf(m9)])
+
+		# --- M10: 도망 -------------------------------------------------------
+		# **이것이 §28 의 간판 기능인데 위의 셋 중 어느 것도 건드리지 않는다.**
+		# M8·M9 는 구멍을 지도 구석(-176,-176)에 두고 도는데, 그 자리에서 가장 가까운
+		# 보도까지 8.5m 이고 겁먹는 반경은 1.5 × 3.5 = 5.25m 다 — **도망 분기가 한 번도
+		# 실행되지 않는다.** 실제로 "구멍 쪽으로 달려들게" + "보도를 벗어나게" 를 동시에
+		# 주입해도 M8·M9 가 통과했다(감사가 실증했다).
+		# 구멍을 보도 옆에 크게 놓아 fear 를 확보하고, 겁먹은 사람이 **실제로 멀어지는가**를
+		# 묻는다. 도망 중에도 보도 규격 위여야 한다.
+		# 구멍을 크게 키워 겁먹는 반경을 넓힌다 — 표본이 서넛뿐이면 "과반" 이 우연에 흔들린다.
+		# 16 × 3.5 = 56m 반경이면 시민 120명 중 열 명 안팎이 든다.
+		hole.set_radius(16.0)
+		hole.move_to(Vector3(0.0, 0.0, -64.0))
+		_reg.flush()
+		await get_tree().physics_frame
+		var d0 := {}
+		for i in int(cz.citizen_total()):
+			var p: Vector3 = cz.citizen_pos(i)
+			if flat_dist(p, hole.global_position) < 16.0 * 3.5:
+				d0[int(cz.citizen_id(i))] = flat_dist(p, hole.global_position)
+		for _f in 90:
+			await get_tree().physics_frame
+		var fled := 0
+		var stayed := 0
+		var m10_walk := true
+		for i in int(cz.citizen_total()):
+			var id: int = int(cz.citizen_id(i))
+			if not d0.has(id):
+				continue
+			var p: Vector3 = cz.citizen_pos(i)
+			if not on_spec_walk(p):
+				m10_walk = false
+			if flat_dist(p, hole.global_position) > float(d0[id]) + FLEE_MIN_GAIN:
+				fled += 1
+			else:
+				stayed += 1
+		# 구석에 몰린 사람은 더 못 간다 — 전부를 요구하지 않고 **과반**을 요구한다.
+		var m10: bool = d0.size() >= 3 and fled > stayed and m10_walk
+		print("JUDGE 9 M10 겁먹은 %d명 중 멀어짐=%d 제자리=%d 보도유지=%s %s"
+			% [d0.size(), fled, stayed, pf(m10_walk), pf(m10)])
+		m9 = m9 and m10
 	m4 = m4 and cz_pre
 
 	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s M8=%s M9=%s"

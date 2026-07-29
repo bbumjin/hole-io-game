@@ -49,7 +49,24 @@ const SKIN := Color(0.85, 0.70, 0.58)
 var _rng := RandomNumberGenerator.new()
 ## 각 원소: { rb, mesh, axis, line, u, lo, hi, s, dir, speed, phase }
 var _people := []
+## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 치운다(§27 의 교통과 같은 이유).
+var _orphans := []
+const ORPHAN_STILL := 0.35
 var _tick := 0
+
+
+func sweep_orphans() -> void:
+	for n in range(_orphans.size() - 1, -1, -1):
+		var rb = _orphans[n]
+		if not is_instance_valid(rb):
+			_orphans.remove_at(n)
+			continue
+		if rb.falling:                                  # 구멍이 삼켰다 — 그쪽이 처리한다
+			_orphans.remove_at(n)
+			continue
+		if rb.linear_velocity.length() < ORPHAN_STILL:
+			_orphans.remove_at(n)
+			rb.queue_free()
 
 
 func _ready() -> void:
@@ -64,10 +81,19 @@ func boot() -> void:
 ## 보도 구간 목록. 도로가 **존재하는** 세그먼트의 양쪽 보도만 쓴다(§25 마스크) —
 ## 걷힌 도로의 보도는 맨땅이고, 거기를 걸으면 허공을 걷는 것으로 보인다.
 ## 한 구간은 [축, 중심선 인덱스, 보도 오프셋, 시작 셀, 끝 셀] 이다.
+## 보도 안에서 시민이 걷는 오프셋. **보도 중심선이 아니다** — 거기에는 §13 이
+## 가로등·신호등·표지판·덤불을 정확히 그 자리(walk_center_at)에 세워 두었다.
+## 둘 다 frozen 강체라 충돌 해소가 없고 시민은 매 프레임 위치를 덮어쓰므로,
+## 중심선을 걸으면 **가로등을 그대로 통과한다**(감사가 잡았다).
+## 보도 폭이 2.0 이므로 차도 쪽에 붙여 [+0.3, +0.7] 를 점유한다 — 프롭은 중앙에 남는다.
+static func walk_lane_u(k: int) -> float:
+	return CITY.road_half_at(k) + 0.5
+
+
 func build_walks() -> Array:
 	var out := []
 	for k in range(CITY.CELL_MIN, CITY.CELL_MAX + 2):
-		var wc := CITY.walk_center_at(k)
+		var wc := walk_lane_u(k)
 		for axis in ["x", "z"]:
 			# 열린 셀이 이어지는 구간마다 하나씩 만든다.
 			var run_lo := 9999
@@ -118,6 +144,49 @@ func spawn_all() -> void:
 			"dir": 1.0 if _rng.randf() < 0.5 else -1.0,
 			"speed": walk_speed * _rng.randf_range(0.8, 1.25),
 			"phase": _rng.randf() * TAU })
+
+
+## 새 시민이 날 자리. **구멍에서 먼 구간**을 고른다 — 눈앞에서 사람이 튀어나오면
+## 그것이 더 눈에 띈다. 시행 횟수를 고정해 난수 소비량을 결과와 분리한다.
+func here_far_from(holes: Array) -> Dictionary:
+	var walks := build_walks()
+	var best := {}
+	var best_d := -1.0
+	for _i in 6:
+		if walks.is_empty():
+			break
+		var w: Dictionary = walks[_rng.randi_range(0, walks.size() - 1)]
+		var s := _rng.randf_range(float(w["lo"]), float(w["hi"]))
+		var pos := walk_pos(w, s)
+		var d := INF
+		for h in holes:
+			if is_instance_valid(h):
+				d = minf(d, Vector2(pos.x - h.global_position.x,
+					pos.z - h.global_position.z).length())
+		if d > best_d:
+			best_d = d
+			best = { "w": w, "s": s }
+	return best
+
+
+## 한 명을 낸다. 자리는 here_far_from 이 고른다.
+func spawn_one(spot: Dictionary) -> void:
+	if spot.is_empty():
+		return
+	var w: Dictionary = spot["w"]
+	var s: float = float(spot["s"])
+	var pos := walk_pos(w, s)
+	if Vector2(pos.x, pos.z).length() < CITY.PLAZA_R:
+		return
+	var dz := CITY.zone_at(CITY.cell_of(pos.x), CITY.cell_of(pos.z))
+	var rb := make_person(dz, pos, _rng.randi_range(0, 99999))
+	add_child(rb)
+	_people.append({ "rb": rb, "mesh": rb.get_child(0),
+		"axis": w["axis"], "line": w["line"], "u": w["u"],
+		"lo": w["lo"], "hi": w["hi"], "s": s,
+		"dir": 1.0 if _rng.randf() < 0.5 else -1.0,
+		"speed": walk_speed * _rng.randf_range(0.8, 1.25),
+		"phase": _rng.randf() * TAU })
 
 
 ## 판정용. 판정 모드에서도 시민을 낸다 — M 계열이 명시적으로 요청한다.
@@ -180,6 +249,7 @@ func make_person(dz: int, pos: Vector3, idx: int) -> RigidBody3D:
 
 
 func _physics_process(dt: float) -> void:
+	sweep_orphans()
 	if _people.is_empty():
 		return
 	_tick += 1
@@ -191,21 +261,35 @@ func _physics_process(dt: float) -> void:
 			_people.remove_at(n)
 			continue
 		# 구멍이 붙잡은 사람은 물리에 넘긴다(§27 의 차와 같은 신호).
+		# **넘긴 뒤를 챙겨야 한다.** 구멍이 스쳐 지나가기만 하면 `hold_awake(false)` 가
+		# freeze 를 되돌리지 않으므로(의도된 것이다) 아무도 그 사람을 다시 인수하지
+		# 않는다 — 보도 위에 자유 강체가 영구히 남는다. §27 이 차에서 겪은 것과 같다.
 		if not rb.freeze:
+			_orphans.append(rb)
 			_people.remove_at(n)
+			# **총량을 지킨다.** 시민에게는 재스폰이 없었는데, fit_radius 0.28 은 시작
+			# 반경 1.5 에도 한참 못 미쳐 닿은 사람은 사실상 전부 삼켜진다 — 구멍 여섯이
+			# 2분간 훑으면 인구가 단조 감소하고, "도시가 살아 있다" 는 §28 의 존재 이유가
+			# 판 후반에 스스로 무너진다(감사가 잡았다). 빠진 만큼 **화면 밖에서** 새로 낸다.
+			spawn_one(here_far_from(holes))
 			continue
 		var here := walk_pos(p, float(p["s"]))
 		# 멀리 있는 사람은 네 프레임에 한 번만 갱신한다. 갱신할 때 네 배로 걸으므로
 		# 평균 속도는 같다 — 가까이 왔을 때 갑자기 위치가 튀지 않는다.
 		var far := true
 		var scare := Vector3.ZERO
+		var near := INF
 		for h in holes:
 			if not is_instance_valid(h):
 				continue
 			var d := Vector2(here.x - h.global_position.x, here.z - h.global_position.z)
 			if d.length() < lod_dist:
 				far = false
-			if d.length() < float(h.radius) * fear_k:
+			# **가장 가까운 위협**을 고른다. 그냥 덮어쓰면 목록의 마지막 구멍이 이기고,
+			# 코앞의 구멍을 두고 멀리 있는 구멍의 반대쪽으로 달아나는 일이 생긴다.
+			if d.length() < float(h.radius) * fear_k \
+					and (scare == Vector3.ZERO or d.length() < near):
+				near = d.length()
 				scare = Vector3(d.x, 0.0, d.y)
 		if far and _tick % 4 != 0:
 			continue
@@ -243,6 +327,7 @@ func reset() -> void:
 	for c in get_children():
 		c.free()
 	_people.clear()
+	_orphans.clear()
 	boot()
 
 
