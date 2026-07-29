@@ -101,7 +101,10 @@ const ROUND_TEST_FRAMES := 600                     # T1: 그 라운드를 덮고
 const TIMER_TOL := 0.25                            # T1: 판정기 시계와의 허용 오차(초)
 const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고정을 확인하는 프레임
 const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 수 (플레이어 + AI 5)
-const RESTART_PROPS := 3804                        # T5: 재시작 후 도시 프롭 수 (시드 고정)
+## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 산포 반경을 구간에서 유도하며
+## 3804 → 3876 로 늘었다 — 대로가 붙은 블록에서 구간 밖으로 나가 거절되던 시도가
+## 자리를 찾은 만큼이다.
+const RESTART_PROPS := 3876
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -631,11 +634,32 @@ func check_uniforms() -> bool:
 
 ## H10: §2·§5 의 결정이 유지되는가 — 렌더러와 셰이더 render_mode 를 직접 단언한다.
 ## 픽셀 휴리스틱(H8)만으로는 아트 변경에 가려질 수 있으므로 구조적으로도 막는다.
+## 착시가 서 있는 파이프라인 전제를 **설정과 런타임 양쪽에서** 확인한다.
+##
+## 웹 렌더링 방식을 함께 단언한다(§22). 웹은 Forward+ 를 지원하지 않으므로 이 값이
+## 어긋나면 브라우저에서 렌더러 초기화가 실패한다 — 데스크톱 실행에는 아무 영향이
+## 없어서 판정 아홉 종이 전부 통과한 채 배포본만 죽는다.
+##
+## **다만 이 검사가 무는 범위는 좁다.** `rendering_method.web` 은 project.godot 에
+## 없어도 엔진 기본값이 이미 `gl_compatibility` 다(실측: 그 줄을 지우고 돌려도
+## 판정기가 gl_compatibility 를 읽는다). 그러니 이 검사가 잡는 것은 **누가 그 값을
+## 다른 것으로 바꿔 놓는 경우** 하나이고, 줄을 지우는 것은 잡지 못한다 — 잡을 것이
+## 없기 때문이다. project.godot 의 그 줄은 설정이라기보다 문서에 가깝다.
+##
+## 실행 렌더러는 **런타임에서** 읽어 로그에 남긴다. 프로젝트 설정만 보면
+## `--rendering-driver opengl3` 로 돌린 판정도 "forward_plus" 라고 보고한다.
 func check_pipeline() -> bool:
 	var code: String = _mat.shader.code
 	var ok := code.contains("alpha_to_coverage") and code.contains("depth_prepass_alpha")
 	ok = ok and int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0)) > 0
 	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")) == "forward_plus"
+	ok = ok and str(ProjectSettings.get_setting("rendering/renderer/rendering_method.web", "")) \
+		== "gl_compatibility"
+	print("JUDGE pipeline: 실행 렌더러=%s 설정=%s 웹=%s msaa=%d"
+		% [RenderingServer.get_current_rendering_method(),
+		   str(ProjectSettings.get_setting("rendering/renderer/rendering_method", "")),
+		   str(ProjectSettings.get_setting("rendering/renderer/rendering_method.web", "")),
+		   int(ProjectSettings.get_setting("rendering/anti_aliasing/quality/msaa_3d", 0))])
 	return ok
 
 

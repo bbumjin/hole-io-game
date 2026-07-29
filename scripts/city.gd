@@ -38,6 +38,9 @@ const LANE_GAP := 0.75
 const PLAZA_R := 26.0
 ## 오브젝트 사이에 두는 최소 여유(월드 단위).
 const GAP := 0.3
+## 블록 내부 산포 반경의 상한. 실제 반경은 블록의 사용 가능 구간에서 유도하고
+## 이 값으로 자른다(§22 — plan_block 참조).
+const SPREAD_MAX := 8.5
 
 @export var city_seed := 20260728
 @export var enabled := true
@@ -225,9 +228,21 @@ func plan_block(rng: RandomNumberGenerator, b: Vector3, out: Array) -> void:
 	var c := Vector3((sx.x + sx.y) * 0.5, 0.0, (sz.x + sz.y) * 0.5)
 	if rng.randf() < 0.45:
 		add_slot(rng, c, "block", out, "", 3.5)
+	# 산포 반경을 **사용 가능 구간에서 유도한다**(§22). 상수 8.5 를 그대로 쓰면 대로가
+	# 붙은 블록(반폭 7.95)에서 축당 6.5% 의 시도가 구간 밖으로 나가 add_slot 이 조용히
+	# 거절한다 — 지도의 92%(196블록 중 180)가 그런 블록이라 그만큼 덜 찬다.
+	# 구간 반폭을 그대로 쓰지 않고 상한을 씌우는 이유: 이 값은 **중심**의 범위이고
+	# 에셋에는 폭이 있어서, 구간 끝까지 벌리면 가장자리 시도가 폭만큼 거절된다.
+	#
+	# **이 변경은 도시 전체를 다시 흔든다.** 산포 반경이 달라진 블록에서 add_slot 이
+	# 고르는 후보가 달라지고, 후보 수에 따라 난수 소비량이 달라져 그 뒤의 시드 흐름이
+	# 통째로 어긋나기 때문이다. 대로가 안 붙은 블록(16개)의 산포 반경은 8.5 그대로인데도
+	# 블록당 프롭이 6.38 → 5.69 로 바뀐 것이 그 증거다(실측). 계측 결과는 §22 에 있다.
+	var spread := Vector2(minf(SPREAD_MAX, (sx.y - sx.x) * 0.5),
+		minf(SPREAD_MAX, (sz.y - sz.x) * 0.5))
 	for _i in 16:
-		add_slot(rng, c + Vector3(rng.randf_range(-8.5, 8.5), 0.0,
-			rng.randf_range(-8.5, 8.5)), "block", out)
+		add_slot(rng, c + Vector3(rng.randf_range(-spread.x, spread.x), 0.0,
+			rng.randf_range(-spread.y, spread.y)), "block", out)
 
 
 ## 보도: 블록 네 변의 중앙선 위에 일정 간격으로 놓는다.

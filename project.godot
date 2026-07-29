@@ -23,8 +23,10 @@ window/size/viewport_height=648
 
 renderer/rendering_method="forward_plus"
 ; 웹은 Forward+ 를 지원하지 않는다(WebGL2 = Compatibility 뿐).
-; 이 오버라이드가 없으면 브라우저에서 렌더러 초기화가 실패한다.
+; **이 줄은 엔진 기본값과 같다** — 지워도 웹은 gl_compatibility 로 뜬다(실측: 줄을
+; 지우고 돌려도 ProjectSettings 가 gl_compatibility 를 돌려준다). 명시해 두는 것은
+; 판정기(H10)가 이 값을 읽어 "웹이 Forward+ 로 바뀌지 않았는가" 를 지키기 위해서다.
 ; 실측: Compatibility 에서도 착시는 성립한다 — `--rendering-driver opengl3` 로
-; 1a 판정을 돌려 H1·H2·H7·H8(rim_aa=16/32)·H9 가 전부 통과했다.
+; 판정 아홉 종을 전부 돌려 전부 PASS 다(§22).
 renderer/rendering_method.web="gl_compatibility"
 anti_aliasing/quality/msaa_3d=2
