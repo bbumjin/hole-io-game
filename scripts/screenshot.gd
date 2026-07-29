@@ -159,6 +159,23 @@ const MIN_CANOPY_PROPS := 475
 ## E8: snag_radius 가 메시에서 나왔는가를 보는 허용 오차(월드 단위).
 const SNAG_R_TOL := 0.01
 
+# --- §21 한글 HUD 판정 -----------------------------------------------------
+## 번들 폰트의 경로. 라벨이 이것을 쓰지 않으면 데스크톱에서는 시스템 폴백으로
+## 멀쩡히 그려지고 **웹에서만** 글자가 사라진다 — 판정기가 도는 환경에서는 보이지
+## 않는 결함이므로 출처를 직접 묻는다.
+const HUD_FONT_PATH := "res://assets/fonts/hud_kr.ttf"
+## HUD 문구 규격의 한글 음절 전부. 구현체의 문자열만 검사하면 문구를 통째로 영문으로
+## 되돌린 빌드가 "쓰는 글자가 전부 있다" 로 통과한다 — 판정기가 따로 들어야 한다.
+## 폰트 서브셋(assets/fonts/README.md)과 같은 집합이어야 한다.
+const SPEC_HUD_CHARS := "점수크기삼킴먹힘순위이름시간종료혔다승리패배나키로작"
+## T8③: 한글 26자를 그린 라벨이 남겨야 할 최소 잉크 픽셀. 실측 2568 의 1/4 이다.
+const HUD_INK_MIN := 640
+## T8②-b: HUD 네 라벨이 그 순간 실제로 그리고 있어야 할 서로 다른 한글 음절 수.
+## 실측 21 의 절반이다. 처음에 1/3(7)로 잡았더니 **네 문구 중 셋을 영문으로
+## 되돌린 빌드가 정확히 7 로 통과했다** — 게임오버 문구 하나만 한글로 남아도
+## 그만큼이 나온다. 절반으로 올리면 그 주입이 7 대 10 으로 갈린다.
+const HUD_KR_MIN := 10
+
 # --- 3c 성능 예산 ---------------------------------------------------------
 ## 성능을 재는 지점 **둘**. 하나로 갈아치우면 안 된다 — §17 이전의 계측과 비교할 수
 ## 없게 되고(측정 지점이 동시에 바뀌면 증감 주장이 성립하지 않는다), 그 함정을
@@ -1499,15 +1516,19 @@ func run_judge_5() -> void:
 	print("JUDGE 5 T7: 씬에 놓인 픽스처=%d 게임 재시작 후 픽스처=%d 도시프롭=%d(기대 %d)"
 		% [authored, jset_play, props_play, RESTART_PROPS])
 
+	# --- T8: 한글 HUD 가 실제로 그려지는가 (§21) ---
+	var t8 := await judge_hud_font()
+
 	# --- T6: 플레이어가 먹히면 그 자리에서 끝난다 ---
 	var t6r := await judge_player_eaten()
 	var t6: bool = bool(t6r["over"]) and str(t6r["reason"]) == "eaten"
 	print("JUDGE 5 T6: state=%d reason=%s" % [t6r["state"], t6r["reason"]])
 
 	_main.judging = true
-	var ok: bool = t1 and t2 and t3 and t4 and t5 and t6 and t7
-	print("JUDGE 5 T1=%s T2=%s T3=%s T4=%s T5=%s T6=%s T7=%s -> %s"
-		% [pf(t1), pf(t2), pf(t3), pf(t4), pf(t5), pf(t6), pf(t7), ("PASS" if ok else "FAIL")])
+	var ok: bool = t1 and t2 and t3 and t4 and t5 and t6 and t7 and t8
+	print("JUDGE 5 T1=%s T2=%s T3=%s T4=%s T5=%s T6=%s T7=%s T8=%s -> %s"
+		% [pf(t1), pf(t2), pf(t3), pf(t4), pf(t5), pf(t6), pf(t7), pf(t8),
+		   ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -2396,3 +2417,84 @@ func spec_pass_radius(base_r: float, snag_r: float, hole_r: float) -> float:
 	var ov: float = (snag_r - hole_r) / snag_r
 	var eff: float = base_r + (snag_r - base_r) * SPEC_SNAG_GRIP * ov
 	return maxf(base_r, minf(eff, hole_r * SPEC_SNAG_CAP))
+
+
+# --- §21: 한글 HUD 판정 ----------------------------------------------------
+
+## T8. 세 가지를 함께 묻는다.
+##   ① 네 라벨이 **번들 폰트**를 쓰는가. 시스템 폴백에 기대면 데스크톱에서는
+##      멀쩡하고 웹에서만 글자가 사라진다 — 판정기가 도는 데스크톱에서는
+##      그 결함이 보이지 않으므로, **폰트의 출처**를 직접 물어야 한다.
+##   ② 서브셋에 글리프가 다 있는가. 문구에 새 음절을 쓰면 그 글자만 조용히
+##      사라진다. 지금 그려지는 문자열과, 판정기가 **따로 든** 문구 규격
+##      양쪽으로 본다 — 구현체의 문자열만 보면 문구를 통째로 영문으로 되돌린
+##      빌드가 자기 값끼리 일치해 그대로 통과한다.
+##   ③ 한글이 실제로 화면에 잉크를 남기는가. 라벨을 비운 프레임과 채운 프레임을
+##      찍어 라벨 영역의 **다른 픽셀 수**를 센다. 밝기 문턱으로 세면 3D 장면의
+##      밝은 부분이 섞인다.
+func judge_hud_font() -> bool:
+	# update_hud() 가 매 프레임 `hud_over.visible = (state == OVER)` 를 다시 쓴다.
+	# 판정 중에는 그것을 멈춰야 한다 — 안 그러면 라벨을 켜 두어도 다음 프레임에
+	# 꺼져 잉크가 0 이 된다(실측: 첫 판이 그래서 떨어졌다).
+	_main.judging = true
+	var labels := {
+		"Label": _main.hud, "Timer": _main.hud_timer,
+		"Board": _main.hud_board, "Over": _main.hud_over,
+	}
+	# ① 폰트 출처
+	var src_ok := true
+	for k in labels:
+		var f: Font = (labels[k] as Label).get_theme_font("font")
+		var p := "" if f == null else f.resource_path
+		if p != HUD_FONT_PATH:
+			src_ok = false
+			print("JUDGE 5 T8 %s 의 폰트가 번들본이 아니다: '%s'" % [k, p])
+	# ② 글리프 커버리지
+	var font: Font = (labels["Label"] as Label).get_theme_font("font")
+	var shown := ""
+	for k in labels:
+		shown += str((labels[k] as Label).text)
+	var need := SPEC_HUD_CHARS + shown
+	# ②-b HUD 가 실제로 한글을 그리고 있는가. ①~③ 은 폰트만 보므로, 문구를 통째로
+	# 영문으로 되돌린 빌드(= §21 이전 상태)가 전부 통과한다 — 그것도 회귀다.
+	var kr := {}
+	for i in shown.length():
+		if SPEC_HUD_CHARS.contains(shown[i]):
+			kr[shown[i]] = true
+	var kr_ok: bool = kr.size() >= HUD_KR_MIN
+	if not kr_ok:
+		print("JUDGE 5 T8 HUD 에 한글이 %d 자뿐이다(>= %d 이어야 한다)" % [kr.size(), HUD_KR_MIN])
+	var missing := ""
+	if font != null:
+		for i in need.length():
+			var c := need.unicode_at(i)
+			if c > 32 and not font.has_char(c) and not missing.contains(need[i]):
+				missing += need[i]
+	var glyph_ok: bool = font != null and missing.is_empty()
+	if not glyph_ok:
+		print("JUDGE 5 T8 글리프 없음: '%s'" % missing)
+	# ③ 잉크
+	var over: Label = labels["Over"]
+	var kept := str(over.text)
+	over.visible = true
+	over.text = SPEC_HUD_CHARS
+	var with_ink := await capture("hud_kr")
+	over.text = ""
+	var blank := await capture("hud_blank")
+	over.text = kept
+	var rect := over.get_global_rect()
+	var ink := 0
+	var x0 := maxi(int(rect.position.x), 0)
+	var y0 := maxi(int(rect.position.y), 0)
+	var x1 := mini(int(rect.end.x), with_ink.get_width())
+	var y1 := mini(int(rect.end.y), with_ink.get_height())
+	for y in range(y0, y1):
+		for x in range(x0, x1):
+			if with_ink.get_pixel(x, y).is_equal_approx(blank.get_pixel(x, y)):
+				continue
+			ink += 1
+	var ink_ok: bool = ink >= HUD_INK_MIN
+	print("JUDGE 5 T8: 폰트출처=%s 글리프=%s 한글=%d(>=%d) 잉크=%d(>=%d) 영역=%dx%d"
+		% [pf(src_ok), pf(glyph_ok), kr.size(), HUD_KR_MIN, ink, HUD_INK_MIN,
+		   x1 - x0, y1 - y0])
+	return src_ok and glyph_ok and kr_ok and ink_ok

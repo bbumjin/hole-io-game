@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" path="res://scenes/swallowable.tscn" id="6"]
 [ext_resource type="PackedScene" path="res://scenes/swallowable_big.tscn" id="7"]
 [ext_resource type="Script" path="res://scripts/city.gd" id="8"]
+[ext_resource type="FontFile" uid="uid://b3x3lllwaes5u" path="res://assets/fonts/hud_kr.ttf" id="9"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -68,6 +69,7 @@ script = ExtResource("4")
 [node name="HUD" type="CanvasLayer" parent="."]
 
 [node name="Label" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_top = 1.0
 anchor_bottom = 1.0
 offset_left = 14.0
@@ -76,6 +78,7 @@ offset_right = 460.0
 offset_bottom = -12.0
 
 [node name="Timer" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_left = 0.5
 anchor_right = 0.5
 offset_left = -80.0
@@ -85,6 +88,7 @@ offset_bottom = 42.0
 horizontal_alignment = 1
 
 [node name="Board" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_left = 1.0
 anchor_right = 1.0
 offset_left = -230.0
@@ -93,6 +97,7 @@ offset_right = -12.0
 offset_bottom = 210.0
 
 [node name="Over" type="Label" parent="HUD"]
+theme_override_fonts/font = ExtResource("9")
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5

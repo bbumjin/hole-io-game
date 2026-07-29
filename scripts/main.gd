@@ -335,18 +335,22 @@ func _on_swallowed(_node: Node3D) -> void:
 	update_hud()
 
 
+## HUD 문구는 한글이다(§21). 쓰는 음절은 `assets/fonts/hud_kr.ttf` 에 서브셋으로
+## 들어 있고, **여기에 새 음절을 쓰면 그 글자는 화면에서 사라진다** — 판정 T8 이
+## 현재 HUD 가 그리는 모든 문자에 글리프가 있는지 본다. 문구를 바꾸면
+## `assets/fonts/README.md` 의 재생성 절차로 폰트를 다시 만들어야 한다.
 func update_hud() -> void:
 	if player_alive():
-		hud.text = "SCORE %d    SIZE %.2f    EATEN %d" % [score, hole.radius, swallowed_total]
+		hud.text = "점수 %d    크기 %.2f    삼킴 %d" % [score, hole.radius, swallowed_total]
 	else:
-		hud.text = "SCORE %d    (EATEN)" % score
+		hud.text = "점수 %d    (먹힘)" % score
 	hud_timer.text = "%d:%02d" % [int(time_left) / 60, int(time_left) % 60]
 	hud_board.text = leaderboard_text()
 	hud_over.visible = state == State.OVER
 	if state == State.OVER:
-		var head := "TIME UP" if over_reason == "time" else "YOU WERE EATEN"
-		var mine := "WIN" if winner == "P" else "LOSE"
-		hud_over.text = "%s\n1st  %s   %d\nYOU: %s (%d)\nPRESS R TO RESTART"\
+		var head := "시간 종료" if over_reason == "time" else "먹혔다"
+		var mine := "승리" if winner == "P" else "패배"
+		hud_over.text = "%s\n1위  %s   %d\n나: %s (%d)\nR 키로 다시 시작"\
 			% [head, winner, winner_score, mine, score]
 
 
@@ -361,7 +365,7 @@ func leaderboard_text() -> String:
 		if int(a.score) != int(b.score):
 			return int(a.score) > int(b.score)
 		return float(a.radius) > float(b.radius))
-	var lines := PackedStringArray([" #  NAME   SCORE   SIZE"])
+	var lines := PackedStringArray([" 순위  이름    점수    크기"])
 	for i in hs.size():
 		var h: Node3D = hs[i]
 		lines.append("%2d.  %-4s %6d  %5.1f" % [i + 1, h.label, h.score, h.radius])
