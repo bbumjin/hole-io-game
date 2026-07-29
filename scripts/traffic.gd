@@ -29,6 +29,12 @@ const CITY := preload("res://scripts/city.gd")
 ## 앞차 뒤에 서는 최소 간격(m). 차 길이(최대 반길이 4.24)보다 넉넉해야 한다.
 @export var follow_gap := 11.0
 ## 주행 차량으로 쓸 에셋. 트래픽콘은 뺀다 — 그것은 달리는 물건이 아니다.
+##
+## **버스·스쿨버스·구급차도 뺐다.** 편도 띠 [1.05, 6.5] 를 2등분한 주행 차선의
+## 반폭은 1.3625 인데 그 셋의 폭반값은 1.49~1.73 이라, 달리면 중앙선 도색을 밟고
+## 주차 띠 하단을 최대 37cm 파고든다. §18 이 이미 같은 산술로 "가장 넓은 도로가
+## 가장 큰 차를 거절하는 규격 오류" 라 적어 두었는데, 교통을 얹으며 그 표를 다시
+## 밟았다(독립 감사가 잡았다). 큰 차는 **주차 자리**에 그대로 남아 있다.
 const MODELS := [
 	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0 },
 	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0 },
@@ -37,9 +43,6 @@ const MODELS := [
 	{ "path": "res://assets/cars/SUV.obj", "scale": 1.0 },
 	{ "path": "res://assets/cars/SportsCar.obj", "scale": 1.0 },
 	{ "path": "res://assets/cars/SportsCar2.obj", "scale": 1.0 },
-	{ "path": "res://assets/transport/Ambulance.obj", "scale": 1.05 },
-	{ "path": "res://assets/transport/Bus.obj", "scale": 1.96 },
-	{ "path": "res://assets/transport/SchoolBus.obj", "scale": 1.84 },
 ]
 
 var _city: Node3D
@@ -176,6 +179,11 @@ func _physics_process(dt: float) -> void:
 			by_lane[c["lane"]] = []
 		by_lane[c["lane"]].append(i)
 
+	# **루프 도중에 `_cars` 를 건드리지 않는다.** `by_lane` 이 인덱스를 들고 있어서,
+	# 중간에서 하나를 지우면 그 뒤의 인덱스가 전부 한 칸씩 어긋난다 — 남은 차가
+	# 엉뚱한 원소를 움직이고, 마지막 인덱스는 범위 밖으로 나간다.
+	# 넘길 것을 모아 두었다가 **루프가 끝난 뒤 높은 인덱스부터** 처리한다.
+	var to_release := []
 	for li in by_lane:
 		var lane: Dictionary = _lanes[li]
 		var dir: float = float(lane["dir"])
@@ -191,13 +199,20 @@ func _physics_process(dt: float) -> void:
 			# 구멍이 감지 범위에 넣은 차는 물리에 넘긴다. hold_awake 가 freeze 를
 			# 풀어 두므로 그것이 신호다. 넘길 때 주행 속도를 실어 관성을 잇는다.
 			if not rb.freeze:
-				release(i, dt)
+				to_release.append(i)
 				continue
-			var want: float = float(c["s"]) + dir * float(c["speed"]) * dt
+			var cur: float = float(c["s"])
+			var want: float = cur + dir * float(c["speed"]) * dt
 			# 앞차 뒤에 선다.
 			var limit := ahead - follow_gap
 			if want * dir > limit:
 				want = limit * dir
+			# **뒤로는 가지 않는다.** 앞차가 바로 앞에 나거나 재스폰으로 끼어들면
+			# limit 이 현재 위치보다 뒤가 되는데, 그대로 두면 차가 후진한다 —
+			# 지도 끝 밖으로 밀려 나가면 재스폰이 걸리고, 그 다음 프레임에 또 밀려
+			# **매 프레임 순간이동**이 된다(실측: 900프레임에 708회).
+			if want * dir < cur * dir:
+				want = cur
 			c["s"] = want
 			ahead = want * dir
 			var cell := int(floor(want / CITY.PITCH))
@@ -206,9 +221,43 @@ func _physics_process(dt: float) -> void:
 			else:
 				rb.global_position = lane_pos(lane, want)
 
+	to_release.sort()
+	for n in range(to_release.size() - 1, -1, -1):
+		release(int(to_release[n]))
+	# 사라진 차(재시작 등으로 노드가 해제된 것)를 정리한다. 그대로 두면 죽은 참조가
+	# 쌓이고 car_total() 이 실제보다 많게 보고한다.
+	for n in range(_cars.size() - 1, -1, -1):
+		if not is_instance_valid(_cars[n]["rb"]):
+			_cars.remove_at(n)
+	sweep_orphans()
+
+
+## 인계했으나 **삼켜지지 않은** 차. 구멍이 스쳐 지나가기만 하면 `hold_awake(false)` 가
+## freeze 를 되돌리지 않으므로(의도된 것이다 — 되돌리면 구멍 옆에서 기울어진 채 굳는다)
+## 아무도 그 차를 다시 인수하지 않는다. 그대로 두면 **주행 차선 한복판에 자유 강체가
+## 영구히 남고**, 주행차는 매 프레임 순간이동하므로 스윕 없이 그것을 관통한다 —
+## §27 이 주차 자리를 줄여 가며 없애려던 상황이 판 중반부터 스스로 되살아난다.
+## 낙하하지 않았고 멈춰 섰으면 치운다.
+var _orphans := []
+const ORPHAN_STILL := 0.35
+
+
+func sweep_orphans() -> void:
+	for n in range(_orphans.size() - 1, -1, -1):
+		var rb = _orphans[n]
+		if not is_instance_valid(rb):
+			_orphans.remove_at(n)
+			continue
+		if rb.falling:                                  # 구멍이 삼켰다 — 그쪽이 처리한다
+			_orphans.remove_at(n)
+			continue
+		if rb.linear_velocity.length() < ORPHAN_STILL:
+			_orphans.remove_at(n)
+			rb.queue_free()
+
 
 ## 구멍에 잡힌 차를 교통에서 빼고 물리에 넘긴다.
-func release(i: int, _dt: float) -> void:
+func release(i: int) -> void:
 	var c: Dictionary = _cars[i]
 	var rb: RigidBody3D = c["rb"]
 	var lane: Dictionary = _lanes[c["lane"]]
@@ -218,6 +267,7 @@ func release(i: int, _dt: float) -> void:
 	else:
 		v.z = float(lane["dir"]) * float(c["speed"])
 	rb.linear_velocity = v
+	_orphans.append(rb)
 	_cars.remove_at(i)
 	# 총량을 지킨다. 빠진 만큼 차선 입구에서 새로 낸다.
 	spawn_one()
@@ -228,7 +278,7 @@ func respawn(i: int) -> void:
 	var c: Dictionary = _cars[i]
 	var lane: Dictionary = _lanes[c["lane"]]
 	var entry := lane_entry(lane)
-	var s := float(entry) * CITY.PITCH + (0.5 if float(lane["dir"]) > 0.0 else 0.5) * CITY.PITCH
+	var s := float(entry) * CITY.PITCH + CITY.PITCH * 0.5
 	c["s"] = s
 	if is_instance_valid(c["rb"]):
 		c["rb"].global_position = lane_pos(lane, s)
@@ -258,3 +308,20 @@ func car_total() -> int:
 ## 판정용: 차 i 의 월드 위치.
 func car_pos(i: int) -> Vector3:
 	return (_cars[i]["rb"] as Node3D).global_position
+
+
+## 판정용: 차 i 의 개체 식별자. **인덱스는 프레임마다 달라진다**(먹힌 차가 빠지고
+## 새 차가 뒤에 붙는다) — 프레임을 가로질러 같은 차를 따라가려면 이것이 필요하다.
+func car_id(i: int) -> int:
+	return (_cars[i]["rb"] as Node).get_instance_id()
+
+
+## 판을 되돌린다. `main.gd` 의 restart() 가 부른다 — 그 함수는 "되돌린 결과가 최초와
+## 같아야 한다" 를 단언하는데, 교통을 그대로 두면 위치·속도·차선이 판을 넘겨 이어지고
+## 방치된 자유 강체도 누적된다.
+func reset() -> void:
+	for c in get_children():
+		c.free()
+	_cars.clear()
+	_orphans.clear()
+	boot()

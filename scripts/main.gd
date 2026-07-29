@@ -292,6 +292,13 @@ func restart() -> void:
 			c.free()
 	spawn_judge_set()
 
+	# 교통도 되돌린다(§27). 안 그러면 이 함수가 단언하는 "되돌린 결과가 최초와 같다"
+	# 가 거짓이 된다 — 차의 위치·속도·차선이 판을 넘겨 이어지고, 구멍이 스쳐 놓아둔
+	# 자유 강체도 누적된다.
+	var tr := get_node_or_null("Traffic")
+	if tr != null and not judging:
+		tr.reset()
+
 	state = State.PLAYING
 	time_left = round_seconds
 	winner = ""

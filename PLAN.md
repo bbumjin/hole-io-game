@@ -1595,6 +1595,13 @@ func restart() -> void:
 			c.free()
 	spawn_judge_set()
 
+	# 교통도 되돌린다(§27). 안 그러면 이 함수가 단언하는 "되돌린 결과가 최초와 같다"
+	# 가 거짓이 된다 — 차의 위치·속도·차선이 판을 넘겨 이어지고, 구멍이 스쳐 놓아둔
+	# 자유 강체도 누적된다.
+	var tr := get_node_or_null("Traffic")
+	if tr != null and not judging:
+		tr.reset()
+
 	state = State.PLAYING
 	time_left = round_seconds
 	winner = ""
@@ -2033,6 +2040,10 @@ const SPEC_BITE_DEPTH := 0.8
 ## 44.7 / 37.2 / 21.9, 그동안 반경은 각각 +0.41 / +0.57 / +0.70 자랐다).
 ## 11 은 그 최솟값 21.9 의 절반이다. 굳은 AI 는 0 이 되므로 변별력은 그대로다.
 const AI_MIN_PATH := 11.0
+## G7: AI 전체가 자유 실행 동안 자라야 할 반경 합의 하한(§27). 실측 0.418 의 절반이다.
+## 성장을 개체마다 묻지 않는 대신(배치의 운이 된다) 합에 하한을 둔다 — 하한이 없으면
+## 다섯 중 넷이 죽어도 하나가 아주 조금 자라면 통과한다.
+const AI_MIN_GROW := 0.2
 const OVERLAP_FRAMES := 300                        # G6 시나리오: 사냥이 성사될 때까지
 
 # --- 4b 게임 루프 판정 ----------------------------------------------------
@@ -3327,10 +3338,12 @@ func zone_of(pts: PackedVector2Array) -> String:
 ## §18 의 대로 차선 자리 — 중앙선에서의 거리. 편도 주행 띠 [median, road_half] 를
 ## 4등분한 1/4·2/4·3/4 지점이다. **구현체의 lane_slots 를 읽지 않는다** — 읽으면
 ## 자리를 바꾼 빌드가 자기 값끼리 일치해 통과한다.
+## §27: 대로의 **정차 자리는 하나**다(바깥 0.75 지점). 안쪽·가운데는 주행 차선과
+## 겹쳐서 걷어냈다. 이 사본이 옛 세 자리로 남아 있으면 판정기의 규격이 구현체와
+## 어긋난 채 방치된다 — 이 프로젝트가 가장 경계하는 상태다.
 func spec_lane_slots(k: int) -> Array:
 	var m := spec_median(k)
-	var w := spec_road_half(k) - m
-	return [m + w * 0.25, m + w * 0.5, m + w * 0.75]
+	return [m + (spec_road_half(k) - m) * 0.75]
 
 
 ## |u| 가 어느 규격 자리에 가장 가까운가.
@@ -3574,8 +3587,13 @@ func run_judge_3b() -> void:
 	#   E7b: 대로 차도의 **규격 자리 셋(안쪽·가운데·바깥)이 전부 쓰였는가.**
 	#        자리 하나를 지우는 회귀는 개수 비율로는 안 걸린다(실측: 3자리 → 1자리
 	#        주입이 하한 230 대 223 으로 간신히 걸렸다) — 구조로 물어야 한다.
+	# E7b 는 §27 에서 **"자리 셋이 전부 쓰였는가" → "정차차가 주행 차선을 침범하지
+	# 않는가"** 로 바뀌었다. 대로 정차 자리가 하나로 줄어 앞의 질문이 의미를 잃었다.
+	# 옛 조건(`boul_bands.size() >= 3`)을 지우지 않고 새 카운터만 세다가, 주입 실행에서
+	# **옛 조건이 우연히 걸린 것을 새 기준이 잡은 것으로 오독했다** — 독립 감사가 잡았다.
+	# 통과식에 실제로 들어가지 않는 카운터는 판정력이 0 이다.
 	var e7: bool = boul_n["road"] >= MIN_BOUL_ROAD and boul_n["walk"] >= MIN_BOUL_WALK \
-		and boul_bands.size() >= 3
+		and boul_lane_bad == 0
 	# E8: §19 의 걸림 모형이 실제로 입력을 갖는가. 두 질문을 함께 묻는다.
 	#   ① 수관이 넓은 프롭에 수관 셰이프가 달려 있는가 (셰이프 개수)
 	#   ② 그런 프롭이 하한 이상 있는가 — 밑동 셰이프를 다시
@@ -3926,8 +3944,10 @@ func run_judge_4() -> void:
 		g7 = g7 and okh
 		print("JUDGE 4 G7 %s: path=%.1f (>= %.0f) dR=%+.3f -> %s"
 			% [h.label, moved, AI_MIN_PATH, grew, pf(okh)])
-	g7 = g7 and g7_n > 0 and g7_grew > 0.0
-	print("JUDGE 4 G7 AI 총 성장=%+.3f (> 0)" % g7_grew)
+	# 하한이 없으면 다섯 중 넷의 성장이 죽어도 하나가 +0.001 만 자라면 통과한다.
+	# 실측 총합 0.418 의 절반을 문턱으로 둔다(다른 계측 파생 상수와 같은 방식).
+	g7 = g7 and g7_n > 0 and g7_grew >= AI_MIN_GROW
+	print("JUDGE 4 G7 AI 총 성장=%+.3f (>= %.2f)" % [g7_grew, AI_MIN_GROW])
 
 	var g5: bool = g5_bad == 0
 	var g6: bool = g6_bad == 0 and g6_scenario
@@ -4681,6 +4701,12 @@ const TRAFFIC_FRAMES := 300
 const TRAFFIC_MIN_PATH := 20.0
 ## M3: 주행 차선 오프셋의 허용 오차(m). 규격은 한 점이므로 좁게 잡는다.
 const LANE_U_TOL := 0.05
+## M7: 한 물리 프레임에 이보다 크게 움직이면 순간이동이다. 최고 속도 12 m/s 에서
+## 한 프레임은 0.2m 이므로 5.0 은 압도적인 여유다 — 차선을 잘못 옮겨 앉는 것만 잡는다.
+const JUMP_MAX := 5.0
+## 정상적인 순간이동은 **재스폰**뿐이다(차선 끝에 닿아 반대편에서 다시 난다).
+## 900프레임 · 24대에서 몇 번인지는 계측으로 정한다.
+const JUMP_MAX_N := 40
 
 
 ## 주행 차선의 중앙선 기준 오프셋. **구현체의 driving_lanes 를 읽지 않는다** —
@@ -4754,29 +4780,42 @@ func run_judge_9() -> void:
 	tr.spawn_for_judge(TRAFFIC_N)
 	await get_tree().physics_frame
 	var n0: int = int(tr.car_total())
-	var from := []
+	# **직선 변위를 재면 안 된다.** 300프레임(5초)에 물리적 상한은 12 m/s × 5s = 60m 인데
+	# 옛 M1 은 평균 137m 를 보고했다 — 절반 이상이 재스폰 **순간이동**이었다.
+	# 그러면 속도를 0.01 로 낮춘 빌드도 통과한다(독립 감사가 산술로 증명했다).
+	# 프레임마다 이동을 누적하되 도약은 버리는 **경로장**으로 잰다.
+	# 평균이 아니라 **중앙값**을 본다 — 24대 중 스물이 굳어도 평균은 넘어간다.
+	var path := {}
+	var last := {}
 	for i in n0:
-		from.append(tr.car_pos(i))
+		last[int(tr.car_id(i))] = tr.car_pos(i)
 	var m3 := true
 	var m3_bad := 0
 	for f in TRAFFIC_FRAMES:
 		await get_tree().physics_frame
-		# --- M3: 매 프레임 규격 위에 있는가 ---
-		# 표본 시점 하나만 보면 "가끔 차선을 벗어난다" 를 놓친다.
 		for i in int(tr.car_total()):
-			if not on_spec_lane(tr.car_pos(i)):
+			var p: Vector3 = tr.car_pos(i)
+			var id: int = int(tr.car_id(i))
+			if last.has(id):
+				var step: float = (p - (last[id] as Vector3)).length()
+				if step <= JUMP_MAX:                     # 재스폰 도약은 주행이 아니다
+					path[id] = float(path.get(id, 0.0)) + step
+			last[id] = p
+			# --- M3: 매 프레임 규격 위에 있는가 ---
+			# 표본 시점 하나만 보면 "가끔 차선을 벗어난다" 를 놓친다.
+			if not on_spec_lane(p):
 				if m3_bad < 5:
-					print("JUDGE 9 M3 규격 밖: %s (프레임 %d)" % [str(tr.car_pos(i)), f])
+					print("JUDGE 9 M3 규격 밖: %s (프레임 %d)" % [str(p), f])
 				m3_bad += 1
 				m3 = false
-	var moved := 0.0
-	var cnt := mini(n0, int(tr.car_total()))
-	for i in cnt:
-		moved += (tr.car_pos(i) - (from[i] as Vector3)).length()
-	var avg: float = moved / maxf(float(cnt), 1.0)
-	var m1: bool = avg >= TRAFFIC_MIN_PATH
-	print("JUDGE 9 M1 평균 변위=%.1fm (>= %.0f) 차=%d %s"
-		% [avg, TRAFFIC_MIN_PATH, n0, pf(m1)])
+	var paths := []
+	for id in path:
+		paths.append(float(path[id]))
+	paths.sort()
+	var med: float = 0.0 if paths.is_empty() else float(paths[paths.size() / 2])
+	var m1: bool = med >= TRAFFIC_MIN_PATH
+	print("JUDGE 9 M1 경로장 중앙값=%.1fm (>= %.0f) 차=%d %s"
+		% [med, TRAFFIC_MIN_PATH, n0, pf(m1)])
 	print("JUDGE 9 M3 규격 이탈 표본=%d %s" % [m3_bad, pf(m3)])
 	var fp1 := traffic_fingerprint(tr)
 
@@ -4795,6 +4834,8 @@ func run_judge_9() -> void:
 		var d: Vector3 = p - (before[i] as Vector3)
 		if d.length() < 1e-4:
 			continue                                   # 앞차에 막혀 선 차는 건너뛴다
+		if d.length() > JUMP_MAX:
+			continue                                   # 재스폰 도약은 진행 방향이 아니다
 		var kx := spec_line_index(p.x)
 		var kz := spec_line_index(p.z)
 		var ok := false
@@ -4830,16 +4871,52 @@ func run_judge_9() -> void:
 	hole.move_to(Vector3(0.0, 0.0, spec_driving_u(0)))     # 인덱스 0 대로 위
 	_reg.flush()
 	var score0: int = int(hole.score)
-	for _f in 600:
+	# M7 도 여기서 함께 잰다 — **차가 먹히는 동안**의 상태다.
+	# M1·M3 는 구멍이 멀리 있는 조용한 실행이라 이 경로를 아예 지나지 않는다.
+	# 인계는 교통의 내부 배열을 건드리는 유일한 자리이고, 그 자리가 어긋나면
+	# 남은 차가 엉뚱한 원소를 움직인다(실측: 루프 도중 제거로 인덱스가 밀렸다).
+	var m7 := true
+	var m7_bad := 0
+	var m7_min := 9999
+	# 순간이동 세기. **인덱스가 아니라 개체 식별자로 따라간다** — 먹힌 차가 빠지고
+	# 새 차가 뒤에 붙으므로 인덱스는 프레임마다 다른 차를 가리킨다.
+	# 인계가 내부 배열을 어긋내면 남은 차가 **다른 차선의 좌표로 옮겨 앉는데**,
+	# 그 자리도 유효한 차선이라 규격 검사로는 보이지 않는다. 보이는 것은 그 도약이다.
+	var last_pos := {}
+	var jumps := 0
+	for _f in 900:
 		await get_tree().physics_frame
-		if int(hole.score) > score0:
-			break
+		var n: int = int(tr.car_total())
+		m7_min = mini(m7_min, n)
+		var seen := {}
+		for i in n:
+			var p: Vector3 = tr.car_pos(i)
+			var id: int = int(tr.car_id(i))
+			seen[id] = true
+			if last_pos.has(id) and (p - (last_pos[id] as Vector3)).length() > JUMP_MAX:
+				jumps += 1
+			last_pos[id] = p
+			if not on_spec_lane(p):
+				if m7_bad < 5:
+					print("JUDGE 9 M7 인계 중 규격 밖: %s" % str(p))
+				m7_bad += 1
+				m7 = false
+		for id in last_pos.keys():
+			if not seen.has(id):
+				last_pos.erase(id)
+	m7 = m7 and jumps <= JUMP_MAX_N
+	print("JUDGE 9 M7 순간이동=%d (<= %d)" % [jumps, JUMP_MAX_N])
 	var m5: bool = int(hole.score) > score0
+	# 총량이 유지되는가. 하나가 빠질 때마다 하나가 나야 한다 — 안 그러면 도로가
+	# 시간이 갈수록 비고, 그것은 판이 길어질수록 심해진다.
+	m7 = m7 and m7_min >= TRAFFIC_N
 	print("JUDGE 9 M5 주행차 흡입: 점수 %d -> %d %s" % [score0, hole.score, pf(m5)])
+	print("JUDGE 9 M7 인계 중 규격이탈=%d 최소 대수=%d(>= %d) %s"
+		% [m7_bad, m7_min, TRAFFIC_N, pf(m7)])
 
-	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s"
-		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6)])
-	var ok := m1 and m2 and m3 and m4 and m5 and m6
+	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s"
+		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7)])
+	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -8361,10 +8438,36 @@ G7 은 AI 마다 "이만큼 움직였고 **자랐는가**" 를 물었다. 대로
 
 ### 회귀
 
-**데스크톱 Forward+ 열두 종 · 데스크톱 Compatibility 열두 종 · 브라우저 게이트 열한 종 — 서른다섯 번 전부 PASS.** 신규 주입 6종을 더해 누적 113종이다.
+**데스크톱 Forward+ 열두 종 · 데스크톱 Compatibility 열두 종 · 브라우저 게이트 열한 종 — 서른다섯 번 전부 PASS.** 신규 주입 11종(M1~M7 + E7b + G7)을 더해 누적 118종이다.
+
+### 독립 감사가 찾은 것 — 판정 둘이 위약이었고 코드 결함 넷이 남아 있었다
+
+감사(61/100 불합격)가 짚은 자리다. 판정을 통과한 채로 배포된 것들이라 특히 뼈아프다.
+
+**① `E7b` 가 통과식에 연결돼 있지 않았다.** 새 카운터를 세기만 하고 옛 조건(`자리 셋이 전부 쓰였는가`)을 지우지 않았다. 그런데 주입 실행에서 **옛 조건이 우연히 걸린 것을 새 기준이 잡은 것으로 오독했다** — 출력의 `E7=F` 만 보고 판단한 것이다. **통과식에 들어가지 않는 카운터는 판정력이 0 이다.** 판정기의 `spec_lane_slots` 사본도 옛 세 자리로 남아 있었다.
+
+**② M1 은 주행이 아니라 순간이동을 재고 있었다.** 300프레임(5초)에 물리적 상한은 12 m/s × 5s = 60m 인데 M1 은 평균 137.1m 를 보고했다 — 절반 이상이 재스폰 도약이었다. 그러면 **속도를 0.01 로 낮춘 빌드도 통과한다**(주입으로 확인했다). 도약을 버리는 **경로장 누적**으로 바꾸고, 평균이 아니라 **중앙값**을 본다(스물넷 중 스물이 굳어도 평균은 넘어간다). 고친 뒤 43.2m — 9 m/s × 5s 와 맞는다.
+
+**③ 인계된 차가 영원히 방치됐다.** 구멍이 스쳐 지나가기만 하면 `hold_awake(false)` 가 freeze 를 되돌리지 않고(그것은 의도된 것이다) 교통도 다시 인수하지 않는다. 주행 차선 한복판에 자유 강체가 남는데, 주행차는 매 프레임 순간이동하므로 스윕 없이 그것을 관통한다 — **§27 이 주차 자리를 줄여 가며 없애려던 상황이 판 중반부터 스스로 되살아난다.** 멈춰 선 고아를 치운다.
+
+**④ 버스·스쿨버스·구급차가 차선보다 넓었다.** 주행 차선 반폭은 1.3625 인데 그 셋의 폭반값은 1.49~1.73 이다. §18 이 이미 같은 산술로 "가장 넓은 도로가 가장 큰 차를 거절하는 규격 오류" 라 적어 두었는데, 교통을 얹으며 그 표를 다시 밟았다. 주행 목록에서 뺐다 — 큰 차는 주차 자리에 그대로 있다.
+
+**⑤ `restart()` 가 교통을 되돌리지 않았다.** 그 함수는 "되돌린 결과가 최초와 같다" 를 단언하는데, 차의 위치·속도·차선이 판을 넘겨 이어졌다.
+
+덤으로 판정 둘을 조였다. M6 가 재스폰 프레임을 역주행으로 오독해 약 1% 확률로 **정상 빌드를 떨어뜨릴 수 있었고**(도약 표본을 건너뛴다), G7 의 총 성장에 하한이 없어 다섯 중 넷이 죽어도 통과했다.
+
+### 판정이 스스로 잡은 품질 결함 둘
+
+M7 을 세우고 순간이동을 세었더니 **900프레임에 708회**가 나왔다. 정상 재스폰이라면 열 번대여야 한다.
+
+원인은 **추종 클램프가 차를 뒤로 밀고 있었다**는 것이다. 앞차가 바로 앞에 나거나 재스폰으로 끼어들면 `limit` 이 현재 위치보다 뒤가 되는데, 그대로 두면 차가 후진한다 — 지도 끝 밖으로 밀려 나가면 재스폰이 걸리고 다음 프레임에 또 밀려 **매 프레임 순간이동**이 된다. "뒤로는 가지 않는다" 한 줄로 708 → **15** 가 됐다.
+
+같은 검사가 ① 의 인덱스 밀림도 잡는다(105회). 잘못 옮겨 앉은 자리도 **유효한 차선**이라 규격 검사(M3)로는 보이지 않고, 보이는 것은 그 도약뿐이다.
 
 ### 남긴 한계
 
+- **교차로에서 직교 관통한다.** 꺾지 않는다고 충돌이 사라지지는 않는다 — 동서 차선과 남북 차선은 대로 교차마다 네 점에서 만나고, 점유 관리가 없으므로 같은 순간 같은 점을 지나면 서로를 통과한다. 직진만 하므로 순환 대기가 없어 **예약 방식으로 그리드락 없이 풀 수 있다.** 넣지 않은 것은 범위의 문제다.
+- **차의 앞뒤 방향을 판정하지 않는다.** yaw 를 AABB 긴 축에서만 유도하므로 모델의 코가 어느 쪽인지는 반영되지 않는다. 일부 모델이 후진하는 모습으로 달릴 수 있다(육안 판단은 이 프로젝트에서 이미 두 번 뒤집혔으므로 단정하지 않는다).
 - **시민은 아직 없다.** 유저 지적 (2) 의 둘째 줄("시민 등 동적 오브젝트")은 다음이다. 절차 생성 미니피규어로 계획해 두었다(PLAN2 B2).
 - **차가 꺾지 않는다.** 위의 근거로 좁힌 규격이다. 교차로에서 갈라지는 것을 넣으려면 그리드락 회피를 함께 설계해야 한다.
 - **신호등은 여전히 장식이다.** 교통과 연동돼 있지 않다.
@@ -8405,6 +8508,12 @@ const CITY := preload("res://scripts/city.gd")
 ## 앞차 뒤에 서는 최소 간격(m). 차 길이(최대 반길이 4.24)보다 넉넉해야 한다.
 @export var follow_gap := 11.0
 ## 주행 차량으로 쓸 에셋. 트래픽콘은 뺀다 — 그것은 달리는 물건이 아니다.
+##
+## **버스·스쿨버스·구급차도 뺐다.** 편도 띠 [1.05, 6.5] 를 2등분한 주행 차선의
+## 반폭은 1.3625 인데 그 셋의 폭반값은 1.49~1.73 이라, 달리면 중앙선 도색을 밟고
+## 주차 띠 하단을 최대 37cm 파고든다. §18 이 이미 같은 산술로 "가장 넓은 도로가
+## 가장 큰 차를 거절하는 규격 오류" 라 적어 두었는데, 교통을 얹으며 그 표를 다시
+## 밟았다(독립 감사가 잡았다). 큰 차는 **주차 자리**에 그대로 남아 있다.
 const MODELS := [
 	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0 },
 	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0 },
@@ -8413,9 +8522,6 @@ const MODELS := [
 	{ "path": "res://assets/cars/SUV.obj", "scale": 1.0 },
 	{ "path": "res://assets/cars/SportsCar.obj", "scale": 1.0 },
 	{ "path": "res://assets/cars/SportsCar2.obj", "scale": 1.0 },
-	{ "path": "res://assets/transport/Ambulance.obj", "scale": 1.05 },
-	{ "path": "res://assets/transport/Bus.obj", "scale": 1.96 },
-	{ "path": "res://assets/transport/SchoolBus.obj", "scale": 1.84 },
 ]
 
 var _city: Node3D
@@ -8552,6 +8658,11 @@ func _physics_process(dt: float) -> void:
 			by_lane[c["lane"]] = []
 		by_lane[c["lane"]].append(i)
 
+	# **루프 도중에 `_cars` 를 건드리지 않는다.** `by_lane` 이 인덱스를 들고 있어서,
+	# 중간에서 하나를 지우면 그 뒤의 인덱스가 전부 한 칸씩 어긋난다 — 남은 차가
+	# 엉뚱한 원소를 움직이고, 마지막 인덱스는 범위 밖으로 나간다.
+	# 넘길 것을 모아 두었다가 **루프가 끝난 뒤 높은 인덱스부터** 처리한다.
+	var to_release := []
 	for li in by_lane:
 		var lane: Dictionary = _lanes[li]
 		var dir: float = float(lane["dir"])
@@ -8567,13 +8678,20 @@ func _physics_process(dt: float) -> void:
 			# 구멍이 감지 범위에 넣은 차는 물리에 넘긴다. hold_awake 가 freeze 를
 			# 풀어 두므로 그것이 신호다. 넘길 때 주행 속도를 실어 관성을 잇는다.
 			if not rb.freeze:
-				release(i, dt)
+				to_release.append(i)
 				continue
-			var want: float = float(c["s"]) + dir * float(c["speed"]) * dt
+			var cur: float = float(c["s"])
+			var want: float = cur + dir * float(c["speed"]) * dt
 			# 앞차 뒤에 선다.
 			var limit := ahead - follow_gap
 			if want * dir > limit:
 				want = limit * dir
+			# **뒤로는 가지 않는다.** 앞차가 바로 앞에 나거나 재스폰으로 끼어들면
+			# limit 이 현재 위치보다 뒤가 되는데, 그대로 두면 차가 후진한다 —
+			# 지도 끝 밖으로 밀려 나가면 재스폰이 걸리고, 그 다음 프레임에 또 밀려
+			# **매 프레임 순간이동**이 된다(실측: 900프레임에 708회).
+			if want * dir < cur * dir:
+				want = cur
 			c["s"] = want
 			ahead = want * dir
 			var cell := int(floor(want / CITY.PITCH))
@@ -8582,9 +8700,43 @@ func _physics_process(dt: float) -> void:
 			else:
 				rb.global_position = lane_pos(lane, want)
 
+	to_release.sort()
+	for n in range(to_release.size() - 1, -1, -1):
+		release(int(to_release[n]))
+	# 사라진 차(재시작 등으로 노드가 해제된 것)를 정리한다. 그대로 두면 죽은 참조가
+	# 쌓이고 car_total() 이 실제보다 많게 보고한다.
+	for n in range(_cars.size() - 1, -1, -1):
+		if not is_instance_valid(_cars[n]["rb"]):
+			_cars.remove_at(n)
+	sweep_orphans()
+
+
+## 인계했으나 **삼켜지지 않은** 차. 구멍이 스쳐 지나가기만 하면 `hold_awake(false)` 가
+## freeze 를 되돌리지 않으므로(의도된 것이다 — 되돌리면 구멍 옆에서 기울어진 채 굳는다)
+## 아무도 그 차를 다시 인수하지 않는다. 그대로 두면 **주행 차선 한복판에 자유 강체가
+## 영구히 남고**, 주행차는 매 프레임 순간이동하므로 스윕 없이 그것을 관통한다 —
+## §27 이 주차 자리를 줄여 가며 없애려던 상황이 판 중반부터 스스로 되살아난다.
+## 낙하하지 않았고 멈춰 섰으면 치운다.
+var _orphans := []
+const ORPHAN_STILL := 0.35
+
+
+func sweep_orphans() -> void:
+	for n in range(_orphans.size() - 1, -1, -1):
+		var rb = _orphans[n]
+		if not is_instance_valid(rb):
+			_orphans.remove_at(n)
+			continue
+		if rb.falling:                                  # 구멍이 삼켰다 — 그쪽이 처리한다
+			_orphans.remove_at(n)
+			continue
+		if rb.linear_velocity.length() < ORPHAN_STILL:
+			_orphans.remove_at(n)
+			rb.queue_free()
+
 
 ## 구멍에 잡힌 차를 교통에서 빼고 물리에 넘긴다.
-func release(i: int, _dt: float) -> void:
+func release(i: int) -> void:
 	var c: Dictionary = _cars[i]
 	var rb: RigidBody3D = c["rb"]
 	var lane: Dictionary = _lanes[c["lane"]]
@@ -8594,6 +8746,7 @@ func release(i: int, _dt: float) -> void:
 	else:
 		v.z = float(lane["dir"]) * float(c["speed"])
 	rb.linear_velocity = v
+	_orphans.append(rb)
 	_cars.remove_at(i)
 	# 총량을 지킨다. 빠진 만큼 차선 입구에서 새로 낸다.
 	spawn_one()
@@ -8604,7 +8757,7 @@ func respawn(i: int) -> void:
 	var c: Dictionary = _cars[i]
 	var lane: Dictionary = _lanes[c["lane"]]
 	var entry := lane_entry(lane)
-	var s := float(entry) * CITY.PITCH + (0.5 if float(lane["dir"]) > 0.0 else 0.5) * CITY.PITCH
+	var s := float(entry) * CITY.PITCH + CITY.PITCH * 0.5
 	c["s"] = s
 	if is_instance_valid(c["rb"]):
 		c["rb"].global_position = lane_pos(lane, s)
@@ -8634,4 +8787,21 @@ func car_total() -> int:
 ## 판정용: 차 i 의 월드 위치.
 func car_pos(i: int) -> Vector3:
 	return (_cars[i]["rb"] as Node3D).global_position
+
+
+## 판정용: 차 i 의 개체 식별자. **인덱스는 프레임마다 달라진다**(먹힌 차가 빠지고
+## 새 차가 뒤에 붙는다) — 프레임을 가로질러 같은 차를 따라가려면 이것이 필요하다.
+func car_id(i: int) -> int:
+	return (_cars[i]["rb"] as Node).get_instance_id()
+
+
+## 판을 되돌린다. `main.gd` 의 restart() 가 부른다 — 그 함수는 "되돌린 결과가 최초와
+## 같아야 한다" 를 단언하는데, 교통을 그대로 두면 위치·속도·차선이 판을 넘겨 이어지고
+## 방치된 자유 강체도 누적된다.
+func reset() -> void:
+	for c in get_children():
+		c.free()
+	_cars.clear()
+	_orphans.clear()
+	boot()
 ```

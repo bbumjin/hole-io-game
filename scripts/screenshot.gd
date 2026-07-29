@@ -145,6 +145,10 @@ const SPEC_BITE_DEPTH := 0.8
 ## 44.7 / 37.2 / 21.9, 그동안 반경은 각각 +0.41 / +0.57 / +0.70 자랐다).
 ## 11 은 그 최솟값 21.9 의 절반이다. 굳은 AI 는 0 이 되므로 변별력은 그대로다.
 const AI_MIN_PATH := 11.0
+## G7: AI 전체가 자유 실행 동안 자라야 할 반경 합의 하한(§27). 실측 0.418 의 절반이다.
+## 성장을 개체마다 묻지 않는 대신(배치의 운이 된다) 합에 하한을 둔다 — 하한이 없으면
+## 다섯 중 넷이 죽어도 하나가 아주 조금 자라면 통과한다.
+const AI_MIN_GROW := 0.2
 const OVERLAP_FRAMES := 300                        # G6 시나리오: 사냥이 성사될 때까지
 
 # --- 4b 게임 루프 판정 ----------------------------------------------------
@@ -1439,10 +1443,12 @@ func zone_of(pts: PackedVector2Array) -> String:
 ## §18 의 대로 차선 자리 — 중앙선에서의 거리. 편도 주행 띠 [median, road_half] 를
 ## 4등분한 1/4·2/4·3/4 지점이다. **구현체의 lane_slots 를 읽지 않는다** — 읽으면
 ## 자리를 바꾼 빌드가 자기 값끼리 일치해 통과한다.
+## §27: 대로의 **정차 자리는 하나**다(바깥 0.75 지점). 안쪽·가운데는 주행 차선과
+## 겹쳐서 걷어냈다. 이 사본이 옛 세 자리로 남아 있으면 판정기의 규격이 구현체와
+## 어긋난 채 방치된다 — 이 프로젝트가 가장 경계하는 상태다.
 func spec_lane_slots(k: int) -> Array:
 	var m := spec_median(k)
-	var w := spec_road_half(k) - m
-	return [m + w * 0.25, m + w * 0.5, m + w * 0.75]
+	return [m + (spec_road_half(k) - m) * 0.75]
 
 
 ## |u| 가 어느 규격 자리에 가장 가까운가.
@@ -1686,8 +1692,13 @@ func run_judge_3b() -> void:
 	#   E7b: 대로 차도의 **규격 자리 셋(안쪽·가운데·바깥)이 전부 쓰였는가.**
 	#        자리 하나를 지우는 회귀는 개수 비율로는 안 걸린다(실측: 3자리 → 1자리
 	#        주입이 하한 230 대 223 으로 간신히 걸렸다) — 구조로 물어야 한다.
+	# E7b 는 §27 에서 **"자리 셋이 전부 쓰였는가" → "정차차가 주행 차선을 침범하지
+	# 않는가"** 로 바뀌었다. 대로 정차 자리가 하나로 줄어 앞의 질문이 의미를 잃었다.
+	# 옛 조건(`boul_bands.size() >= 3`)을 지우지 않고 새 카운터만 세다가, 주입 실행에서
+	# **옛 조건이 우연히 걸린 것을 새 기준이 잡은 것으로 오독했다** — 독립 감사가 잡았다.
+	# 통과식에 실제로 들어가지 않는 카운터는 판정력이 0 이다.
 	var e7: bool = boul_n["road"] >= MIN_BOUL_ROAD and boul_n["walk"] >= MIN_BOUL_WALK \
-		and boul_bands.size() >= 3
+		and boul_lane_bad == 0
 	# E8: §19 의 걸림 모형이 실제로 입력을 갖는가. 두 질문을 함께 묻는다.
 	#   ① 수관이 넓은 프롭에 수관 셰이프가 달려 있는가 (셰이프 개수)
 	#   ② 그런 프롭이 하한 이상 있는가 — 밑동 셰이프를 다시
@@ -2038,8 +2049,10 @@ func run_judge_4() -> void:
 		g7 = g7 and okh
 		print("JUDGE 4 G7 %s: path=%.1f (>= %.0f) dR=%+.3f -> %s"
 			% [h.label, moved, AI_MIN_PATH, grew, pf(okh)])
-	g7 = g7 and g7_n > 0 and g7_grew > 0.0
-	print("JUDGE 4 G7 AI 총 성장=%+.3f (> 0)" % g7_grew)
+	# 하한이 없으면 다섯 중 넷의 성장이 죽어도 하나가 +0.001 만 자라면 통과한다.
+	# 실측 총합 0.418 의 절반을 문턱으로 둔다(다른 계측 파생 상수와 같은 방식).
+	g7 = g7 and g7_n > 0 and g7_grew >= AI_MIN_GROW
+	print("JUDGE 4 G7 AI 총 성장=%+.3f (>= %.2f)" % [g7_grew, AI_MIN_GROW])
 
 	var g5: bool = g5_bad == 0
 	var g6: bool = g6_bad == 0 and g6_scenario
@@ -2793,6 +2806,12 @@ const TRAFFIC_FRAMES := 300
 const TRAFFIC_MIN_PATH := 20.0
 ## M3: 주행 차선 오프셋의 허용 오차(m). 규격은 한 점이므로 좁게 잡는다.
 const LANE_U_TOL := 0.05
+## M7: 한 물리 프레임에 이보다 크게 움직이면 순간이동이다. 최고 속도 12 m/s 에서
+## 한 프레임은 0.2m 이므로 5.0 은 압도적인 여유다 — 차선을 잘못 옮겨 앉는 것만 잡는다.
+const JUMP_MAX := 5.0
+## 정상적인 순간이동은 **재스폰**뿐이다(차선 끝에 닿아 반대편에서 다시 난다).
+## 900프레임 · 24대에서 몇 번인지는 계측으로 정한다.
+const JUMP_MAX_N := 40
 
 
 ## 주행 차선의 중앙선 기준 오프셋. **구현체의 driving_lanes 를 읽지 않는다** —
@@ -2866,29 +2885,42 @@ func run_judge_9() -> void:
 	tr.spawn_for_judge(TRAFFIC_N)
 	await get_tree().physics_frame
 	var n0: int = int(tr.car_total())
-	var from := []
+	# **직선 변위를 재면 안 된다.** 300프레임(5초)에 물리적 상한은 12 m/s × 5s = 60m 인데
+	# 옛 M1 은 평균 137m 를 보고했다 — 절반 이상이 재스폰 **순간이동**이었다.
+	# 그러면 속도를 0.01 로 낮춘 빌드도 통과한다(독립 감사가 산술로 증명했다).
+	# 프레임마다 이동을 누적하되 도약은 버리는 **경로장**으로 잰다.
+	# 평균이 아니라 **중앙값**을 본다 — 24대 중 스물이 굳어도 평균은 넘어간다.
+	var path := {}
+	var last := {}
 	for i in n0:
-		from.append(tr.car_pos(i))
+		last[int(tr.car_id(i))] = tr.car_pos(i)
 	var m3 := true
 	var m3_bad := 0
 	for f in TRAFFIC_FRAMES:
 		await get_tree().physics_frame
-		# --- M3: 매 프레임 규격 위에 있는가 ---
-		# 표본 시점 하나만 보면 "가끔 차선을 벗어난다" 를 놓친다.
 		for i in int(tr.car_total()):
-			if not on_spec_lane(tr.car_pos(i)):
+			var p: Vector3 = tr.car_pos(i)
+			var id: int = int(tr.car_id(i))
+			if last.has(id):
+				var step: float = (p - (last[id] as Vector3)).length()
+				if step <= JUMP_MAX:                     # 재스폰 도약은 주행이 아니다
+					path[id] = float(path.get(id, 0.0)) + step
+			last[id] = p
+			# --- M3: 매 프레임 규격 위에 있는가 ---
+			# 표본 시점 하나만 보면 "가끔 차선을 벗어난다" 를 놓친다.
+			if not on_spec_lane(p):
 				if m3_bad < 5:
-					print("JUDGE 9 M3 규격 밖: %s (프레임 %d)" % [str(tr.car_pos(i)), f])
+					print("JUDGE 9 M3 규격 밖: %s (프레임 %d)" % [str(p), f])
 				m3_bad += 1
 				m3 = false
-	var moved := 0.0
-	var cnt := mini(n0, int(tr.car_total()))
-	for i in cnt:
-		moved += (tr.car_pos(i) - (from[i] as Vector3)).length()
-	var avg: float = moved / maxf(float(cnt), 1.0)
-	var m1: bool = avg >= TRAFFIC_MIN_PATH
-	print("JUDGE 9 M1 평균 변위=%.1fm (>= %.0f) 차=%d %s"
-		% [avg, TRAFFIC_MIN_PATH, n0, pf(m1)])
+	var paths := []
+	for id in path:
+		paths.append(float(path[id]))
+	paths.sort()
+	var med: float = 0.0 if paths.is_empty() else float(paths[paths.size() / 2])
+	var m1: bool = med >= TRAFFIC_MIN_PATH
+	print("JUDGE 9 M1 경로장 중앙값=%.1fm (>= %.0f) 차=%d %s"
+		% [med, TRAFFIC_MIN_PATH, n0, pf(m1)])
 	print("JUDGE 9 M3 규격 이탈 표본=%d %s" % [m3_bad, pf(m3)])
 	var fp1 := traffic_fingerprint(tr)
 
@@ -2907,6 +2939,8 @@ func run_judge_9() -> void:
 		var d: Vector3 = p - (before[i] as Vector3)
 		if d.length() < 1e-4:
 			continue                                   # 앞차에 막혀 선 차는 건너뛴다
+		if d.length() > JUMP_MAX:
+			continue                                   # 재스폰 도약은 진행 방향이 아니다
 		var kx := spec_line_index(p.x)
 		var kz := spec_line_index(p.z)
 		var ok := false
@@ -2942,16 +2976,52 @@ func run_judge_9() -> void:
 	hole.move_to(Vector3(0.0, 0.0, spec_driving_u(0)))     # 인덱스 0 대로 위
 	_reg.flush()
 	var score0: int = int(hole.score)
-	for _f in 600:
+	# M7 도 여기서 함께 잰다 — **차가 먹히는 동안**의 상태다.
+	# M1·M3 는 구멍이 멀리 있는 조용한 실행이라 이 경로를 아예 지나지 않는다.
+	# 인계는 교통의 내부 배열을 건드리는 유일한 자리이고, 그 자리가 어긋나면
+	# 남은 차가 엉뚱한 원소를 움직인다(실측: 루프 도중 제거로 인덱스가 밀렸다).
+	var m7 := true
+	var m7_bad := 0
+	var m7_min := 9999
+	# 순간이동 세기. **인덱스가 아니라 개체 식별자로 따라간다** — 먹힌 차가 빠지고
+	# 새 차가 뒤에 붙으므로 인덱스는 프레임마다 다른 차를 가리킨다.
+	# 인계가 내부 배열을 어긋내면 남은 차가 **다른 차선의 좌표로 옮겨 앉는데**,
+	# 그 자리도 유효한 차선이라 규격 검사로는 보이지 않는다. 보이는 것은 그 도약이다.
+	var last_pos := {}
+	var jumps := 0
+	for _f in 900:
 		await get_tree().physics_frame
-		if int(hole.score) > score0:
-			break
+		var n: int = int(tr.car_total())
+		m7_min = mini(m7_min, n)
+		var seen := {}
+		for i in n:
+			var p: Vector3 = tr.car_pos(i)
+			var id: int = int(tr.car_id(i))
+			seen[id] = true
+			if last_pos.has(id) and (p - (last_pos[id] as Vector3)).length() > JUMP_MAX:
+				jumps += 1
+			last_pos[id] = p
+			if not on_spec_lane(p):
+				if m7_bad < 5:
+					print("JUDGE 9 M7 인계 중 규격 밖: %s" % str(p))
+				m7_bad += 1
+				m7 = false
+		for id in last_pos.keys():
+			if not seen.has(id):
+				last_pos.erase(id)
+	m7 = m7 and jumps <= JUMP_MAX_N
+	print("JUDGE 9 M7 순간이동=%d (<= %d)" % [jumps, JUMP_MAX_N])
 	var m5: bool = int(hole.score) > score0
+	# 총량이 유지되는가. 하나가 빠질 때마다 하나가 나야 한다 — 안 그러면 도로가
+	# 시간이 갈수록 비고, 그것은 판이 길어질수록 심해진다.
+	m7 = m7 and m7_min >= TRAFFIC_N
 	print("JUDGE 9 M5 주행차 흡입: 점수 %d -> %d %s" % [score0, hole.score, pf(m5)])
+	print("JUDGE 9 M7 인계 중 규격이탈=%d 최소 대수=%d(>= %d) %s"
+		% [m7_bad, m7_min, TRAFFIC_N, pf(m7)])
 
-	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s"
-		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6)])
-	var ok := m1 and m2 and m3 and m4 and m5 and m6
+	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s"
+		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7)])
+	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
