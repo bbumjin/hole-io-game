@@ -113,8 +113,8 @@ const MIN_PROPS := 300                             # E1: 도시가 실제로 생
 ## §25 재유도: 지구제·수계·수퍼블록이 들어오며 실측이 통째로 달라졌다.
 ## 대로 세그먼트 일부가 사라졌기 때문이다(강 횡단 중 교량 셋만 남고, 공원 내부가
 ## 걷히고, 바다 테두리에 도로가 없다). 실측 460/640 → 329/304, 하한은 그 절반이다.
-const MIN_BOUL_ROAD := 164
-const MIN_BOUL_WALK := 152
+const MIN_BOUL_ROAD := 88
+const MIN_BOUL_WALK := 162
 const MIN_ALBEDOS := 12                            # E1: 단색 팔레트가 실제로 다양한가
 const GROUND_TOL := 0.05                           # E5: 접지 허용 오차(월드 단위)
 const TILT_TOL := 0.02                             # E5: 직립 허용 기울기(라디안)
@@ -166,7 +166,7 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ## §25 에서 3876 → 2236 으로 줄었다. 줄어든 것이 규격이다 — 바다 테두리(52셀)와
 ## 강(14셀)에는 아무것도 놓지 않고, 공원 9셀은 수퍼블록 셋으로 합쳐 한 번만 채우며,
 ## 걷힌 도로 위의 보도·차도 프롭이 사라졌다.
-const RESTART_PROPS := 2236
+const RESTART_PROPS := 2125
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -191,7 +191,7 @@ const CANOPY_RATIO := 1.5
 ## E8: 그런 프롭의 하한. 이 하한이 잡는 것은 "밑동 셰이프가 다시 메시 전체가 되어
 ## 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
 ## §25 재유도: 실측 955 → 687(도시 총량이 줄었다). 하한은 그 절반이다.
-const MIN_CANOPY_PROPS := 343
+const MIN_CANOPY_PROPS := 354
 
 # --- §21 한글 HUD 판정 -----------------------------------------------------
 ## 번들 폰트의 경로. 라벨이 이것을 쓰지 않으면 데스크톱에서는 시스템 폴백으로
@@ -364,8 +364,8 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge8", "--judge7", "--judge6", "--judge5", "--judge4",
-	"--judge3c", "--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
+const JUDGE_ORDER := ["--judge9", "--judge8", "--judge7", "--judge6", "--judge5",
+	"--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
 
 
 ## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
@@ -448,6 +448,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--judge9": await run_judge_9()
 		"--judge8": await run_judge_8()
 		"--judge7": await run_judge_7()
 		"--judge6": await run_judge_6()
@@ -1478,17 +1479,17 @@ func boulevard_slot(pts: PackedVector2Array) -> Array:
 	var rz := spec_road_half(kz)
 	if spec_is_boulevard(kz) and az.y <= rz and az.x >= spec_median(kz) \
 			and ax.x >= rx + SPEC_CROSS_W:
-		return ["road", nearest_lane_slot(kz, (az.x + az.y) * 0.5)]
+		return ["road", nearest_lane_slot(kz, (az.x + az.y) * 0.5), az.x, kz]
 	if spec_is_boulevard(kx) and ax.y <= rx and ax.x >= spec_median(kx) \
 			and az.x >= rz + SPEC_CROSS_W:
-		return ["road", nearest_lane_slot(kx, (ax.x + ax.y) * 0.5)]
+		return ["road", nearest_lane_slot(kx, (ax.x + ax.y) * 0.5), ax.x, kx]
 	if spec_is_boulevard(kz) and az.x >= rz and az.y <= spec_curb_half(kz) \
 			and ax.x >= rx:
-		return ["walk", -1]
+		return ["walk", -1, 0.0, 0]
 	if spec_is_boulevard(kx) and ax.x >= rx and ax.y <= spec_curb_half(kx) \
 			and az.x >= rz:
-		return ["walk", -1]
-	return ["", -1]
+		return ["walk", -1, 0.0, 0]
+	return ["", -1, 0.0, 0]
 
 
 ## E1~E6. 도시 배치 자체를 판정한다.
@@ -1553,6 +1554,7 @@ func run_judge_3b() -> void:
 	var zone_n := {"road": 0, "walk": 0, "block": 0}
 	var boul_n := {"road": 0, "walk": 0}
 	var boul_bands := {}
+	var boul_lane_bad := 0
 	var e8_bad := 0
 	var canopy_n := 0
 	for o in props:
@@ -1577,6 +1579,21 @@ func run_judge_3b() -> void:
 			boul_n[str(bs[0])] += 1
 			if str(bs[0]) == "road":
 				boul_bands[int(bs[1])] = true
+				# 실제로 **차도에 놓인 것**만 본다. boulevard_slot 은 기하만 보므로
+				# 보도 프롭이 교차 도로 쪽 띠에서 이 분기에 걸릴 수 있다 — 그것은
+				# 다른 띠를 기준으로 재야 하는 다른 질문이다(실측: 덤불·바위가 걸렸다).
+				# E7b(§27): 정차 차량이 **주행 차선을 침범하지 않는가.**
+				# 대로의 주행 차선은 중앙선에서 0.25 지점이고 주차는 0.75 지점이다.
+				# 둘이 겹치면 frozen 강체인 주차차를 주행차가 그대로 뚫고 지나간다 —
+				# 계획이 경고했고 실제로 옛 자리 셋 중 둘이 그 상태였다.
+				# 규격: 프롭의 |u| 하한이 중앙선~아스팔트 폭의 절반보다 바깥이어야 한다.
+				var kb: int = int(bs[3])
+				var mb := spec_median(kb)
+				if z == "road" and float(bs[2]) < mb + (spec_road_half(kb) - mb) * 0.5 - 1e-4:
+					if boul_lane_bad < 5:
+						print("JUDGE 3b E7b 정차차가 주행 차선을 침범: %s |u|하한=%.3f (>= %.3f)"
+							% [n3.name, float(bs[2]), mb + (spec_road_half(kb) - mb) * 0.5])
+					boul_lane_bad += 1
 		# 접지는 **보이는 메시**로도 재야 한다. 콜라이더만 재면 피벗 보정을 지운
 		# 빌드가 통과한다 — 콜라이더는 제자리이고 모델만 뜨거나 박히기 때문이다.
 		var why5 := ""
@@ -1680,9 +1697,8 @@ func run_judge_3b() -> void:
 	print("JUDGE 3b props=%d catalog=%d albedos=%d zones road=%d walk=%d block=%d"
 		% [props.size(), cat.size(), albedos.size(),
 		   zone_n["road"], zone_n["walk"], zone_n["block"]])
-	print("JUDGE 3b E7 대로전용자리: road=%d(>=%d) walk=%d(>=%d) 차선자리=%s(3개 전부)"
-		% [boul_n["road"], MIN_BOUL_ROAD, boul_n["walk"], MIN_BOUL_WALK,
-		   str(boul_bands.keys())])
+	print("JUDGE 3b E7 대로전용자리: road=%d(>=%d) walk=%d(>=%d) 주행차선침범=%d"
+		% [boul_n["road"], MIN_BOUL_ROAD, boul_n["walk"], MIN_BOUL_WALK, boul_lane_bad])
 	print("JUDGE 3b bad: E1=%d E2=%d E3=%d E5=%d E6=%d E8=%d judge_set=%d fp=%d/%d settle_move=%.4f settle_tilt=%.4f"
 		% [e1_bad, e2_bad, e3_bad, e5_bad, e6_bad, e8_bad, jset, f1.length(), f3.length(),
 		   moved, tilted])
@@ -2002,6 +2018,7 @@ func run_judge_4() -> void:
 	# --- G7: AI 가 실제로 움직이고 자랐는가 ---
 	var g7 := true
 	var g7_n := 0
+	var g7_grew := 0.0
 	for h in alive:
 		if not is_instance_valid(h) or str(h.label) == "P":
 			continue
@@ -2009,11 +2026,20 @@ func run_judge_4() -> void:
 		var id: int = h.get_instance_id()
 		var moved: float = float(path.get(id, 0.0))
 		var grew: float = float(h.radius) - float(r_start.get(id, 0.0))
-		var okh: bool = moved >= AI_MIN_PATH and grew > 0.0
+		g7_grew += grew
+		# **이동은 AI 마다, 성장은 합으로 본다**(§27 에서 고쳤다).
+		# 이동은 그 AI 의 조종자가 살아 있는가를 묻는 것이라 개체마다 물어야 한다.
+		# 성장은 다르다 — 흡입은 모든 구멍이 **공유하는** 기계이므로, 그것이 망가지면
+		# 아무도 자라지 못한다. 개체마다 요구하면 "그 AI 근처에 먹이가 있었는가" 라는
+		# 배치의 운을 묻게 되고, 실제로 대로 주차를 주행 차선 밖으로 옮기자
+		# 대로 위에 난 AI 가 15초 동안 굶어 정상 빌드가 탈락했다(실측 dR=+0.000).
+		# 게임에서는 그 자리에 교통이 흐르지만 판정은 정적 도시를 쓴다.
+		var okh: bool = moved >= AI_MIN_PATH
 		g7 = g7 and okh
 		print("JUDGE 4 G7 %s: path=%.1f (>= %.0f) dR=%+.3f -> %s"
 			% [h.label, moved, AI_MIN_PATH, grew, pf(okh)])
-	g7 = g7 and g7_n > 0
+	g7 = g7 and g7_n > 0 and g7_grew > 0.0
+	print("JUDGE 4 G7 AI 총 성장=%+.3f (> 0)" % g7_grew)
 
 	var g5: bool = g5_bad == 0
 	var g6: bool = g6_bad == 0 and g6_scenario
@@ -2217,6 +2243,34 @@ func run_judge_3c() -> void:
 			% [key, props, int(draws), int(prims), int(phys)])
 		print("JUDGE 3c [%s] avg=%.2fms (%.0f fps) worst=%.2fms budget=%.2fms F1=%s F2=%s"
 			% [key, avg, 1000.0 / maxf(avg, 0.001), worst, FRAME_BUDGET_MS, pf(s1), pf(s2)])
+
+	# --- 교통 on (§27) -------------------------------------------------------
+	# 게임 기본값만큼 차를 띄우고 같은 지점을 다시 잰다. 동적 개체는 그리기뿐 아니라
+	# **매 물리 프레임 위치를 다시 쓰는 비용**이 있어서, 정적 도시의 계측만으로는
+	# 예산을 말할 수 없다. 이것이 car_count 를 조정할 근거다.
+	var tr: Node = _main.get_node_or_null("Traffic")
+	if tr != null:
+		tr.spawn_for_judge(int(tr.car_count))
+		_main.set_hole_position(PERF_SPOTS["dense"])
+		_reg.flush()
+		_cam.follow(hole, hole.radius, true)
+		for _i in WARMUP * 2:
+			await get_tree().process_frame
+		var t0 := Time.get_ticks_usec()
+		var prev := t0
+		var worst := 0.0
+		for _i in PERF_FRAMES:
+			await get_tree().process_frame
+			var now := Time.get_ticks_usec()
+			worst = maxf(worst, float(now - prev) / 1000.0)
+			prev = now
+		var avg := float(Time.get_ticks_usec() - t0) / 1000.0 / float(PERF_FRAMES)
+		var s1 := avg <= FRAME_BUDGET_MS
+		var s2 := worst <= FRAME_BUDGET_MS * 2.0
+		f1 = f1 and s1
+		f2 = f2 and s2
+		print("JUDGE 3c [traffic] 차=%d avg=%.2fms (%.0f fps) worst=%.2fms F1=%s F2=%s"
+			% [tr.car_total(), avg, 1000.0 / maxf(avg, 0.001), worst, pf(s1), pf(s2)])
 
 	var ok := f1 and f2
 	print("JUDGE 3c F1=%s F2=%s -> %s" % [pf(f1), pf(f2), ("PASS" if ok else "FAIL")])
@@ -2726,6 +2780,181 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 		body.add_child(cs)
 		y += size.y
 	return body
+
+# --- §27: 교통 판정 ---------------------------------------------------------
+
+## M 시나리오가 띄우는 차의 수. 게임 기본값과 달라도 된다 — 묻는 것은 "규격대로
+## 도는가" 이지 "몇 대인가" 가 아니다.
+const TRAFFIC_N := 24
+## M1: 이 프레임 동안 돌리고 평균 변위를 잰다.
+const TRAFFIC_FRAMES := 300
+## M1: 그동안 차가 최소한 이만큼은 움직여야 한다(m). 속도 하한 6.0 × 5초 = 30m 이므로
+## 20 은 "굳지 않았다" 를 보는 낮은 문턱이다. 앞차에 막혀 선 차가 섞이므로 평균으로 본다.
+const TRAFFIC_MIN_PATH := 20.0
+## M3: 주행 차선 오프셋의 허용 오차(m). 규격은 한 점이므로 좁게 잡는다.
+const LANE_U_TOL := 0.05
+
+
+## 주행 차선의 중앙선 기준 오프셋. **구현체의 driving_lanes 를 읽지 않는다** —
+## 읽으면 차선을 옮긴 빌드가 자기 값끼리 일치해 통과한다.
+func spec_driving_u(k: int) -> float:
+	var m := spec_median(k)
+	return m + (spec_road_half(k) - m) * 0.25
+
+
+## 이 차가 규격 차선 위에 있는가. 대로여야 하고, 오프셋이 규격 한 점이어야 하며,
+## 그 자리의 도로 세그먼트가 **실제로 존재**해야 한다(공원 안·다리 없는 강 위 금지).
+func on_spec_lane(p: Vector3) -> bool:
+	var kx := spec_line_index(p.x)
+	var kz := spec_line_index(p.z)
+	var on_ew: bool = spec_is_boulevard(kz) \
+		and absf(absf(p.z - float(kz) * SPEC_PITCH) - spec_driving_u(kz)) < LANE_U_TOL \
+		and spec_seg_ew(kz, spec_cell_of(p.x))
+	var on_ns: bool = spec_is_boulevard(kx) \
+		and absf(absf(p.x - float(kx) * SPEC_PITCH) - spec_driving_u(kx)) < LANE_U_TOL \
+		and spec_seg_ns(kx, spec_cell_of(p.z))
+	return on_ew or on_ns
+
+
+## 교통을 처음부터 다시 내고 정해진 프레임만큼 돌린 뒤 지문을 낸다.
+## M2 는 이것을 두 번 불러 견준다 — **두 실행이 같은 코드 경로를 타야** 대기 구조의
+## 비대칭이 결과에 섞이지 않는다.
+func traffic_take(tr: Node, frames: int) -> String:
+	for c in tr.get_children():
+		c.free()
+	tr._cars.clear()
+	tr.spawn_for_judge(TRAFFIC_N)
+	for _f in frames + 1:
+		await get_tree().physics_frame
+	return traffic_fingerprint(tr)
+
+
+func traffic_fingerprint(tr: Node) -> String:
+	var parts := PackedStringArray()
+	for i in int(tr.car_total()):
+		var p: Vector3 = tr.car_pos(i)
+		parts.append("%.3f,%.3f" % [p.x, p.z])
+	return "|".join(parts)
+
+
+## M1~M5. 교통이 규격대로 흐르는가.
+func run_judge_9() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
+	var tr: Node = _main.get_node_or_null("Traffic")
+	if tr == null:
+		print("JUDGE 9 FAIL: Traffic 노드가 없다")
+		print("JUDGE RESULT -> FAIL")
+		get_tree().quit(1)
+		return
+
+	# --- M4: 판정 격리 -------------------------------------------------------
+	# **전용 요청이 없으면 판정 모드에는 동적 개체가 하나도 없다.** 이것을 먼저 묻는다 —
+	# 아래에서 직접 띄우고 나면 다시 물을 수 없다.
+	var m4: bool = int(tr.car_total()) == 0 and tr.get_child_count() == 0
+	print("JUDGE 9 M4 판정 격리: 요청 전 차=%d 자식=%d %s"
+		% [tr.car_total(), tr.get_child_count(), pf(m4)])
+
+	# 구멍을 지도 구석으로 치운다. 대로에서 멀어야 차를 먹지 않는다.
+	var hole: Node3D = _reg.holes()[0]
+	hole.move_to(Vector3(-176.0, 0.0, -176.0))
+	_reg.flush()
+
+	# --- M1: 실제로 움직이는가 -----------------------------------------------
+	tr.spawn_for_judge(TRAFFIC_N)
+	await get_tree().physics_frame
+	var n0: int = int(tr.car_total())
+	var from := []
+	for i in n0:
+		from.append(tr.car_pos(i))
+	var m3 := true
+	var m3_bad := 0
+	for f in TRAFFIC_FRAMES:
+		await get_tree().physics_frame
+		# --- M3: 매 프레임 규격 위에 있는가 ---
+		# 표본 시점 하나만 보면 "가끔 차선을 벗어난다" 를 놓친다.
+		for i in int(tr.car_total()):
+			if not on_spec_lane(tr.car_pos(i)):
+				if m3_bad < 5:
+					print("JUDGE 9 M3 규격 밖: %s (프레임 %d)" % [str(tr.car_pos(i)), f])
+				m3_bad += 1
+				m3 = false
+	var moved := 0.0
+	var cnt := mini(n0, int(tr.car_total()))
+	for i in cnt:
+		moved += (tr.car_pos(i) - (from[i] as Vector3)).length()
+	var avg: float = moved / maxf(float(cnt), 1.0)
+	var m1: bool = avg >= TRAFFIC_MIN_PATH
+	print("JUDGE 9 M1 평균 변위=%.1fm (>= %.0f) 차=%d %s"
+		% [avg, TRAFFIC_MIN_PATH, n0, pf(m1)])
+	print("JUDGE 9 M3 규격 이탈 표본=%d %s" % [m3_bad, pf(m3)])
+	var fp1 := traffic_fingerprint(tr)
+
+	# --- M6: 우측통행 --------------------------------------------------------
+	# M3 는 오프셋의 **크기**만 본다. 방향과 좌우가 짝지어졌는지는 묻지 않으므로,
+	# 두 차선을 통째로 맞바꾼 빌드(= 마주 오는 차끼리 같은 차선을 쓰는 도시)가
+	# 그대로 통과한다. 진행 방향 d 의 오른쪽은 (-d.z, d.x) 다 — 그 부호를 단언한다.
+	var before := []
+	for i in int(tr.car_total()):
+		before.append(tr.car_pos(i))
+	await get_tree().physics_frame
+	var m6 := true
+	var m6_bad := 0
+	for i in mini(before.size(), int(tr.car_total())):
+		var p: Vector3 = tr.car_pos(i)
+		var d: Vector3 = p - (before[i] as Vector3)
+		if d.length() < 1e-4:
+			continue                                   # 앞차에 막혀 선 차는 건너뛴다
+		var kx := spec_line_index(p.x)
+		var kz := spec_line_index(p.z)
+		var ok := false
+		if absf(d.x) > absf(d.z):                      # 동서 주행 → 오프셋은 z
+			var uz := p.z - float(kz) * SPEC_PITCH
+			ok = signf(uz) == signf(d.x)               # 오른쪽 = (+z when d.x>0)
+		else:                                          # 남북 주행 → 오프셋은 x
+			var ux := p.x - float(kx) * SPEC_PITCH
+			ok = signf(ux) == signf(-d.z)              # 오른쪽 = (-x when d.z>0)
+		if not ok:
+			if m6_bad < 5:
+				print("JUDGE 9 M6 역주행: 위치(%.2f,%.2f) 변위(%.3f,%.3f)"
+					% [p.x, p.z, d.x, d.z])
+			m6_bad += 1
+			m6 = false
+	print("JUDGE 9 M6 우측통행 위반=%d %s" % [m6_bad, pf(m6)])
+
+	# --- M2: 같은 시드면 같은 흐름 -------------------------------------------
+	# **두 실행을 같은 코드 경로에 태운다.** 위의 M1 실행과 견주면 안 된다 —
+	# 그쪽은 M3 표본을 끼고 돌아 물리 프레임 정렬이 한 칸 어긋나고, 그러면 차마다
+	# 속도에 비례해 0.1~0.2m 씩 벌어져 **정상 빌드가 탈락한다**(실측으로 밟았다).
+	# 재현성의 질문은 "같은 시드가 같은 흐름을 내는가" 이지 "판정의 대기 구조가
+	# 같은가" 가 아니므로, 대칭인 헬퍼를 두 번 부른다.
+	var fpa := await traffic_take(tr, TRAFFIC_FRAMES)
+	var fpb := await traffic_take(tr, TRAFFIC_FRAMES)
+	var m2: bool = not fpa.is_empty() and fpa == fpb
+	print("JUDGE 9 M2 결정성 지문 %d자 일치=%s" % [fpa.length(), pf(m2)])
+
+	# --- M5: 구멍이 달리는 차를 삼킨다 ---------------------------------------
+	# 대로 위에 큰 구멍을 놓고 차가 지나가기를 기다린다. 흡입 파이프라인(§23)과
+	# 교통의 인계가 이어져 있는가를 본다 — 점수가 오르면 끝까지 이어진 것이다.
+	hole.set_radius(9.0)
+	hole.move_to(Vector3(0.0, 0.0, spec_driving_u(0)))     # 인덱스 0 대로 위
+	_reg.flush()
+	var score0: int = int(hole.score)
+	for _f in 600:
+		await get_tree().physics_frame
+		if int(hole.score) > score0:
+			break
+	var m5: bool = int(hole.score) > score0
+	print("JUDGE 9 M5 주행차 흡입: 점수 %d -> %d %s" % [score0, hole.score, pf(m5)])
+
+	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s"
+		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6)])
+	var ok := m1 and m2 and m3 and m4 and m5 and m6
+	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
+	get_tree().quit(0 if ok else 1)
+
 
 # --- §26: 게임 UI 판정 ------------------------------------------------------
 

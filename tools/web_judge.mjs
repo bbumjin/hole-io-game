@@ -37,7 +37,7 @@ const EXPECT = [...new Set(
 // 판정 이름은 screenshot.gd 의 화이트리스트와 같은 집합이어야 한다. 여기서 한 번 더
 // 거르는 것은 오타로 "영원히 오지 않는 판정" 을 기다리는 사고를 막기 위해서다.
 const KNOWN = ['--judge', '--judge1b', '--judge2', '--judge3', '--judge3b',
-	'--judge3c', '--judge4', '--judge5', '--judge6', '--judge7', '--judge8'];
+	'--judge3c', '--judge4', '--judge5', '--judge6', '--judge7', '--judge8', '--judge9'];
 for (const f of EXPECT) {
 	if (!KNOWN.includes(f)) {
 		console.error(`[web_judge] 모르는 판정 이름: ${f}`);

@@ -116,6 +116,12 @@ func _ready() -> void:
 	cam.follow(hole, hole.radius, true)
 	spawn_judge_set()
 	time_left = round_seconds
+	# 교통은 여기서 켠다(§27). Traffic._ready 에서 켜면 형제 순서에 기대게 되고,
+	# Judge 가 judging 을 세우기 전에 돌아 **판정 모드에서도 차가 난다**.
+	# Main._ready 는 모든 자식보다 늦게 도는 것이 보장된다.
+	var tr := get_node_or_null("Traffic")
+	if tr != null and not judging:
+		tr.boot()
 	# 게임은 시작 화면에서 열리고, 판정은 곧바로 플레이 상태에서 시작한다.
 	# Judge._ready 가 Main._ready 보다 먼저 돌아 judging 을 세워 두므로 여기서 읽을 수 있다.
 	state = State.HOME if not judging else State.PLAYING

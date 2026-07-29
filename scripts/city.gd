@@ -268,14 +268,35 @@ static func median_at(k: int) -> float:
 ## min_ext 를 걸어 큰 차 전용으로 둔다(plan_block 의 min_ext 3.5 와 같은 근거·같은 도구).
 ## min_ext 는 긴 축과 비교되므로 2.5 는 Ambulance(3.00)·Bus(4.00)·SchoolBus(4.24)만 연다.
 ## 가운데가 비면 안쪽 2.4125 와 바깥 5.1375 가 둘 다 들어간다(간격 2.725).
+## §27 에서 **주차와 주행을 갈랐다.** 대로에서 옛 자리 셋 중 안쪽(±2.4125)과
+## 가운데(±3.775)는 주행 차선과 겹친다 — 정차 차량은 frozen 강체라 충돌 해소가 없고,
+## 주행차가 그것을 그대로 뚫고 지나간다. 바깥 자리 하나만 남긴다(|u| ∈ [3.775, 6.5]).
+##
+## 일반 도로는 그대로 둔다. 폭 8m 에 주행과 노상 주차는 공존할 수 없고
+## (주차차가 |u| ∈ [0, 4] 를 다 쓴다), 그렇다고 주차를 걷어내면 도시의 차가
+## 대부분 사라진다 — **교통은 대로에만 흐른다**(driving_lanes 참조).
 static func lane_slots(k: int) -> Array:
 	var m := median_at(k)
 	var w := road_half_at(k) - m
 	if not is_boulevard(k):
 		return [[-(m + w * 0.5), 0.0], [m + w * 0.5, 0.0]]
-	return [[-(m + w * 0.5), 2.5], [m + w * 0.5, 2.5],
-		[-(m + w * 0.25), 0.0], [m + w * 0.25, 0.0],
-		[-(m + w * 0.75), 0.0], [m + w * 0.75, 0.0]]
+	return [[-(m + w * 0.75), 0.0], [m + w * 0.75, 0.0]]
+
+
+## 주행 차선 [중앙선에서의 오프셋, 진행 방향]. 대로에만 있다.
+##
+## 우측통행이다. 진행 방향 d 의 **오른쪽**은 (-d.z, d.x) 이므로
+##   동서 도로(x 축 주행): +x 로 가면 오른쪽이 +z → u = +안쪽
+##   남북 도로(z 축 주행): +z 로 가면 오른쪽이 -x → u = -안쪽
+## 축마다 부호가 뒤집히는 것이 이 함수가 축을 인자로 받는 이유다.
+static func driving_lanes(k: int, axis: String) -> Array:
+	if not is_boulevard(k):
+		return []
+	var m := median_at(k)
+	var inner := m + (road_half_at(k) - m) * 0.25
+	if axis == "x":
+		return [[inner, 1.0], [-inner, -1.0]]
+	return [[-inner, 1.0], [inner, -1.0]]
 
 
 ## 도로 축 방향의 정차 자리. 교차 도로가 넓어지면 교차로·횡단보도도 넓어지므로
