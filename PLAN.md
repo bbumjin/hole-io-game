@@ -1,4 +1,4 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 (rev.24)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI (rev.25)
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
 >
@@ -275,7 +275,7 @@ rev.8까지 "Downtown City MegaKit(glTF) 단독"으로 적어 두었으나, **3�
 ### `scenes/main.tscn` (전문 — 실행 검증본)
 
 ```
-[gd_scene load_steps=13 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" path="res://scripts/main.gd" id="1"]
 [ext_resource type="Shader" path="res://shaders/ground_hole.gdshader" id="2"]
@@ -286,6 +286,7 @@ rev.8까지 "Downtown City MegaKit(glTF) 단독"으로 적어 두었으나, **3�
 [ext_resource type="PackedScene" path="res://scenes/swallowable_big.tscn" id="7"]
 [ext_resource type="Script" path="res://scripts/city.gd" id="8"]
 [ext_resource type="FontFile" uid="uid://b3x3lllwaes5u" path="res://assets/fonts/hud_kr.ttf" id="9"]
+[ext_resource type="Script" path="res://scripts/ui.gd" id="10"]
 
 [sub_resource type="Environment" id="Env_1"]
 background_mode = 1
@@ -342,6 +343,9 @@ script = ExtResource("8")
 
 [node name="Judge" type="Node" parent="."]
 script = ExtResource("4")
+
+[node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("10")
 
 [node name="HUD" type="CanvasLayer" parent="."]
 
@@ -1324,6 +1328,15 @@ var arena := true
 
 var ai_holes: Array[Node3D] = []
 
+## 포인터 입력 상태(§26). 터치는 손가락 하나만 조종에 쓴다 — 둘째 손가락이
+## 방향을 빼앗으면 조작이 튄다.
+const TOUCH_DEAD_PX := 18.0
+var _touch_id := -1
+var _touch_start := Vector2.ZERO
+var _touch_cur := Vector2.ZERO
+var _mouse_held := false
+
+@onready var ui: CanvasLayer = get_node_or_null("UI")
 @onready var hud_root: CanvasLayer = $HUD
 @onready var hud: Label = $HUD/Label
 @onready var hud_timer: Label = $HUD/Timer
@@ -1331,7 +1344,10 @@ var ai_holes: Array[Node3D] = []
 @onready var hud_over: Label = $HUD/Over
 
 # --- 4b: 게임 루프 ---------------------------------------------------------
-enum State { PLAYING, OVER }
+## §26 에서 HOME 이 앞에 붙었다. **판정 모드는 이 상태로 들어가지 않는다** —
+## 1a~4b 판정 스물아홉 종이 전부 "부팅 즉시 플레이 상태" 를 전제하므로,
+## 그 앞에 화면 하나를 끼워 넣으면 통째로 깨진다.
+enum State { HOME, PLAYING, OVER }
 ## 한 판의 길이(초). 판정기가 짧게 줄여 종료까지 돌린다.
 @export var round_seconds := 120.0
 var state := State.PLAYING
@@ -1397,7 +1413,19 @@ func _ready() -> void:
 	cam.follow(hole, hole.radius, true)
 	spawn_judge_set()
 	time_left = round_seconds
+	# 게임은 시작 화면에서 열리고, 판정은 곧바로 플레이 상태에서 시작한다.
+	# Judge._ready 가 Main._ready 보다 먼저 돌아 judging 을 세워 두므로 여기서 읽을 수 있다.
+	state = State.HOME if not judging else State.PLAYING
+	if state == State.HOME:
+		set_ai(false)
 	update_hud()
+
+
+## 시작 화면에서 한 판을 연다. UI 버튼이 부른다.
+func begin_round() -> void:
+	state = State.PLAYING
+	time_left = round_seconds
+	set_ai(true)
 
 
 ## 판정 대상 8개를 규격대로 세운다. **판정 모드가 아니면 아무것도 만들지 않는다** —
@@ -1568,7 +1596,7 @@ func set_ai(on: bool) -> void:
 ## 구멍끼리의 포식. 큰 구멍이 작은 구멍을 온전히 덮으면 흡수한다.
 ## 여기서 도는 이유: 레지스트리는 uniform 버퍼만 책임지고, 승패는 아레나의 일이다.
 func _physics_process(_dt: float) -> void:
-	if judging or state == State.OVER:
+	if judging or state != State.PLAYING:
 		return
 	# 판이 끝난 뒤에도 돌면 구멍끼리 계속 잡아먹어 "끝났다" 가 상태로 성립하지 않는다
 	# (실측: T3 가 종료 후 120프레임 동안 레지스트리 변동을 잡았다).
@@ -1601,6 +1629,8 @@ func resolve_bites() -> int:
 		if eaten == null:
 			return n
 		eater.bite(eaten)
+		if ui != null:
+			ui.kill_feed(str(eater.label), str(eaten.label))
 		registry.unregister(eaten)
 		ai_holes.erase(eaten)
 		var was_player: bool = eaten == hole
@@ -1612,9 +1642,17 @@ func resolve_bites() -> int:
 	return n
 
 
-## InputMap 을 쓰지 않는다 — project.godot 에 InputEventKey 를 손으로 직렬화하는 것은
-## 오류가 잦다. 1단계 한정이며 2단계에서 InputMap 으로 정식화한다.
-func move_hole(dt: float) -> void:
+## 입력을 해석하는 자리는 **여기 하나**다(§26). 키보드·마우스·터치 셋이 들어오지만
+## 밖으로 나가는 것은 방향 벡터 하나이고, move_hole 은 그 벡터만 안다.
+##
+## InputMap 으로 정식화하지 않았다. §14 가 미룬 부채이지만, 그 값어치는 **키 재배치**인데
+## 아직 아무도 그것을 필요로 하지 않고, project.godot 에 InputEventKey 를 손으로
+## 직렬화하는 것은 이 프로젝트가 반복해서 밟은 함정이다(V1~V3b). 대신 "입력을 읽는
+## 자리가 하나" 라는 실질을 여기서 얻는다 — 재배치가 필요해지면 이 함수만 바꾼다.
+##
+## 우선순위는 키보드 → 터치 → 마우스다. 셋이 동시에 들어오는 상황은 없지만,
+## 순서를 고정해야 입력원이 바뀌는 순간에 방향이 튀지 않는다.
+func input_dir() -> Vector3:
 	var v := Vector3.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
 		v.z -= 1.0
@@ -1624,9 +1662,54 @@ func move_hole(dt: float) -> void:
 		v.x -= 1.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 		v.x += 1.0
+	if v != Vector3.ZERO:
+		return v.normalized()
+
+	# 터치: 누른 자리를 원점으로 삼는 **플로팅 조이스틱**. 화면 어디를 눌러도 된다 —
+	# 고정 조이스틱은 세로 화면에서 엄지가 닿지 않는 자리에 놓이기 쉽다.
+	if _touch_id >= 0:
+		var d := _touch_cur - _touch_start
+		if d.length() >= TOUCH_DEAD_PX:
+			return screen_to_world(d)
+
+	# 마우스: 커서 쪽으로 간다. 데스크톱에서는 이쪽이 조이스틱보다 자연스럽다.
+	if _mouse_held and is_instance_valid(hole) and not cam.is_position_behind(hole.global_position):
+		var d2 := get_viewport().get_mouse_position() - cam.unproject_position(hole.global_position)
+		if d2.length() >= TOUCH_DEAD_PX:
+			return screen_to_world(d2)
+	return Vector3.ZERO
+
+
+## 화면 벡터 → 월드 XZ 방향. 카메라에 요(yaw)가 없고 구멍 바로 뒤 위에서 내려다보므로
+## 화면 +x 가 월드 +x, 화면 +y(아래)가 월드 +z 다. 카메라 리그가 바뀌면 여기도 바뀐다.
+func screen_to_world(d: Vector2) -> Vector3:
+	return Vector3(d.x, 0.0, d.y).normalized()
+
+
+func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventScreenTouch:
+		var t := e as InputEventScreenTouch
+		if t.pressed and _touch_id < 0:
+			_touch_id = t.index
+			_touch_start = t.position
+			_touch_cur = t.position
+		elif not t.pressed and t.index == _touch_id:
+			_touch_id = -1
+	elif e is InputEventScreenDrag:
+		var g := e as InputEventScreenDrag
+		if g.index == _touch_id:
+			_touch_cur = g.position
+	elif e is InputEventMouseButton:
+		var m := e as InputEventMouseButton
+		if m.button_index == MOUSE_BUTTON_LEFT:
+			_mouse_held = m.pressed
+
+
+func move_hole(dt: float) -> void:
+	var v := input_dir()
 	if v == Vector3.ZERO:
 		return
-	set_hole_position(hole.global_position + v.normalized() * MOVE_SPEED * dt)
+	set_hole_position(hole.global_position + v * MOVE_SPEED * dt)
 
 
 ## 구멍이 지면 밖으로 나가면 우물이 허공에 뜨고 판정 전제도 깨진다.
@@ -1929,6 +2012,13 @@ const ROUND_TEST_SEC := 4.0                        # T1: 판정용 짧은 라운
 const ROUND_TEST_FRAMES := 600                     # T1: 그 라운드를 덮고도 남는 프레임 수
 const TIMER_TOL := 0.25                            # T1: 판정기 시계와의 허용 오차(초)
 const FREEZE_FRAMES := 120                         # T3: 종료 후 상태 고정을 확인하는 프레임
+## 게임 상태의 규격 값(§26). **구현체의 enum 을 읽지 않는다** — 읽으면 상태를 재배치한
+## 빌드가 자기 값끼리 일치해 통과한다. 판정기가 정수를 손으로 박아 두었던 자리를
+## 이름으로 바꾼 것이기도 하다: HOME 이 앞에 붙으며 PLAYING·OVER 가 한 칸씩 밀렸고,
+## 그 순간 T1·T5·T6 이 조용히 엉뚱한 상태를 보고 있었다(실측으로 셋 다 탈락했다).
+const SPEC_STATE_HOME := 0
+const SPEC_STATE_PLAYING := 1
+const SPEC_STATE_OVER := 2
 const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 수 (플레이어 + AI 5)
 ## T5: 재시작 후 도시 프롭 수 (시드 고정). §22 에서 3804 → 3876 이었고,
 ## §25 에서 3876 → 2236 으로 줄었다. 줄어든 것이 규격이다 — 바다 테두리(52셀)와
@@ -1969,7 +2059,11 @@ const HUD_FONT_PATH := "res://assets/fonts/hud_kr.ttf"
 ## HUD 문구 규격의 한글 음절 전부. 구현체의 문자열만 검사하면 문구를 통째로 영문으로
 ## 되돌린 빌드가 "쓰는 글자가 전부 있다" 로 통과한다 — 판정기가 따로 들어야 한다.
 ## 폰트 서브셋(assets/fonts/README.md)과 같은 집합이어야 한다.
-const SPEC_HUD_CHARS := "점수크기삼킴먹힘순위이름시간종료혔다승리패배나키로작"
+## §26 에서 시작·결과 화면과 조작 안내가 붙어 16자가 늘었다(26 → 42).
+## `tools/font_subset.mjs` 의 집합과 같아야 한다 — 판정기는 그 파일을 읽지 않고
+## 사본을 든다. 어긋나면 T8 이 글리프 없음으로 잡는다.
+const SPEC_HUD_CHARS := "점수크기삼킴먹힘순위이름시간종료혔다승리패배나키로작" \
+	+ "도를켜라동화살표드래그레벨하홈으"
 ## T8③: 한글 26자를 그린 라벨이 남겨야 할 최소 잉크 픽셀. 실측 2568 의 1/4 이다.
 const HUD_INK_MIN := 640
 ## T8②-b: HUD 네 라벨이 그 순간 실제로 그리고 있어야 할 서로 다른 한글 음절 수.
@@ -2127,8 +2221,8 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge7", "--judge6", "--judge5", "--judge4", "--judge3c",
-	"--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
+const JUDGE_ORDER := ["--judge8", "--judge7", "--judge6", "--judge5", "--judge4",
+	"--judge3c", "--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
 
 
 ## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
@@ -2211,6 +2305,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--judge8": await run_judge_8()
 		"--judge7": await run_judge_7()
 		"--judge6": await run_judge_6()
 		"--judge5": await run_judge_5()
@@ -3491,7 +3586,7 @@ func run_judge_5() -> void:
 		await get_tree().process_frame
 		var elapsed := float(Time.get_ticks_msec() - t0) / 1000.0
 		var spent: float = base - float(_main.time_left)
-		if int(_main.state) == 0:
+		if int(_main.state) == SPEC_STATE_PLAYING:
 			t1_drift = maxf(t1_drift, absf(spent - elapsed))
 		elif over_at < 0.0:
 			over_at = elapsed
@@ -3563,7 +3658,7 @@ func run_judge_5() -> void:
 	var jset: int = get_tree().get_nodes_in_group("judge_set").size()
 	var t5: bool = hs.size() == RESTART_HOLES and radii_ok and score_ok \
 		and props == RESTART_PROPS and jset == 8 \
-		and int(_main.state) == 0 \
+		and int(_main.state) == SPEC_STATE_PLAYING \
 		and absf(float(_main.time_left) - ROUND_TEST_SEC) < 0.2 \
 		and fp0 == city.fingerprint(city.plan(city.city_seed))
 	print("JUDGE 5 T5: 구멍=%d(기대 %d) R=5 %s 점수0 %s 프롭=%d(기대 %d) 판정대상=%d state=%d 남은시간=%.2f"
@@ -3633,9 +3728,9 @@ func judge_player_eaten() -> Dictionary:
 	_main.judging = false
 	for _i in BITE_FRAMES:
 		await get_tree().physics_frame
-		if int(_main.state) == 1:
+		if int(_main.state) == SPEC_STATE_OVER:
 			break
-	return { "over": int(_main.state) == 1, "reason": str(_main.over_reason),
+	return { "over": int(_main.state) == SPEC_STATE_OVER, "reason": str(_main.over_reason),
 		"state": int(_main.state) }
 
 
@@ -4474,6 +4569,142 @@ func fall_fixture(name: String, boxes: Array) -> RigidBody3D:
 		y += size.y
 	return body
 
+# --- §26: 게임 UI 판정 ------------------------------------------------------
+
+## U1 이 각 상태에서 보여야 한다고 단언하는 것. 노드 이름이 아니라 **역할**로 적는다 —
+## 판정기가 ui.gd 의 변수 이름을 읽으면 이름만 바꾼 빌드가 통과한다.
+## 값은 [시작화면, 결과버튼, 인게임요소] 의 기대 가시성이다.
+const SPEC_UI_VIS := {
+	SPEC_STATE_HOME: [true, false, false],
+	SPEC_STATE_PLAYING: [false, false, true],
+	SPEC_STATE_OVER: [false, true, false],
+}
+## U2: 화면 벡터 → 월드 방향 규격. 카메라에 요(yaw)가 없고 구멍 바로 뒤 위에서
+## 내려다보므로 화면 +x 가 월드 +x, 화면 아래(+y)가 월드 +z 다.
+## **구현체의 screen_to_world 를 부르지 않는다** — 부르면 축을 뒤집은 빌드가
+## 자기 값끼리 일치해 통과한다. 여기가 판정기의 사본이다.
+const SPEC_DRAG := [
+	["위로", Vector2(0.0, -120.0), Vector3(0.0, 0.0, -1.0)],
+	["아래로", Vector2(0.0, 120.0), Vector3(0.0, 0.0, 1.0)],
+	["왼쪽", Vector2(-120.0, 0.0), Vector3(-1.0, 0.0, 0.0)],
+	["오른쪽", Vector2(120.0, 0.0), Vector3(1.0, 0.0, 0.0)],
+	["대각", Vector2(90.0, 90.0), Vector3(0.7071, 0.0, 0.7071)],
+]
+## U2 의 허용 각오차(라디안). 정규화한 방향끼리 비교하므로 넉넉할 이유가 없다.
+const DRAG_TOL := 0.02
+
+
+## 이 노드가 그리는 것 중 보이는 것이 하나라도 있는가.
+func any_visible(node: Node, names: Array) -> bool:
+	for c in node.get_children():
+		if not (c is CanvasItem):
+			continue
+		if names.has(str(c.name)) and (c as CanvasItem).visible:
+			return true
+	return false
+
+
+## U1·U2. 게임 UI 가 규격대로 도는가.
+##
+## 판정 모드는 UI 를 통째로 끄고 곧장 플레이 상태로 들어간다(그래야 스물아홉 종이
+## 성립한다). 그래서 이 판정만 **`judging` 을 스스로 내리고** UI 를 켠 뒤 상태를
+## 손으로 몰아 본다 — 4a 의 자유 실행이 같은 일을 하는 것과 같은 방식이다.
+func run_judge_8() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
+	var ui: CanvasLayer = _main.get_node_or_null("UI")
+	if ui == null:
+		print("JUDGE 8 FAIL: UI 노드가 없다")
+		print("JUDGE RESULT -> FAIL")
+		get_tree().quit(1)
+		return
+
+	# --- U2: 입력 해석 --------------------------------------------------------
+	# 먼저 한다. 렌더가 필요 없고, 상태를 흔들기 전에 물어야 깨끗하다.
+	# **구멍을 실제로 움직여 본다** — input_dir 만 부르면 move_hole 이 그 벡터를
+	# 엉뚱하게 쓰는 회귀를 놓친다.
+	var hole: Node3D = _reg.holes()[0]
+	var u2 := true
+	for d in SPEC_DRAG:
+		var scr: Vector2 = d[1]
+		var want: Vector3 = (d[2] as Vector3).normalized()
+		hole.move_to(Vector3(-16.0, 0.0, -16.0))       # 도심 한복판, 물·경계에서 멀다
+		var from := hole.global_position
+		# 터치 한 번을 손으로 만들어 넣는다. 눌린 자리를 원점으로 삼는 규격이므로
+		# 시작점과 끝점 둘 다 필요하다.
+		var t0 := InputEventScreenTouch.new()
+		t0.index = 0
+		t0.pressed = true
+		t0.position = Vector2(400.0, 400.0)
+		_main._unhandled_input(t0)
+		var dg := InputEventScreenDrag.new()
+		dg.index = 0
+		dg.position = Vector2(400.0, 400.0) + scr
+		_main._unhandled_input(dg)
+		_main.move_hole(0.1)
+		var moved := hole.global_position - from
+		var t1 := InputEventScreenTouch.new()
+		t1.index = 0
+		t1.pressed = false
+		t1.position = dg.position
+		_main._unhandled_input(t1)
+		var ang := INF
+		if moved.length() > 1e-4:
+			ang = moved.normalized().angle_to(want)
+		var ok: bool = ang <= DRAG_TOL
+		u2 = u2 and ok
+		print("JUDGE 8 U2 %s 화면(%.0f,%.0f) 이동(%.3f,%.3f) 기대(%.3f,%.3f) 각오차=%.4f %s"
+			% [d[0], scr.x, scr.y, moved.x, moved.z, want.x, want.z, ang, pf(ok)])
+	# 손을 뗀 뒤에는 움직이지 않아야 한다 — 안 그러면 구멍이 혼자 흘러간다.
+	hole.move_to(Vector3(-16.0, 0.0, -16.0))
+	var idle_from := hole.global_position
+	_main.move_hole(0.1)
+	var idle_ok: bool = hole.global_position.distance_to(idle_from) < 1e-4
+	u2 = u2 and idle_ok
+	print("JUDGE 8 U2 손뗌 후 정지 %s" % pf(idle_ok))
+
+	# --- U1: 상태 전이와 가시성 ----------------------------------------------
+	# UI 를 켜고 상태를 손으로 몬다. 각 상태에서 보여야 할 것과 보이면 안 되는 것을
+	# **역할별로** 단언한다.
+	_main.judging = false
+	ui.set_process(true)
+	var start_names := ["_title", "_sub", "_hint", "_start_btn"]
+	var over_names := ["_again_btn", "_home_btn"]
+	var play_names := ["_level", "_bar"]
+	_main.state = SPEC_STATE_HOME
+	var u1 := true
+	for st in [SPEC_STATE_HOME, SPEC_STATE_PLAYING, SPEC_STATE_OVER]:
+		_main.state = st
+		if st == SPEC_STATE_PLAYING:
+			_main.begin_round()
+		for _i in 3:
+			await get_tree().process_frame
+		var want: Array = SPEC_UI_VIS[st]
+		var got := [any_visible(ui, start_names), any_visible(ui, over_names),
+			any_visible(ui, play_names)]
+		var ok: bool = got[0] == want[0] and got[1] == want[1] and got[2] == want[2]
+		u1 = u1 and ok
+		print("JUDGE 8 U1 상태=%d 시작화면=%s/%s 결과버튼=%s/%s 인게임=%s/%s %s"
+			% [st, pf(got[0]), pf(want[0]), pf(got[1]), pf(want[1]),
+			   pf(got[2]), pf(want[2]), pf(ok)])
+
+	# 재시작이 플레이 상태로 되돌리는가(결과 화면의 "다시 하기" 가 하는 일).
+	_main.restart()
+	for _i in 3:
+		await get_tree().process_frame
+	var back_ok: bool = int(_main.state) == SPEC_STATE_PLAYING \
+		and not any_visible(ui, over_names) and any_visible(ui, play_names)
+	u1 = u1 and back_ok
+	print("JUDGE 8 U1 재시작 후 state=%d 인게임복귀 %s" % [_main.state, pf(back_ok)])
+
+	print("JUDGE 8 U1=%s U2=%s" % [pf(u1), pf(u2)])
+	var ok2 := u1 and u2
+	print("JUDGE RESULT -> %s" % ("PASS" if ok2 else "FAIL"))
+	get_tree().quit(0 if ok2 else 1)
+
+
 # --- §25: 지구제·수계 판정 --------------------------------------------------
 
 ## 존 대표 셀. 좌표는 판정기의 사본에서 고른 것이고 구현체를 읽지 않는다.
@@ -4758,19 +4989,27 @@ func judge_hud_font() -> bool:
 		"Label": _main.hud, "Timer": _main.hud_timer,
 		"Board": _main.hud_board, "Over": _main.hud_over,
 	}
+	# §26: 시작·결과 화면의 라벨·버튼도 같은 검사를 받는다. 이것들은 판정 모드에서
+	# 보이지 않지만 **문자열은 이미 들어 있으므로** 글리프 검사에는 아무 지장이 없다 —
+	# 오히려 이쪽이 중요하다. 화면에 잠깐만 뜨는 문구는 육안으로 놓치기 쉽다.
+	var uin := _main.get_node_or_null("UI")
+	if uin != null:
+		for c in uin.get_children():
+			if (c is Label or c is Button) and not str(c.text).is_empty():
+				labels["UI/" + str(c.name)] = c
 	# ① 폰트 출처
 	var src_ok := true
 	for k in labels:
-		var f: Font = (labels[k] as Label).get_theme_font("font")
+		var f: Font = (labels[k] as Control).get_theme_font("font")
 		var p := "" if f == null else f.resource_path
 		if p != HUD_FONT_PATH:
 			src_ok = false
 			print("JUDGE 5 T8 %s 의 폰트가 번들본이 아니다: '%s'" % [k, p])
 	# ② 글리프 커버리지
-	var font: Font = (labels["Label"] as Label).get_theme_font("font")
+	var font: Font = (labels["Label"] as Control).get_theme_font("font")
 	var shown := ""
 	for k in labels:
-		shown += str((labels[k] as Label).text)
+		shown += str((labels[k] as Control).text)
 	var need := SPEC_HUD_CHARS + shown
 	# ②-b HUD 가 실제로 한글을 그리고 있는가. ①~③ 은 폰트만 보므로, 문구를 통째로
 	# 영문으로 되돌린 빌드(= §21 이전 상태)가 전부 통과한다 — 그것도 회귀다.
@@ -4976,6 +5215,7 @@ C:\vibecoding\holeio\
     camera_rig.gd       (§4-E 전문, 1b)
     hole_ai.gd          (§15 전문, 4a — 경쟁 구멍 조종)
     city.gd             (§13 전문, 3b — 절차적 도시 배치)
+    ui.gd               (§26 전문, 게임 UI — 시작·결과 화면, 코드 생성)
   shaders/
     ground_hole.gdshader (§4-A 전문)
   tools/
@@ -7266,3 +7506,337 @@ G5(4a의 "지면 밖으로 나간 구멍")도 함께 넓혔다 — 이제 **물 
 - **judge7은 존 지도의 어긋남을 표본 다섯 점 밖에서 스스로 잡지 못한다.** 지도를 한쪽만 고치면 3b의 E2(구역 이탈)와 5의 T5(프롭 수 정확 일치)가 잡는다 — 게이트 전체로는 막히지만 judge7 단독으로는 아니다.
 - **`zone_of`가 셀을 실측 발자국 중심에서 뽑는다.** 구현체는 슬롯 중심 `pos`로 뽑는데 콜라이더에는 XZ 오프셋이 있어, 셀 경계 근처에서 둘이 갈릴 수 있다(지금은 안 갈린다 — E2 bad=0). §25가 존 파생을 셀 인덱스에 얹으면서 새로 생긴 민감도다.
 - **존별 밀도·스케일 배수는 체감으로 조정할 값이다.** 유저가 아직 길게 플레이하지 않았다.
+
+---
+
+## §26. 게임 UI와 손가락 — 시작·결과 화면, 포인터 조작 (구현·검증 완료, rev.25)
+
+유저 지적의 셋째는 "게임 UI 필요" 였다. 그런데 실제로 더 급한 결함이 그 안에 있었다: **입력이 키보드뿐인데 배포처가 웹이다.** 휴대폰으로 열면 구멍이 한 칸도 움직이지 않는다. 배포된 게임의 절반이 죽어 있었던 셈이고, 그래서 PLAN2는 UI(C)를 교통(B)보다 앞에 두었다.
+
+### 손가락과 커서를 하나의 방향 벡터로
+
+입력을 해석하는 자리를 `input_dir()` 하나로 모았다. 키보드·터치·마우스 셋이 들어오고 나가는 것은 방향 벡터 하나다 — `move_hole`은 그 벡터만 안다.
+
+- **터치**: 누른 자리를 원점으로 삼는 **플로팅 조이스틱**. 화면 어디를 눌러도 된다. 고정 조이스틱은 세로 화면에서 엄지가 닿지 않는 자리에 놓이기 쉽다.
+- **마우스**: 커서 쪽으로 간다. 데스크톱에서는 이쪽이 조이스틱보다 자연스럽다.
+- 손가락은 **하나만** 조종에 쓴다. 둘째 손가락이 방향을 빼앗으면 조작이 튄다.
+
+화면 벡터를 월드로 옮기는 식은 카메라 리그의 함수다. 카메라에 요(yaw)가 없고 구멍 바로 뒤 위에서 내려다보므로 화면 +x가 월드 +x, 화면 아래가 월드 +z다. **판정기는 이 함수를 부르지 않고 사본을 든다** — 부르면 축을 뒤집은 빌드가 자기 값끼리 일치해 통과한다.
+
+InputMap으로 정식화하지는 않았다. §14가 미룬 부채이지만 그 값어치는 **키 재배치**인데 아직 아무도 그것을 필요로 하지 않고, `project.godot`에 `InputEventKey`를 손으로 직렬화하는 것은 이 프로젝트가 반복해서 밟은 함정이다(V1~V3b). 대신 "입력을 읽는 자리가 하나"라는 실질을 얻었다 — 재배치가 필요해지면 그 함수만 바꾼다.
+
+### 화면 셋과 HOME 상태
+
+`enum State`에 `HOME`이 앞에 붙었다. 게임은 시작 화면에서 열리고, **판정 모드는 이 상태로 들어가지 않는다** — 스물아홉 종이 전부 "부팅 즉시 플레이 상태"를 전제하므로 그 앞에 화면 하나를 끼워 넣으면 통째로 깨진다. `Judge._ready`가 `Main._ready`보다 먼저 도는 것을 그대로 이용했다(§20의 판정 픽스처와 같은 장치다).
+
+**그 한 줄이 판정 셋을 조용히 무너뜨렸다.** 판정기가 상태를 `int(_main.state) == 0` 처럼 **정수로 박아** 두고 있어서, `HOME`이 앞에 붙는 순간 T1·T5·T6이 엉뚱한 상태를 보며 전부 탈락했다. 규격을 이름으로 세웠다(`SPEC_STATE_HOME/PLAYING/OVER`). 판정기가 구현체의 enum을 읽으면 안 된다는 규율은 지키고 있었지만, **사본을 이름 없는 리터럴로 두면 규격이 바뀐 것을 사람이 알아차릴 수 없다.**
+
+UI 노드는 코드로 만든다. `.tscn` 손작성은 이 프로젝트가 반복해서 밟은 함정이고, 화면 셋의 레이아웃을 손으로 직렬화할 이유가 없다. 다만 **노드 이름은 판정과의 계약**이다 — 이름을 안 주면 `@Label@7` 같은 기계 이름을 받고, 그러면 판정기가 자식 순서에 기대게 된다. 순서는 레이아웃을 손볼 때마다 바뀐다.
+
+### 인게임 보강
+
+- **크기 레벨 진행 바**. hole.io의 핵심 피드백 장치는 점수가 아니라 "내가 커지고 있다"이고, 반경 숫자(1.50)만으로는 그것이 읽히지 않는다. 반경 문턱 열 개로 1~10레벨을 나눴다.
+- **킬 피드**와 **점수 팝업**. 팝업은 신호를 따로 만들지 않고 점수 차를 읽는다 — 삼킴은 한 프레임에 여럿 일어날 수 있고, 그때는 합쳐 보이는 편이 낫다.
+- 킬 피드의 화살표는 **ASCII `->`** 다. `→`(U+2192)는 서브셋 밖인데다 **동적 문구에만 나타나 정적 검사를 빠져나간다** — 3초 뜨는 동안만 글자가 비는 결함은 육안으로도 놓치기 쉽다.
+
+### 폰트 집합의 원천을 파일로 옮겼다
+
+음절이 26 → **42자**로 늘었다(시작·결과 화면, 조작 안내, 레벨 표시). §21은 서브셋 스크립트를 "열 줄짜리"라고만 적고 저장소에 넣지 않았다. 그러면 재생성이 사람의 기억에 의존하고, 다음 사람이 같은 집합으로 굽는다는 보장이 없다. 이제 `tools/font_subset.mjs`가 집합을 들고 있고 README는 그것을 가리킨다.
+
+**폰트만 다시 구우면 새 글자가 여전히 없다.** Godot이 `.godot/imported/`의 옛 서브셋을 계속 쓴다 — 실측으로 T8이 새 음절 16자를 전부 "글리프 없음"으로 잡았다. 캐시를 지우고 재임포트하는 절차를 README에 적었다.
+
+T8은 이제 시작·결과 화면의 라벨·버튼까지 본다. 그것들은 판정 모드에서 **보이지 않지만 문자열은 이미 들어 있으므로** 검사에 지장이 없다 — 오히려 이쪽이 중요하다. 화면에 잠깐만 뜨는 문구가 육안으로 가장 놓치기 쉽다.
+
+### 새 기준 — 전부 고장 주입으로 검증했다
+
+`--judge8`은 UI만 본다. 판정 모드가 UI를 끄고 곧장 플레이로 들어가므로, **이 판정만 `judging`을 스스로 내리고** UI를 켠 뒤 상태를 손으로 몬다(4a의 자유 실행이 같은 일을 한다).
+
+| 기준 | 묻는 것 | 주입 | 결과 |
+|---|---|---|---|
+| U1 | 상태마다 보여야 할 것과 보이면 안 되는 것 | 시작 화면을 늘 켜 둔다 | F ✓ |
+| U1 | 재시작이 플레이로 되돌린다 | (위와 같은 경로) | — |
+| U2 | 화면 드래그 → 월드 방향 (5방향) | 화면→월드 축을 뒤집는다 | F ✓ |
+| U2 | 손을 뗀 뒤에는 멈춘다 | 손뗌 처리를 없앤다 | F ✓ |
+| T8확장 | UI 문구의 글리프가 전부 있다 | 서브셋 밖 음절을 문구에 넣는다 | F ✓ |
+
+U2는 `input_dir()`만 부르지 않는다. **구멍을 실제로 움직여 본다** — 방향 벡터만 확인하면 `move_hole`이 그것을 엉뚱하게 쓰는 회귀를 놓친다.
+
+### 회귀
+
+**데스크톱 Forward+ 열한 종 · 데스크톱 Compatibility 열한 종 · 브라우저 게이트 열 종 — 서른두 번 전부 PASS.** 신규 주입 4종을 더해 누적 101종이다.
+
+### 남긴 한계
+
+- **실기 검증은 사람 몫이다.** 터치 경로는 판정이 합성 이벤트로 시험하지만, 실제 휴대폰의 화면 크기·DPI·주소창 높이에서 버튼이 눌리는지는 기계가 답하지 않는다.
+- **UI 레이아웃은 앵커 기반이라 극단적 종횡비에서 겹칠 수 있다.** 세로로 아주 긴 화면에서 시작 버튼과 조작 안내가 가까워진다.
+- **결과 화면에 통계가 없다.** 파괴율·최다 포식 카테고리·신기록은 Phase D(리텐션)의 몫이고, 그 앞에 저장이 있어야 한다.
+- **InputMap 정식화는 여전히 미이행이다**(위 근거 참조).
+
+### `scripts/ui.gd` (전문)
+
+```gdscript
+extends CanvasLayer
+
+## §26: 게임 UI — 시작 화면 · 인게임 보강 · 결과 화면.
+##
+## 노드를 **코드로 만든다.** `.tscn` 손작성은 이 프로젝트가 반복해서 밟은 함정이고
+## (§0-D 의 V1~V3b), 화면 셋의 레이아웃을 손으로 직렬화할 이유가 없다. 도시 프롭이
+## 코드 생성인 것과 같은 판단이다.
+##
+## 기존 HUD 라벨 넷(Label·Timer·Board·Over)은 `main.tscn` 에 그대로 둔다 —
+## 판정 T8 이 그 넷을 이름으로 찾고, 게임오버 문구는 이미 `main.gd` 가 채운다.
+## 여기서는 **덧붙이기만** 한다.
+
+const FONT := preload("res://assets/fonts/hud_kr.ttf")
+
+## 크기 레벨 구간. 반경이 이 문턱을 넘을 때마다 레벨이 오른다.
+## hole.io 의 핵심 피드백 장치는 "점수" 가 아니라 **"내가 커지고 있다"** 이고,
+## 반경 숫자(1.50)만으로는 그것이 읽히지 않는다.
+## 시작 반경 1.5 에서 1레벨, 지도를 비울 만한 45 에서 10레벨이다.
+const LEVEL_R := [1.5, 2.5, 4.0, 6.0, 9.0, 13.0, 18.0, 25.0, 34.0, 45.0]
+
+## 킬 피드가 한 줄을 띄워 두는 시간(초).
+const FEED_SEC := 3.0
+## 점수 팝업이 떠 있는 시간(초).
+const POP_SEC := 1.0
+
+## 화면 문구. **여기의 한글 음절은 전부 `tools/font_subset.mjs` 의 집합 안에 있어야
+## 한다** — 없는 글자는 에러 없이 사라진다. 문구를 고치면 폰트를 다시 굽고
+## 판정기의 SPEC_HUD_CHARS 도 함께 고친다.
+const TXT_TITLE := "HOLE.IO"
+const TXT_SUB := "도시를 삼켜라"
+const TXT_START := "시작"
+const TXT_HINT := "이동   WASD   화살표   드래그"
+const TXT_AGAIN := "다시 하기"
+const TXT_HOME := "홈으로"
+
+var _main: Node3D
+var _dim: ColorRect
+var _title: Label
+var _sub: Label
+var _hint: Label
+var _start_btn: Button
+var _again_btn: Button
+var _home_btn: Button
+var _level: Label
+var _bar: ProgressBar
+var _feed: Label
+var _pop: Label
+
+var _feed_t := 0.0
+var _pop_t := 0.0
+var _last_score := 0
+
+
+func _ready() -> void:
+	_main = get_parent()
+	layer = 2                                   # 기존 HUD(기본 1) 위에 그린다
+	build()
+	# 판정 모드에서는 시작 화면이 없다. 1a~4b 판정 전부가 "부팅 즉시 플레이 상태" 를
+	# 전제하므로, 여기서 화면 하나를 끼워 넣으면 스물아홉 종이 통째로 깨진다.
+	if _main.judging:
+		hide_all()
+	set_process(not _main.judging)
+
+
+func build() -> void:
+	_dim = ColorRect.new()
+	_dim.name = "_dim"
+	_dim.color = Color(0.05, 0.06, 0.09, 0.72)
+	_dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_dim.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_dim)
+
+	_title = make_label("_title", TXT_TITLE, 64, Vector2(0.5, 0.28), Color(1, 1, 1))
+	_sub = make_label("_sub", TXT_SUB, 26, Vector2(0.5, 0.38), Color(0.75, 0.82, 0.95))
+	_hint = make_label("_hint", TXT_HINT, 18, Vector2(0.5, 0.78), Color(0.62, 0.68, 0.78))
+
+	_start_btn = make_button("_start_btn", TXT_START, Vector2(0.5, 0.55), Vector2(220, 62), 28)
+	_start_btn.pressed.connect(_on_start)
+	_again_btn = make_button("_again_btn", TXT_AGAIN, Vector2(0.5, 0.66), Vector2(220, 56), 24)
+	_again_btn.pressed.connect(_on_again)
+	_home_btn = make_button("_home_btn", TXT_HOME, Vector2(0.5, 0.78), Vector2(220, 56), 24)
+	_home_btn.pressed.connect(_on_home)
+
+	# 인게임: 크기 레벨 진행 바. 기존 점수 라벨 바로 위에 얹는다.
+	_level = make_label("_level", "", 18, Vector2.ZERO, Color(1, 0.93, 0.6))
+	_level.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_level.offset_left = 14.0
+	_level.offset_top = -92.0
+	_level.offset_right = 260.0
+	_level.offset_bottom = -68.0
+	_level.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+
+	_bar = ProgressBar.new()
+	_bar.name = "_bar"
+	_bar.show_percentage = false
+	_bar.min_value = 0.0
+	_bar.max_value = 1.0
+	_bar.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_bar.offset_left = 14.0
+	_bar.offset_top = -66.0
+	_bar.offset_right = 260.0
+	_bar.offset_bottom = -54.0
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(0.12, 0.14, 0.2, 0.85)
+	bg.set_corner_radius_all(6)
+	var fg := StyleBoxFlat.new()
+	fg.bg_color = Color(1.0, 0.78, 0.25)
+	fg.set_corner_radius_all(6)
+	_bar.add_theme_stylebox_override("background", bg)
+	_bar.add_theme_stylebox_override("fill", fg)
+	add_child(_bar)
+
+	# 킬 피드: 구멍이 구멍을 먹은 것을 알린다. 화살표는 ASCII `->` 다 —
+	# U+2192 는 서브셋 밖이라 동적 문구에서만 나타나 T8 의 정적 검사를 빠져나간다.
+	_feed = make_label("_feed", "", 20, Vector2.ZERO, Color(1, 0.72, 0.55))
+	_feed.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	_feed.offset_left = -300.0
+	_feed.offset_top = 220.0
+	_feed.offset_right = -12.0
+	_feed.offset_bottom = 250.0
+	_feed.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+
+	_pop = make_label("_pop", "", 30, Vector2.ZERO, Color(1, 0.95, 0.5))
+	_pop.set_anchors_preset(Control.PRESET_TOP_LEFT)
+	_pop.size = Vector2(160, 40)
+	_pop.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+
+
+## 노드 이름은 **판정과의 계약**이다(§26). 코드로 만든 노드는 이름을 안 주면
+## `@Label@7` 같은 기계 이름을 받는데, 그러면 판정기가 역할별로 찾을 수 없고
+## 자식 순서에 기대게 된다 — 순서는 레이아웃을 손볼 때마다 바뀐다.
+func make_label(nm: String, t: String, size: int, anchor: Vector2, col: Color) -> Label:
+	var l := Label.new()
+	l.name = nm
+	l.text = t
+	l.add_theme_font_override("font", FONT)
+	l.add_theme_font_size_override("font_size", size)
+	l.add_theme_color_override("font_color", col)
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if anchor != Vector2.ZERO:
+		l.set_anchors_preset(Control.PRESET_CENTER_TOP)
+		l.anchor_left = anchor.x
+		l.anchor_right = anchor.x
+		l.anchor_top = anchor.y
+		l.anchor_bottom = anchor.y
+		l.offset_left = -400.0
+		l.offset_right = 400.0
+		l.offset_top = 0.0
+		l.offset_bottom = float(size) * 1.4
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(l)
+	return l
+
+
+func make_button(nm: String, t: String, anchor: Vector2, sz: Vector2, size: int) -> Button:
+	var b := Button.new()
+	b.name = nm
+	b.text = t
+	b.add_theme_font_override("font", FONT)
+	b.add_theme_font_size_override("font_size", size)
+	for st in ["normal", "hover", "pressed"]:
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.16, 0.44, 0.86) if st == "normal" \
+			else (Color(0.24, 0.55, 0.95) if st == "hover" else Color(0.12, 0.34, 0.68))
+		sb.set_corner_radius_all(10)
+		sb.content_margin_top = 8.0
+		sb.content_margin_bottom = 8.0
+		b.add_theme_stylebox_override(st, sb)
+	b.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	b.anchor_left = anchor.x
+	b.anchor_right = anchor.x
+	b.anchor_top = anchor.y
+	b.anchor_bottom = anchor.y
+	b.offset_left = -sz.x * 0.5
+	b.offset_right = sz.x * 0.5
+	b.offset_top = 0.0
+	b.offset_bottom = sz.y
+	add_child(b)
+	return b
+
+
+## 판정 모드용. 이 노드가 그리는 것을 전부 숨긴다.
+func hide_all() -> void:
+	for c in get_children():
+		(c as CanvasItem).visible = false
+
+
+func _on_start() -> void:
+	_main.begin_round()
+
+
+func _on_again() -> void:
+	_main.restart()
+
+
+func _on_home() -> void:
+	_main.restart()
+	_main.state = _main.State.HOME
+	_main.set_ai(false)
+
+
+func kill_feed(eater: String, prey: String) -> void:
+	_feed.text = "%s -> %s" % [eater, prey]
+	_feed_t = FEED_SEC
+
+
+func _process(dt: float) -> void:
+	if _main == null:
+		return
+	var st: int = _main.state
+	var home: bool = st == _main.State.HOME
+	var over: bool = st == _main.State.OVER
+	_dim.visible = home or over
+	_title.visible = home
+	_sub.visible = home
+	_hint.visible = home
+	_start_btn.visible = home
+	_again_btn.visible = over
+	_home_btn.visible = over
+
+	# 기존 HUD(레이어 1)는 이 CanvasLayer(2) 아래에 그려진다. 그대로 두면
+	#   · 시작 화면 뒤로 점수·타이머·순위판이 비치고
+	#   · 결과 문구가 딤에 깔려 읽히지 않는다.
+	# 홈에서는 통째로 감추고, 결과에서는 **레이어를 딤 위로 올린 뒤** 인게임 지표만 끈다.
+	var hr: CanvasLayer = _main.hud_root
+	hr.visible = not home
+	hr.layer = 3 if over else 1
+	_main.hud.visible = not over
+	_main.hud_timer.visible = not over
+	_main.hud_board.visible = not over
+
+	# 인게임 요소는 플레이 중에만.
+	var play: bool = not home and not over
+	_level.visible = play
+	_bar.visible = play
+	if play and _main.player_alive():
+		var r: float = float(_main.hole.radius)
+		var lv := 1
+		for i in LEVEL_R.size():
+			if r >= float(LEVEL_R[i]):
+				lv = i + 1
+		_level.text = "레벨 %d" % lv
+		var lo: float = float(LEVEL_R[lv - 1])
+		var hi: float = float(LEVEL_R[mini(lv, LEVEL_R.size() - 1)])
+		_bar.value = 1.0 if lv >= LEVEL_R.size() else clampf((r - lo) / maxf(hi - lo, 1e-3), 0.0, 1.0)
+
+	_feed_t = maxf(_feed_t - dt, 0.0)
+	_feed.visible = _feed_t > 0.0 and play
+
+	# 점수 팝업: 점수가 오른 만큼을 구멍 위에 띄운다. 신호를 따로 만들지 않고
+	# 차이를 읽는다 — 삼킴은 한 프레임에 여럿 일어날 수 있고, 그때는 합쳐 보이는 편이 낫다.
+	var sc: int = int(_main.score)
+	if play and sc > _last_score:
+		_pop.text = "+%d" % (sc - _last_score)
+		_pop_t = POP_SEC
+	_last_score = sc
+	_pop_t = maxf(_pop_t - dt, 0.0)
+	_pop.visible = _pop_t > 0.0 and play and _main.player_alive()
+	if _pop.visible:
+		var cam: Camera3D = _main.cam
+		var p: Vector3 = _main.hole.global_position
+		if not cam.is_position_behind(p):
+			_pop.position = cam.unproject_position(p) - Vector2(80.0, 60.0 + (1.0 - _pop_t) * 30.0)
+		_pop.modulate.a = clampf(_pop_t / POP_SEC, 0.0, 1.0)
+```

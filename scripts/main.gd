@@ -29,6 +29,15 @@ var arena := true
 
 var ai_holes: Array[Node3D] = []
 
+## 포인터 입력 상태(§26). 터치는 손가락 하나만 조종에 쓴다 — 둘째 손가락이
+## 방향을 빼앗으면 조작이 튄다.
+const TOUCH_DEAD_PX := 18.0
+var _touch_id := -1
+var _touch_start := Vector2.ZERO
+var _touch_cur := Vector2.ZERO
+var _mouse_held := false
+
+@onready var ui: CanvasLayer = get_node_or_null("UI")
 @onready var hud_root: CanvasLayer = $HUD
 @onready var hud: Label = $HUD/Label
 @onready var hud_timer: Label = $HUD/Timer
@@ -36,7 +45,10 @@ var ai_holes: Array[Node3D] = []
 @onready var hud_over: Label = $HUD/Over
 
 # --- 4b: 게임 루프 ---------------------------------------------------------
-enum State { PLAYING, OVER }
+## §26 에서 HOME 이 앞에 붙었다. **판정 모드는 이 상태로 들어가지 않는다** —
+## 1a~4b 판정 스물아홉 종이 전부 "부팅 즉시 플레이 상태" 를 전제하므로,
+## 그 앞에 화면 하나를 끼워 넣으면 통째로 깨진다.
+enum State { HOME, PLAYING, OVER }
 ## 한 판의 길이(초). 판정기가 짧게 줄여 종료까지 돌린다.
 @export var round_seconds := 120.0
 var state := State.PLAYING
@@ -102,7 +114,19 @@ func _ready() -> void:
 	cam.follow(hole, hole.radius, true)
 	spawn_judge_set()
 	time_left = round_seconds
+	# 게임은 시작 화면에서 열리고, 판정은 곧바로 플레이 상태에서 시작한다.
+	# Judge._ready 가 Main._ready 보다 먼저 돌아 judging 을 세워 두므로 여기서 읽을 수 있다.
+	state = State.HOME if not judging else State.PLAYING
+	if state == State.HOME:
+		set_ai(false)
 	update_hud()
+
+
+## 시작 화면에서 한 판을 연다. UI 버튼이 부른다.
+func begin_round() -> void:
+	state = State.PLAYING
+	time_left = round_seconds
+	set_ai(true)
 
 
 ## 판정 대상 8개를 규격대로 세운다. **판정 모드가 아니면 아무것도 만들지 않는다** —
@@ -273,7 +297,7 @@ func set_ai(on: bool) -> void:
 ## 구멍끼리의 포식. 큰 구멍이 작은 구멍을 온전히 덮으면 흡수한다.
 ## 여기서 도는 이유: 레지스트리는 uniform 버퍼만 책임지고, 승패는 아레나의 일이다.
 func _physics_process(_dt: float) -> void:
-	if judging or state == State.OVER:
+	if judging or state != State.PLAYING:
 		return
 	# 판이 끝난 뒤에도 돌면 구멍끼리 계속 잡아먹어 "끝났다" 가 상태로 성립하지 않는다
 	# (실측: T3 가 종료 후 120프레임 동안 레지스트리 변동을 잡았다).
@@ -306,6 +330,8 @@ func resolve_bites() -> int:
 		if eaten == null:
 			return n
 		eater.bite(eaten)
+		if ui != null:
+			ui.kill_feed(str(eater.label), str(eaten.label))
 		registry.unregister(eaten)
 		ai_holes.erase(eaten)
 		var was_player: bool = eaten == hole
@@ -317,9 +343,17 @@ func resolve_bites() -> int:
 	return n
 
 
-## InputMap 을 쓰지 않는다 — project.godot 에 InputEventKey 를 손으로 직렬화하는 것은
-## 오류가 잦다. 1단계 한정이며 2단계에서 InputMap 으로 정식화한다.
-func move_hole(dt: float) -> void:
+## 입력을 해석하는 자리는 **여기 하나**다(§26). 키보드·마우스·터치 셋이 들어오지만
+## 밖으로 나가는 것은 방향 벡터 하나이고, move_hole 은 그 벡터만 안다.
+##
+## InputMap 으로 정식화하지 않았다. §14 가 미룬 부채이지만, 그 값어치는 **키 재배치**인데
+## 아직 아무도 그것을 필요로 하지 않고, project.godot 에 InputEventKey 를 손으로
+## 직렬화하는 것은 이 프로젝트가 반복해서 밟은 함정이다(V1~V3b). 대신 "입력을 읽는
+## 자리가 하나" 라는 실질을 여기서 얻는다 — 재배치가 필요해지면 이 함수만 바꾼다.
+##
+## 우선순위는 키보드 → 터치 → 마우스다. 셋이 동시에 들어오는 상황은 없지만,
+## 순서를 고정해야 입력원이 바뀌는 순간에 방향이 튀지 않는다.
+func input_dir() -> Vector3:
 	var v := Vector3.ZERO
 	if Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_UP):
 		v.z -= 1.0
@@ -329,9 +363,54 @@ func move_hole(dt: float) -> void:
 		v.x -= 1.0
 	if Input.is_key_pressed(KEY_D) or Input.is_key_pressed(KEY_RIGHT):
 		v.x += 1.0
+	if v != Vector3.ZERO:
+		return v.normalized()
+
+	# 터치: 누른 자리를 원점으로 삼는 **플로팅 조이스틱**. 화면 어디를 눌러도 된다 —
+	# 고정 조이스틱은 세로 화면에서 엄지가 닿지 않는 자리에 놓이기 쉽다.
+	if _touch_id >= 0:
+		var d := _touch_cur - _touch_start
+		if d.length() >= TOUCH_DEAD_PX:
+			return screen_to_world(d)
+
+	# 마우스: 커서 쪽으로 간다. 데스크톱에서는 이쪽이 조이스틱보다 자연스럽다.
+	if _mouse_held and is_instance_valid(hole) and not cam.is_position_behind(hole.global_position):
+		var d2 := get_viewport().get_mouse_position() - cam.unproject_position(hole.global_position)
+		if d2.length() >= TOUCH_DEAD_PX:
+			return screen_to_world(d2)
+	return Vector3.ZERO
+
+
+## 화면 벡터 → 월드 XZ 방향. 카메라에 요(yaw)가 없고 구멍 바로 뒤 위에서 내려다보므로
+## 화면 +x 가 월드 +x, 화면 +y(아래)가 월드 +z 다. 카메라 리그가 바뀌면 여기도 바뀐다.
+func screen_to_world(d: Vector2) -> Vector3:
+	return Vector3(d.x, 0.0, d.y).normalized()
+
+
+func _unhandled_input(e: InputEvent) -> void:
+	if e is InputEventScreenTouch:
+		var t := e as InputEventScreenTouch
+		if t.pressed and _touch_id < 0:
+			_touch_id = t.index
+			_touch_start = t.position
+			_touch_cur = t.position
+		elif not t.pressed and t.index == _touch_id:
+			_touch_id = -1
+	elif e is InputEventScreenDrag:
+		var g := e as InputEventScreenDrag
+		if g.index == _touch_id:
+			_touch_cur = g.position
+	elif e is InputEventMouseButton:
+		var m := e as InputEventMouseButton
+		if m.button_index == MOUSE_BUTTON_LEFT:
+			_mouse_held = m.pressed
+
+
+func move_hole(dt: float) -> void:
+	var v := input_dir()
 	if v == Vector3.ZERO:
 		return
-	set_hole_position(hole.global_position + v.normalized() * MOVE_SPEED * dt)
+	set_hole_position(hole.global_position + v * MOVE_SPEED * dt)
 
 
 ## 구멍이 지면 밖으로 나가면 우물이 허공에 뜨고 판정 전제도 깨진다.
