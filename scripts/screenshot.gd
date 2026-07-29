@@ -2118,7 +2118,14 @@ func unresolved_bites() -> int:
 	return n
 
 
-## G5: 지면 밖으로 나간 구멍 수. 한계는 판정기의 SPEC_GROUND_HALF 로 계산한다.
+## G5: 서 있으면 안 되는 자리에 있는 구멍 수. 한계는 판정기의 SPEC 로만 계산한다.
+##
+## §25 부터 "지면 밖" 에 **물 위**가 더해졌다. 이 자리에서 묻는 이유가 있다 —
+## judge7 의 Z5 는 `move_to` 로 옮겨 본 자리만 시험하는데, **AI 스폰은 move_to 를
+## 거치지 않고 좌표를 직접 받는다**(main.gd 의 격자 스냅). 물 위에서 태어난 구멍은
+## 축별 슬라이드가 둘 다 막혀 영원히 그 자리에 굳는다. 아레나 자유 실행은 매 프레임
+## 이것을 부르므로 스폰 순간부터 덮인다 — 지도를 고칠 때 스폰 링이 강·바다에 닿는
+## 것이 이 프로젝트에서 가장 놓치기 쉬운 회귀다.
 func offground_holes() -> int:
 	var n := 0
 	for h in _reg.holes():
@@ -2126,7 +2133,8 @@ func offground_holes() -> int:
 			continue
 		var lim: float = SPEC_GROUND_HALF - float(h.radius) * RING_K + EDGE_SLACK
 		var p: Vector3 = h.global_position
-		if absf(p.x) > lim or absf(p.z) > lim or absf(p.y) > EDGE_SLACK:
+		if absf(p.x) > lim or absf(p.z) > lim or absf(p.y) > EDGE_SLACK \
+				or not spec_passable(p):
 			n += 1
 	return n
 
