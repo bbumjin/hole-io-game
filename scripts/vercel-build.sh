@@ -145,12 +145,13 @@ echo "==> 리소스 임포트 (.godot/ 은 gitignore 라 체크아웃에 없다)
 "$GODOT" --headless --import --path . || true
 "$GODOT" --headless --import --path .
 
-# 임포트 산출물 수 점검. 임계치는 Godot 내부 규칙에 의존하므로 실패시키지 않고 경고만 한다
-# (하드 게이트는 위의 3회차 종료코드 + 아래 pck 하한선이다).
+# 임포트 산출물 수 점검. 2026-07-30 실측으로 77/77 정확히 일치하는 것을 확인했으므로
+# 하드 게이트로 둔다 — 에셋이 조용히 빠진 채 초록으로 배포되는 것을 막는 자리다.
 want=$(find . -name '*.import' -not -path './.godot-vercel/*' | wc -l)
 got=$(ls -1 .godot/imported/*.md5 2>/dev/null | wc -l || echo 0)
 echo "    .import 파일 ${want}개 / .godot/imported/*.md5 ${got}개"
-[ "$got" -ge "$want" ] || echo "    WARN: 임포트 산출물이 .import 수보다 적다 — 에셋 누락 가능성"
+[ "$got" -ge "$want" ] || {
+  echo "FAIL: 임포트 산출물 ${got} < .import 파일 ${want} — 에셋이 누락된 채 export 된다"; exit 1; }
 
 echo "==> Web export"
 mkdir -p build   # export 는 출력 디렉터리를 만들어주지 않는다
