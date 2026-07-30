@@ -3735,13 +3735,16 @@ func run_judge_7() -> void:
 	var stub_river := []
 	var stub_ocean_ew := []
 	var stub_ocean_ns := []
+	# 강 열은 SPEC_BRIDGES 에서 유도한다 — 하드코딩하면 지도가 바뀔 때 여기만
+	# 어긋난다(코드 감사. 어긋나도 버킷이 비어 FAIL 방향이지만, 유도가 정합적이다).
+	var riv := int(SPEC_BRIDGES[0][1])
 	for jl in range(SPEC_CELL_MIN + 1, SPEC_CELL_MAX + 1):
 		for kc in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
 			if spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl),
 					spec_is_bridge_ew(jl, kc)) and not spec_seg_ew(jl, kc):
 				var p8 := Vector3((float(kc) + 0.5) * SPEC_PITCH, 0.0,
 					float(jl) * SPEC_PITCH + 2.0)
-				if kc == 1 or kc == 3:
+				if kc == riv - 1 or kc == riv + 1:
 					stub_river.append(p8)
 				else:
 					stub_ocean_ew.append(p8)
