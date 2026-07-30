@@ -1,0 +1,7 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo 'no package manager — Godot 은 vercel-build.sh 가 직접 내려받는다'",
+  "buildCommand": "bash scripts/vercel-build.sh",
+  "outputDirectory": "build"
+}

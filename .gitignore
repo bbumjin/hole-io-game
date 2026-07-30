@@ -10,3 +10,6 @@ build/
 # 실행 로그
 run.log
 run.err
+
+# Vercel 빌드가 Godot 에디터/템플릿을 풀어놓는 임시 디렉터리 (scripts/vercel-build.sh)
+.godot-vercel/
