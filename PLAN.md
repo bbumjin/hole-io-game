@@ -1,4 +1,4 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 (rev.31)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 (rev.32)
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
 >
@@ -510,7 +510,7 @@ uniform vec3 lane_color   : source_color = vec3(0.88, 0.80, 0.25);
 uniform vec3 cross_color  : source_color = vec3(0.90, 0.90, 0.87);
 
 // --- 지구제·수계 (§25) -----------------------------------------------------
-// 존 지도는 city.gd 가 구운 14x14 R8 텍스처 하나가 원천이다. 셀당 zone_code*51 이
+// 존 지도는 city.gd 가 구운 14x14 RG8 텍스처 하나가 원천이다(R=존, G=병합 그룹 §33). 셀당 zone_code*51 이
 // 들어 있고 51/255 = 0.2 간격이라 복호가 8비트 양자화·필터 오차에 견고하다.
 // **판정기는 이 텍스처를 읽지 않는다** — 자기 사본을 들고 같은 지도를 독립으로 계산한다.
 uniform sampler2D zone_tex : filter_nearest, repeat_disable;
@@ -546,6 +546,12 @@ int zone_at(int k, int j) {
 	return int(texelFetch(zone_tex, t, 0).r * 255.0 / ZSTEP + 0.5);
 }
 
+// §33 병합 그룹 id (0 = 비병합). city.gd 의 zone_texture 가 G 채널에 굽는다.
+int group_at(int k, int j) {
+	ivec2 t = ivec2(clamp(k - ZMIN, 0, ZN - 1), clamp(j - ZMIN, 0, ZN - 1));
+	return int(texelFetch(zone_tex, t, 0).g * 255.0 + 0.5);
+}
+
 // 교량. city.gd 의 BRIDGES 와 **같은 집합**이어야 한다 — 여기만 고치면 도로는 그려지는데
 // 구멍이 못 지나가고, 저기만 고치면 그 반대가 된다. 강이 열 k=2 라 셀 인덱스는 2 다.
 bool is_bridge_ew(int jl, int kc) {
@@ -562,12 +568,17 @@ float seg_rule(int a, int b, bool bridge) {
 // 걷는 도로가 어긋난다.
 float seg_ew(int jl, int kc) {
 	if (seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)) < 0.5) { return 0.0; }
+	// §33: 같은 병합 그룹 안의 내부 도로는 없다.
+	int g = group_at(kc, jl - 1);
+	if (g != 0 && g == group_at(kc, jl)) { return 0.0; }
 	if (zone_at(kc + 1, jl - 1) == Z_W && zone_at(kc + 1, jl) == Z_W && !is_bridge_ew(jl, kc + 1)) { return 0.0; }
 	if (zone_at(kc - 1, jl - 1) == Z_W && zone_at(kc - 1, jl) == Z_W && !is_bridge_ew(jl, kc - 1)) { return 0.0; }
 	return 1.0;
 }
 float seg_ns(int kl, int jc) {
 	if (seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false) < 0.5) { return 0.0; }
+	int g = group_at(kl - 1, jc);
+	if (g != 0 && g == group_at(kl, jc)) { return 0.0; }
 	if (zone_at(kl - 1, jc + 1) == Z_W && zone_at(kl, jc + 1) == Z_W) { return 0.0; }
 	if (zone_at(kl - 1, jc - 1) == Z_W && zone_at(kl, jc - 1) == Z_W) { return 0.0; }
 	return 1.0;
@@ -2035,6 +2046,15 @@ const SPEC_Z_PARK := 3
 const SPEC_Z_WATER := 4
 ## 수역을 건너는 동서 도로 세그먼트 [중심선 인덱스, 셀 인덱스].
 const SPEC_BRIDGES := [[-3, 2], [0, 2], [3, 2]]
+## §33 병합 블록 [k0, j0, k1, j1] — city.gd MERGES 의 판정기 사본.
+const SPEC_MERGES := [
+	[-4, -2, -4, -1],
+	[-2, -2, -1, -2],
+	[4, -6, 5, -5],
+	[-6, 4, -5, 5],
+	[4, 1, 5, 2],
+	[-6, -6, -5, -5],
+]
 
 ## Z1: 존별 지면색을 **휘도**로 가르면 안 된다 — 네 지구가 전부 [아스팔트, 커브] 사이
 ## 좁은 띠 안에 있어야 D1·D4 가 성립하므로 휘도만으로는 서로 붙는다. 대신 조명 배율에
@@ -2141,7 +2161,9 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ## §31 에서 2125 → 2633 (수변 난간 508 조각이 plan 에 들어왔다 — 재시작 복원의 일부다).
 ## §32 에서 2633 → 2264 (물로 이어진 도로 스텁 54 세그먼트가 걷히며 그 위의
 ## 차도·보도 프롭 369 개가 함께 사라졌다).
-const RESTART_PROPS := 2264
+## §33 에서 2264 → 2100 (병합 rect 6개의 내부 도로 프롭이 사라지고 블록이 수퍼블록
+## 하나로 계획된다 — 셀 수만큼 겹치던 밀도가 하나로 줄어드는 것이 규격이다).
+const RESTART_PROPS := 2100
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -2211,6 +2233,9 @@ const HUD_KR_MIN := 10
 ## 없게 되고(측정 지점이 동시에 바뀌면 증감 주장이 성립하지 않는다), 그 함정을
 ## 실제로 밟았다(독립 감사가 실측으로 반증했다).
 ##   dense — §14 부터 써 온 지점. 실측상 드로우콜·프리미티브가 가장 많다(2535 / 2.70M).
+##   §33 주의: 이 지점의 셀 (-2,-2) 는 병합 rect B 에 들어가 내부 도로가 사라지고
+##   클러스터가 수퍼블록 중심으로 옮겨졌다 — §33 이전 계측표와의 비교성이 끊겼다.
+##   예산 판정 자체는 유효하다(환경이 가벼워진 쪽이라 보수적이지 않을 뿐).
 ##           역대 계측표와 like-for-like 비교를 위해 반드시 유지한다.
 ##   boul  — z = -96 대로에 접한 블록 중앙. 드로우콜은 더 적지만(2510 / 2.29M)
 ##           worst 프레임이 2배 나쁘다 — 대로 주변은 밀도가 아니라 **가려짐이 적어**
@@ -2388,9 +2413,30 @@ func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
 	return not (a == SPEC_Z_PARK and b == SPEC_Z_PARK)
 
 
-## §32 수변 끝 조항 포함 — city.gd·셰이더와 같은 규칙의 판정기 사본.
+## §33 Z9: 세그먼트 [축, 선, 셀] 의 픽셀 표본점 — 중심선에서 u=+2(도색 회피, Z8 규약).
+func seg_sample_pt(s: Array) -> Vector3:
+	if s[0] == "ew":
+		return Vector3((float(int(s[2])) + 0.5) * SPEC_PITCH, 0.0,
+			float(int(s[1])) * SPEC_PITCH + 2.0)
+	return Vector3(float(int(s[1])) * SPEC_PITCH + 2.0, 0.0,
+		(float(int(s[2])) + 0.5) * SPEC_PITCH)
+
+
+## §33: 셀이 속한 병합 그룹 (0 = 비병합) — city.gd merge_group 의 사본.
+func spec_merge_group(k: int, j: int) -> int:
+	for i in SPEC_MERGES.size():
+		var m: Array = SPEC_MERGES[i]
+		if k >= int(m[0]) and k <= int(m[2]) and j >= int(m[1]) and j <= int(m[3]):
+			return i + 1
+	return 0
+
+
+## §32 수변 끝 조항 + §33 병합 조항 포함 — city.gd·셰이더와 같은 규칙의 판정기 사본.
 func spec_seg_ew(jl: int, kc: int) -> bool:
 	if not spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc)):
+		return false
+	var g := spec_merge_group(kc, jl - 1)
+	if g != 0 and g == spec_merge_group(kc, jl):
 		return false
 	for d in [1, -1]:
 		if spec_zone(kc + d, jl - 1) == SPEC_Z_WATER \
@@ -2402,6 +2448,9 @@ func spec_seg_ew(jl: int, kc: int) -> bool:
 
 func spec_seg_ns(kl: int, jc: int) -> bool:
 	if not spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false):
+		return false
+	var g := spec_merge_group(kl - 1, jc)
+	if g != 0 and g == spec_merge_group(kl, jc):
 		return false
 	for d in [1, -1]:
 		if spec_zone(kl - 1, jc + d) == SPEC_Z_WATER \
@@ -2420,9 +2469,15 @@ func spec_passable(p: Vector3) -> bool:
 		and absf(p.z - float(jl) * SPEC_PITCH) <= spec_road_half(jl)
 
 
-## 공원 수퍼블록의 축별 병합 범위. E2 가 "블록 구간 안인가" 를 물을 때 쓴다.
+## 수퍼블록의 축별 병합 범위. E2 가 "블록 구간 안인가" 를 물을 때 쓴다.
+## §33: 병합 rect 도 인지한다 — 안 하면 옛 내부 도로 자리를 채운 프롭 전부가
+## 구역 이탈로 오탐된다(계획 감사 지적 2).
 func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 	var v := k if along_k else j
+	var g := spec_merge_group(k, j)
+	if g != 0:
+		var m: Array = SPEC_MERGES[g - 1]
+		return Vector2i(int(m[0]), int(m[2])) if along_k else Vector2i(int(m[1]), int(m[3]))
 	if spec_zone(k, j) != SPEC_Z_PARK:
 		return Vector2i(v, v)
 	var lo := v
@@ -5767,6 +5822,97 @@ func run_judge_7() -> void:
 			z8 = z8 and oka
 			print("JUDGE 7 Z8b 진입로 (%.0f,%.0f) 휘도=%.4f %s" % [pa.x, pa.z, lma, pf(oka)])
 
+	# --- Z9: 병합 블록 — 내부 도로 부재·경계 도로 존재(§33) --------------------
+	# 표본 전부 SPEC_MERGES 에서 유도. 세 단언:
+	#   Z9c 거동 대조 — rect 유도 세그먼트(내부+경계) 전부에서 CITY.seg_* 와
+	#       spec_seg_* 가 일치한다. 구현의 거동을 SPEC 에 **대조**하는 것은 원칙
+	#       위반이 아니다(기대값을 구현에서 읽는 것이 위반이다) — 시드 의존 없이
+	#       city.gd 조항 소실을 결정적으로 잡는다(계획 감사 지적 3).
+	#   Z9a 픽셀 — rect 마다 내부 세그먼트 하나의 중점이 아스팔트가 아니다(셰이더).
+	#       표본이 rect 당 하나여도 커버는 성립한다: A 는 EW 전용, B 는 NS 전용
+	#       rect 라 축별 셰이더 조항 소실이 각각 잡히고, 로직 전수는 Z9c 가 덮는다.
+	#   Z9b 픽셀 — **합성 spec(물 규칙+§32+§33)이 존재한다고 하는** 경계 세그먼트만
+	#       아스팔트다. 해안 rect 의 경계는 §32 가 이미 걷었다 — "rect 경계 전부" 로
+	#       물으면 정상 빌드가 거짓 탈락한다(계획 감사 지적 1). 과욕 병합(경계까지
+	#       제거)은 여전히 걸린다 — 합성 spec 이 남긴 세그먼트를 걷으면 F 다.
+	var z9 := true
+	var z9c_bad := 0
+	var z9a_pts := []
+	var z9b_pts := []
+	var cityn: Node = _main.get_node("City")
+	for mi in SPEC_MERGES.size():
+		var m: Array = SPEC_MERGES[mi]
+		var k0 := int(m[0])
+		var j0 := int(m[1])
+		var k1 := int(m[2])
+		var j1 := int(m[3])
+		var internal := []
+		var boundary := []
+		for kl in range(k0 + 1, k1 + 1):
+			for jc in range(j0, j1 + 1):
+				internal.append(["ns", kl, jc])
+		for jl in range(j0 + 1, j1 + 1):
+			for kc in range(k0, k1 + 1):
+				internal.append(["ew", jl, kc])
+		for kl in [k0, k1 + 1]:
+			for jc in range(j0, j1 + 1):
+				boundary.append(["ns", kl, jc])
+		for jl in [j0, j1 + 1]:
+			for kc in range(k0, k1 + 1):
+				boundary.append(["ew", jl, kc])
+		for s in internal + boundary:
+			var spec_has: bool = spec_seg_ew(int(s[1]), int(s[2])) if s[0] == "ew" \
+				else spec_seg_ns(int(s[1]), int(s[2]))
+			var city_has: bool = cityn.seg_ew(int(s[1]), int(s[2])) if s[0] == "ew" \
+				else cityn.seg_ns(int(s[1]), int(s[2]))
+			if spec_has != city_has:
+				z9c_bad += 1
+				if z9c_bad <= 5:
+					print("JUDGE 7 Z9c 거동 불일치: %s(%d,%d) spec=%s city=%s"
+						% [s[0], int(s[1]), int(s[2]), str(spec_has), str(city_has)])
+		z9a_pts.append(seg_sample_pt(internal[0]))
+		var exist := []
+		for s in boundary:
+			var has: bool = spec_seg_ew(int(s[1]), int(s[2])) if s[0] == "ew" \
+				else spec_seg_ns(int(s[1]), int(s[2]))
+			if has:
+				exist.append(s)
+		if exist.is_empty():
+			# 경계가 전부 걷힌 rect 는 정의상 없어야 한다 — 있으면 지도가 잘못됐다.
+			z9 = false
+			print("JUDGE 7 Z9b rect %d: 합성 spec 에 남은 경계 세그먼트가 0개다" % mi)
+		else:
+			z9b_pts.append(seg_sample_pt(exist[0]))
+			if exist.size() > 1:
+				z9b_pts.append(seg_sample_pt(exist[exist.size() - 1]))
+	z9 = z9 and z9c_bad == 0
+	print("JUDGE 7 Z9c 거동 불일치=%d %s" % [z9c_bad, pf(z9c_bad == 0)])
+	for i in z9a_pts.size():
+		var p9: Vector3 = z9a_pts[i]
+		top_down(p9)
+		for _i in 3:
+			await get_tree().process_frame
+		var img9 := await capture("merge_in_%d" % i)
+		var ch9 := chroma(img9, p9)
+		var lm9 := lum_at(img9, p9)
+		var asphalt9: bool = ch9.y < ROAD_B_MAX and absf(ch9.x) < ROAD_G_MAX \
+			and lm9 + ROAD_LUM_MARGIN <= land_min and lm9 >= water_lum + ROAD_LUM_MARGIN
+		z9 = z9 and not asphalt9
+		print("JUDGE 7 Z9a 내부 (%.0f,%.0f) 휘도=%.4f 아스팔트=%s %s"
+			% [p9.x, p9.z, lm9, str(asphalt9), pf(not asphalt9)])
+	for i in z9b_pts.size():
+		var p9: Vector3 = z9b_pts[i]
+		top_down(p9)
+		for _i in 3:
+			await get_tree().process_frame
+		var img9 := await capture("merge_bd_%d" % i)
+		var ch9 := chroma(img9, p9)
+		var lm9 := lum_at(img9, p9)
+		var ok9: bool = ch9.y < ROAD_B_MAX and absf(ch9.x) < ROAD_G_MAX \
+			and lm9 + ROAD_LUM_MARGIN <= land_min and lm9 >= water_lum + ROAD_LUM_MARGIN
+		z9 = z9 and ok9
+		print("JUDGE 7 Z9b 경계 (%.0f,%.0f) 휘도=%.4f %s" % [p9.x, p9.z, lm9, pf(ok9)])
+
 	# --- Z7d: 수변 산책로 띠가 실제로 그려지는가(§31) --------------------------
 	# 표본은 지도에서 유도한다: 물과 접한 육지 셀 가장자리의 스팬 중앙에서, 띠 안(경계
 	# 1m 안쪽)과 띠 밖(경계 SPEC_PROM_W+2.5 안쪽)을 한 캡처에서 함께 읽는다.
@@ -5954,12 +6100,12 @@ func run_judge_7() -> void:
 	print("JUDGE 7 Z7 난간 %d/%d (빠짐=%d 미아=%d) 산책로=%s"
 		% [rails.size(), pieces.size(), z7_missing, z7_stray, pf(z7d)])
 
-	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s Z8=%s (수역프롭=%d clamped=%s)"
-		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), pf(z8),
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s Z8=%s Z9=%s (수역프롭=%d clamped=%s)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), pf(z8), pf(z9),
 		   in_water, str(_clamped)])
 	# 표본이 화면 밖으로 잘렸으면 그 픽셀 판정은 무효다 — 가장자리 픽셀을 읽고
 	# 초록으로 인쇄되는 것이 최악이다(코드 감사가 잡았다. 기존 Z1~Z4 도 같은 패턴).
-	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and z8 and not _clamped
+	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and z8 and z9 and not _clamped
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -6758,6 +6904,29 @@ const ZONE_CODE := { "D": 0, "C": 1, "R": 2, "P": 3, "W": 4 }
 ## 셋 다 대로(인덱스 mod 3 == 0)라 아스팔트 폭이 13m 다.
 const BRIDGES := [[-3, 2], [0, 2], [3, 2]]
 
+## §33 병합 블록 [k0, j0, k1, j1] (경계 포함). 계획도시라도 모든 블록이 같은 크기는
+## 아니다 — 내부 도로 없이 크게 병합된 그리드가 중간중간 있어야 실제 도시로 읽힌다
+## (유저 지시). 각 rect 는 ① 존 균일 ② **대로 밴드 안**(내부 제거 선이 전부 일반
+## 도로 — 대로는 교통이 달린다) ③ 물·공원·플라자·판정 블록 회피. 전부 감사가
+## 지도로 전수 검증했다. 공원 수퍼블록(존-인접 병합)과는 셀이 겹치지 않는다.
+const MERGES := [
+	[-4, -2, -4, -1],   # A: C 지구 1×2
+	[-2, -2, -1, -2],   # B: D 지구 2×1
+	[4, -6, 5, -5],     # C: R 지구 2×2 (북동 해안)
+	[-6, 4, -5, 5],     # D: R 지구 2×2 (남서 해안)
+	[4, 1, 5, 2],       # E: R 지구 2×2 (동안 내륙)
+	[-6, -6, -5, -5],   # F: R 지구 2×2 (북서 해안)
+]
+
+
+## 셀이 속한 병합 그룹 (0 = 비병합, 1.. = MERGES 인덱스+1).
+static func merge_group(k: int, j: int) -> int:
+	for i in MERGES.size():
+		var m: Array = MERGES[i]
+		if k >= int(m[0]) and k <= int(m[2]) and j >= int(m[1]) and j <= int(m[3]):
+			return i + 1
+	return 0
+
 ## 존별 배치 규격. kinds 는 **블록 내부**에 놓을 수 있는 카탈로그 종류다
 ## (보도·차도 프롭은 존과 무관하게 같은 목록을 쓰고 밀도만 달라진다).
 ## scale_mul 은 블록 내부 프롭에만 곱한다 — 가로등·차는 실제 치수가 규격이다.
@@ -6780,7 +6949,8 @@ const ZONE_PROFILE := [
 		"tries": 0, "spread": 0.0, "walk_skip": 1.0, "road_skip": 1.0 },
 ]
 
-## 셰이더로 넘길 존 지도의 채널 간격. zone_code * 51 을 R8 한 채널에 담는다.
+## 셰이더로 넘길 존 지도의 채널 간격. zone_code * 51 을 RG8 의 R 채널에 담는다
+## (G 채널은 §33 병합 그룹 id).
 ## 51/255 = 0.2 는 8비트 양자화·필터 오차보다 압도적으로 커서 복호가 견고하다.
 const ZONE_TEX_STEP := 51
 
@@ -7090,6 +7260,10 @@ static func seg_rule(a: int, b: int, bridge: bool) -> bool:
 static func seg_ew(jl: int, kc: int) -> bool:
 	if not seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)):
 		return false
+	# §33: 같은 병합 그룹 안의 내부 도로는 없다(P-P 규칙과 동형).
+	var g := merge_group(kc, jl - 1)
+	if g != 0 and g == merge_group(kc, jl):
+		return false
 	for d in [1, -1]:
 		if zone_at(kc + d, jl - 1) == Z_WATER and zone_at(kc + d, jl) == Z_WATER \
 				and not is_bridge_ew(jl, kc + d):
@@ -7102,6 +7276,9 @@ static func seg_ew(jl: int, kc: int) -> bool:
 ## §32: 수변 끝 조항도 교량 분기 없이 대칭 적용된다(바다로 뻗던 스텁이 걷힌다).
 static func seg_ns(kl: int, jc: int) -> bool:
 	if not seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false):
+		return false
+	var g := merge_group(kl - 1, jc)
+	if g != 0 and g == merge_group(kl, jc):
 		return false
 	for d in [1, -1]:
 		if zone_at(kl - 1, jc + d) == Z_WATER and zone_at(kl, jc + d) == Z_WATER:
@@ -7120,9 +7297,13 @@ static func passable(p: Vector3) -> bool:
 	return is_bridge_ew(jl, k) and absf(p.z - float(jl) * PITCH) <= road_half_at(jl)
 
 
-## P 수퍼블록의 축별 병합 범위 [최소 셀, 최대 셀]. 공원이 아니면 자기 셀 하나다.
+## 축별 병합 범위 [최소 셀, 최대 셀]. 공원은 존-인접 병합(§25), §33 의 병합 rect 는
+## MERGES 로 직접 지정된다 — 두 기구는 셀이 겹치지 않는다(rect 조건 ③).
 ## 경계에서 멈추지 않으면 zone_at 이 테두리를 잘라 같은 값을 돌려주어 무한 루프가 된다.
 static func merge_k(k: int, j: int) -> Vector2i:
+	var g := merge_group(k, j)
+	if g != 0:
+		return Vector2i(int(MERGES[g - 1][0]), int(MERGES[g - 1][2]))
 	if zone_at(k, j) != Z_PARK:
 		return Vector2i(k, k)
 	var k0 := k
@@ -7135,6 +7316,9 @@ static func merge_k(k: int, j: int) -> Vector2i:
 
 
 static func merge_j(k: int, j: int) -> Vector2i:
+	var g := merge_group(k, j)
+	if g != 0:
+		return Vector2i(int(MERGES[g - 1][1]), int(MERGES[g - 1][3]))
 	if zone_at(k, j) != Z_PARK:
 		return Vector2i(j, j)
 	var j0 := j
@@ -7152,8 +7336,8 @@ static func is_super_root(k: int, j: int) -> bool:
 	return merge_k(k, j).x == k and merge_j(k, j).x == j
 
 
-## 셀 (k, j) 의 배치 가능 구간. 공원이면 **병합 구간**이다 — 셰이더에서 내부 도로를
-## 지우기만 하고 이 구간을 셀 단위로 두면, 프롭이 옛 도로 띠를 계속 피해
+## 셀 (k, j) 의 배치 가능 구간. 공원·병합 rect(§33)면 **병합 구간**이다 — 셰이더에서
+## 내부 도로를 지우기만 하고 이 구간을 셀 단위로 두면, 프롭이 옛 도로 띠를 계속 피해
 ## "도로만 지워진 블록 넷" 이 되지 "수퍼블록" 이 되지 않는다.
 ## 병합 구간은 첫 비-공원 인접 중심선의 커브에서 멈추므로, 지워진 내부 도로 자리는
 ## 구간에 포함되어 그 위에도 나무가 선다.
@@ -7172,11 +7356,15 @@ static func span_z(k: int, j: int) -> Vector2:
 ## 셰이더로 넘길 존 지도 텍스처. 여기가 지도의 단일 원천이고 셰이더는 이것을 읽는다
 ## (판정기는 읽지 않는다 — 자기 사본을 든다).
 static func zone_texture() -> ImageTexture:
-	var img := Image.create(CELL_COUNT, CELL_COUNT, false, Image.FORMAT_R8)
+	# §33: G 채널에 병합 그룹 id 를 함께 굽는다(0 = 비병합). 런타임 생성 텍스처라
+	# 임포트·압축 함정이 없고, 셰이더는 texelFetch 정수 조회로 읽는다(보간 금지 —
+	# R 채널과 같은 규약).
+	var img := Image.create(CELL_COUNT, CELL_COUNT, false, Image.FORMAT_RG8)
 	for j in range(CELL_MIN, CELL_MAX + 1):
 		for k in range(CELL_MIN, CELL_MAX + 1):
 			var v := float(zone_at(k, j) * ZONE_TEX_STEP) / 255.0
-			img.set_pixel(k - CELL_MIN, j - CELL_MIN, Color(v, v, v))
+			var g := float(merge_group(k, j)) / 255.0
+			img.set_pixel(k - CELL_MIN, j - CELL_MIN, Color(v, g, 0.0))
 	return ImageTexture.create_from_image(img)
 
 
@@ -7191,8 +7379,8 @@ func plan_block(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
 	var dz := zone_at(k, j)
 	if dz == Z_WATER:
 		return
-	# 공원은 수퍼블록 하나를 통째로 쓴다 — 대표 셀에서 한 번만 돈다.
-	if dz == Z_PARK and not is_super_root(k, j):
+	# 공원·병합 rect 는 수퍼블록 하나를 통째로 쓴다 — 대표 셀에서 한 번만 돈다(§33).
+	if (dz == Z_PARK or merge_group(k, j) != 0) and not is_super_root(k, j):
 		return
 	var prof: Dictionary = ZONE_PROFILE[dz]
 	# 블록 중앙 자리는 큰 것 전용이다. min_ext 를 안 걸면 이 한 번뿐인 기회를
@@ -10327,3 +10515,45 @@ Z7d 의 첫 구현은 표본 6개가 **전부 바다**였다 — 목록에서 �
 
 - 걷힌 자리의 맨땅 띠 54곳 — §33 의 수변 스트립 블록 설계가 흡수한다(위 서술).
 - 모서리 셀 4개는 경계 도로를 전부 잃는다 — 이동은 도로 비의존이라 무해(감사 확인).
+
+## §33. 모든 블록이 같은 크기는 아니다 — 병합 수퍼블록 (구현·검증 완료, rev.32)
+
+유저 직접 지시(항공 스크린샷 녹색 O, "시급") — "실제 계획도시라도 모든 블록 크기가 똑같지 않음. 도로 없이 더 크게 merge 된 grid 가 중간중간 있어야 실제 도시 같음."
+
+### 규격 — 병합 지정은 지도 상수, 기구는 공원 수퍼블록의 일반화
+
+`MERGES` 상수([k0,j0,k1,j1] 목록, 6개)가 병합 rect 를 지정한다. 각 rect 는 ① **존 균일**(지면색이 갈라지면 안 된다) ② **대로 밴드 안**(내부 제거 선이 전부 일반 도로 — 대로는 교통이 달리므로 절대 걷지 않는다. 실측: 내부 선의 posmod 3 이 전부 1·2) ③ 물·공원·플라자·D 판정 블록·AI 스폰 회피. 셋 다 계획 감사가 SPEC_ZONE_ROWS 로 전수 검증했다.
+
+- **A** (−4,−2..−1) C 1×2 · **B** (−2..−1,−2) D 2×1 · **C** (4..5,−6..−5) R · **D** (−6..−5,4..5) R · **E** (4..5,1..2) R · **F** (−6..−5,−6..−5) R (2×2 넷)
+- 도로 제거: seg_ew/seg_ns 에 병합 조항 — 두 이웃 셀이 같은 그룹이면 세그먼트 없음(P-P 규칙과 동형). 블록 채움: merge_k/merge_j 가 rect 를 인지해 스팬이 옛 내부 도로 자리까지 확장, 대표 셀에서 한 번만 계획(공원 기구 그대로).
+- **셰이더는 zone_tex 의 G 채널**에 그룹 id 를 읽는다 — 런타임 생성 텍스처라 임포트·압축 함정이 없고(감사 확인), rect 목록을 셰이더에 하드코딩하면 규격 4벌이 된다. FORMAT_R8 → RG8.
+- 판정기 사본: SPEC_MERGES·spec_merge_group·spec_seg_* 조항·**spec_merge 일반화**(안 하면 옛 내부 도로 자리를 채운 프롭 전부가 E2 구역 이탈로 오탐 — 계획 감사 지적 2).
+
+### §32 와의 관계 — "독립" 이 아니라 교차한다 (계획 감사 지적 1)
+
+해안 rect(C·D·E·F)의 경계·내부 세그먼트 일부는 **§32 수변 끝 조항이 이미 걷어 둔** 자리다. 규칙은 물 규칙 + §32 + §33 의 **합성**으로 동작하고, 판정도 합성 spec 을 기준으로 표본을 유도한다(Z9b 는 "합성 spec 이 존재한다고 하는 경계만" 아스팔트를 묻는다 — rect 경계 전부를 물으면 정상 빌드가 거짓 탈락한다). §32 가 예고한 맨땅 띠 54곳 중 **4개 rect 구역의 스트립은 이 절의 스팬 확장이 흡수**하고, 강안 16곳과 잔여 해안 스트립은 §31 의 난간·산책로가 서 있는 수변 완충지로 **의도적으로 남는다** — 유저 재검에서 이것이 다시 지적되면 그때 수변 스트립 블록을 별도 절로 세운다.
+
+### 판정 — judge7 Z9 (주입 3종 실증)
+
+| 기준 | 묻는 것 | 주입 | 결과 |
+|---|---|---|---|
+| Z9c 거동 대조 | rect 유도 세그먼트(내부+경계) 전부에서 CITY.seg_* == spec_seg_*. 구현 거동을 SPEC 에 대조하는 것은 원칙 위반이 아니다(기대값을 구현에서 읽는 것이 위반) — 시드 무관하게 city 조항 소실을 잡는다 | K2: city.gd EW 조항 제거 | F ✓ (불일치 5) |
+| Z9a 내부 부재 | rect 마다 내부 세그먼트 하나의 중점 픽셀이 아스팔트 아님 | K1: 셰이더 조항 제거 | F ✓ (4/6 아스팔트 복원 — 나머지 2는 §32 가 별도로 걷는 자리라 P, 합성 규칙의 증거) |
+| Z9b 경계 존재 | 합성 spec 이 남긴 경계 세그먼트 표본(rect 당 최대 2)이 아스팔트 | K3: 조항을 "한쪽이라도 병합이면 제거" 로 과욕화 | F ✓ |
+
+### 파생 상수 재유도
+
+- `RESTART_PROPS` 2264 → **2100** (내부 도로 프롭 소멸 + 블록 계획이 셀 수 배 → 1 배)
+- E7 실측 여유: road 151(≥88) · walk 244(≥162). §31 난간 508/508 불변(물 가장자리 함수).
+
+### 남긴 한계
+
+- 병합은 6곳뿐이다. 유저가 부족하다 하면 내륙 예비 후보 (−2..−1, j=2) C 2×1 등이 대역·균일 검증까지 끝나 있다(감사).
+- C·D·F 는 §32 로 경계 도로를 이미 잃은 모서리라, 눈에 띄는 새 병합은 A·B·E 셋이다 — "중간중간" 의 최종 판단은 항공 스크린샷 휴먼 검수.
+- 강안·잔여 해안 스트립은 위 서술대로 의도적으로 남는다.
+
+### 코드 감사 (90/100) 가 남긴 것
+
+- **PERF_SPOTS "dense"(-48,-48) 의 비교성 단절**: 이 지점의 셀 (-2,-2) 가 rect B 에 들어가 §33 이전 계측표(드로우콜 2535 등)와 like-for-like 비교가 끊겼다. 예산 판정 자체는 유효하다(환경이 가벼워진 쪽). 주석에 명기했다.
+- **병합 블록의 밀도·산포는 존 프로파일 그대로다** — R 프로파일(tries 14·spread 8.5)이 ~59m 수퍼블록 중앙에 클러스터 하나만 남겨 옛 도로 자리가 빈 땅으로 읽힐 수 있다. **항공 스크린샷 휴먼 검수에서 이것을 명시적으로 볼 것** — 유저가 "빈 공터 같다" 하면 병합 블록 전용 산포(공원의 spread 40 방식)를 후속으로 세운다.
+- 낡은 주석 3곳(R8 표기·span 공원 한정) 정리, Z9a 표본 커버 성질 문서화 — 반영 완료.

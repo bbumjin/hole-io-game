@@ -33,7 +33,7 @@ uniform vec3 lane_color   : source_color = vec3(0.88, 0.80, 0.25);
 uniform vec3 cross_color  : source_color = vec3(0.90, 0.90, 0.87);
 
 // --- 지구제·수계 (§25) -----------------------------------------------------
-// 존 지도는 city.gd 가 구운 14x14 R8 텍스처 하나가 원천이다. 셀당 zone_code*51 이
+// 존 지도는 city.gd 가 구운 14x14 RG8 텍스처 하나가 원천이다(R=존, G=병합 그룹 §33). 셀당 zone_code*51 이
 // 들어 있고 51/255 = 0.2 간격이라 복호가 8비트 양자화·필터 오차에 견고하다.
 // **판정기는 이 텍스처를 읽지 않는다** — 자기 사본을 들고 같은 지도를 독립으로 계산한다.
 uniform sampler2D zone_tex : filter_nearest, repeat_disable;
@@ -69,6 +69,12 @@ int zone_at(int k, int j) {
 	return int(texelFetch(zone_tex, t, 0).r * 255.0 / ZSTEP + 0.5);
 }
 
+// §33 병합 그룹 id (0 = 비병합). city.gd 의 zone_texture 가 G 채널에 굽는다.
+int group_at(int k, int j) {
+	ivec2 t = ivec2(clamp(k - ZMIN, 0, ZN - 1), clamp(j - ZMIN, 0, ZN - 1));
+	return int(texelFetch(zone_tex, t, 0).g * 255.0 + 0.5);
+}
+
 // 교량. city.gd 의 BRIDGES 와 **같은 집합**이어야 한다 — 여기만 고치면 도로는 그려지는데
 // 구멍이 못 지나가고, 저기만 고치면 그 반대가 된다. 강이 열 k=2 라 셀 인덱스는 2 다.
 bool is_bridge_ew(int jl, int kc) {
@@ -85,12 +91,17 @@ float seg_rule(int a, int b, bool bridge) {
 // 걷는 도로가 어긋난다.
 float seg_ew(int jl, int kc) {
 	if (seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)) < 0.5) { return 0.0; }
+	// §33: 같은 병합 그룹 안의 내부 도로는 없다.
+	int g = group_at(kc, jl - 1);
+	if (g != 0 && g == group_at(kc, jl)) { return 0.0; }
 	if (zone_at(kc + 1, jl - 1) == Z_W && zone_at(kc + 1, jl) == Z_W && !is_bridge_ew(jl, kc + 1)) { return 0.0; }
 	if (zone_at(kc - 1, jl - 1) == Z_W && zone_at(kc - 1, jl) == Z_W && !is_bridge_ew(jl, kc - 1)) { return 0.0; }
 	return 1.0;
 }
 float seg_ns(int kl, int jc) {
 	if (seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false) < 0.5) { return 0.0; }
+	int g = group_at(kl - 1, jc);
+	if (g != 0 && g == group_at(kl, jc)) { return 0.0; }
 	if (zone_at(kl - 1, jc + 1) == Z_W && zone_at(kl, jc + 1) == Z_W) { return 0.0; }
 	if (zone_at(kl - 1, jc - 1) == Z_W && zone_at(kl, jc - 1) == Z_W) { return 0.0; }
 	return 1.0;

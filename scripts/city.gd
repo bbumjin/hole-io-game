@@ -102,6 +102,29 @@ const ZONE_CODE := { "D": 0, "C": 1, "R": 2, "P": 3, "W": 4 }
 ## 셋 다 대로(인덱스 mod 3 == 0)라 아스팔트 폭이 13m 다.
 const BRIDGES := [[-3, 2], [0, 2], [3, 2]]
 
+## §33 병합 블록 [k0, j0, k1, j1] (경계 포함). 계획도시라도 모든 블록이 같은 크기는
+## 아니다 — 내부 도로 없이 크게 병합된 그리드가 중간중간 있어야 실제 도시로 읽힌다
+## (유저 지시). 각 rect 는 ① 존 균일 ② **대로 밴드 안**(내부 제거 선이 전부 일반
+## 도로 — 대로는 교통이 달린다) ③ 물·공원·플라자·판정 블록 회피. 전부 감사가
+## 지도로 전수 검증했다. 공원 수퍼블록(존-인접 병합)과는 셀이 겹치지 않는다.
+const MERGES := [
+	[-4, -2, -4, -1],   # A: C 지구 1×2
+	[-2, -2, -1, -2],   # B: D 지구 2×1
+	[4, -6, 5, -5],     # C: R 지구 2×2 (북동 해안)
+	[-6, 4, -5, 5],     # D: R 지구 2×2 (남서 해안)
+	[4, 1, 5, 2],       # E: R 지구 2×2 (동안 내륙)
+	[-6, -6, -5, -5],   # F: R 지구 2×2 (북서 해안)
+]
+
+
+## 셀이 속한 병합 그룹 (0 = 비병합, 1.. = MERGES 인덱스+1).
+static func merge_group(k: int, j: int) -> int:
+	for i in MERGES.size():
+		var m: Array = MERGES[i]
+		if k >= int(m[0]) and k <= int(m[2]) and j >= int(m[1]) and j <= int(m[3]):
+			return i + 1
+	return 0
+
 ## 존별 배치 규격. kinds 는 **블록 내부**에 놓을 수 있는 카탈로그 종류다
 ## (보도·차도 프롭은 존과 무관하게 같은 목록을 쓰고 밀도만 달라진다).
 ## scale_mul 은 블록 내부 프롭에만 곱한다 — 가로등·차는 실제 치수가 규격이다.
@@ -124,7 +147,8 @@ const ZONE_PROFILE := [
 		"tries": 0, "spread": 0.0, "walk_skip": 1.0, "road_skip": 1.0 },
 ]
 
-## 셰이더로 넘길 존 지도의 채널 간격. zone_code * 51 을 R8 한 채널에 담는다.
+## 셰이더로 넘길 존 지도의 채널 간격. zone_code * 51 을 RG8 의 R 채널에 담는다
+## (G 채널은 §33 병합 그룹 id).
 ## 51/255 = 0.2 는 8비트 양자화·필터 오차보다 압도적으로 커서 복호가 견고하다.
 const ZONE_TEX_STEP := 51
 
@@ -434,6 +458,10 @@ static func seg_rule(a: int, b: int, bridge: bool) -> bool:
 static func seg_ew(jl: int, kc: int) -> bool:
 	if not seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)):
 		return false
+	# §33: 같은 병합 그룹 안의 내부 도로는 없다(P-P 규칙과 동형).
+	var g := merge_group(kc, jl - 1)
+	if g != 0 and g == merge_group(kc, jl):
+		return false
 	for d in [1, -1]:
 		if zone_at(kc + d, jl - 1) == Z_WATER and zone_at(kc + d, jl) == Z_WATER \
 				and not is_bridge_ew(jl, kc + d):
@@ -446,6 +474,9 @@ static func seg_ew(jl: int, kc: int) -> bool:
 ## §32: 수변 끝 조항도 교량 분기 없이 대칭 적용된다(바다로 뻗던 스텁이 걷힌다).
 static func seg_ns(kl: int, jc: int) -> bool:
 	if not seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false):
+		return false
+	var g := merge_group(kl - 1, jc)
+	if g != 0 and g == merge_group(kl, jc):
 		return false
 	for d in [1, -1]:
 		if zone_at(kl - 1, jc + d) == Z_WATER and zone_at(kl, jc + d) == Z_WATER:
@@ -464,9 +495,13 @@ static func passable(p: Vector3) -> bool:
 	return is_bridge_ew(jl, k) and absf(p.z - float(jl) * PITCH) <= road_half_at(jl)
 
 
-## P 수퍼블록의 축별 병합 범위 [최소 셀, 최대 셀]. 공원이 아니면 자기 셀 하나다.
+## 축별 병합 범위 [최소 셀, 최대 셀]. 공원은 존-인접 병합(§25), §33 의 병합 rect 는
+## MERGES 로 직접 지정된다 — 두 기구는 셀이 겹치지 않는다(rect 조건 ③).
 ## 경계에서 멈추지 않으면 zone_at 이 테두리를 잘라 같은 값을 돌려주어 무한 루프가 된다.
 static func merge_k(k: int, j: int) -> Vector2i:
+	var g := merge_group(k, j)
+	if g != 0:
+		return Vector2i(int(MERGES[g - 1][0]), int(MERGES[g - 1][2]))
 	if zone_at(k, j) != Z_PARK:
 		return Vector2i(k, k)
 	var k0 := k
@@ -479,6 +514,9 @@ static func merge_k(k: int, j: int) -> Vector2i:
 
 
 static func merge_j(k: int, j: int) -> Vector2i:
+	var g := merge_group(k, j)
+	if g != 0:
+		return Vector2i(int(MERGES[g - 1][1]), int(MERGES[g - 1][3]))
 	if zone_at(k, j) != Z_PARK:
 		return Vector2i(j, j)
 	var j0 := j
@@ -496,8 +534,8 @@ static func is_super_root(k: int, j: int) -> bool:
 	return merge_k(k, j).x == k and merge_j(k, j).x == j
 
 
-## 셀 (k, j) 의 배치 가능 구간. 공원이면 **병합 구간**이다 — 셰이더에서 내부 도로를
-## 지우기만 하고 이 구간을 셀 단위로 두면, 프롭이 옛 도로 띠를 계속 피해
+## 셀 (k, j) 의 배치 가능 구간. 공원·병합 rect(§33)면 **병합 구간**이다 — 셰이더에서
+## 내부 도로를 지우기만 하고 이 구간을 셀 단위로 두면, 프롭이 옛 도로 띠를 계속 피해
 ## "도로만 지워진 블록 넷" 이 되지 "수퍼블록" 이 되지 않는다.
 ## 병합 구간은 첫 비-공원 인접 중심선의 커브에서 멈추므로, 지워진 내부 도로 자리는
 ## 구간에 포함되어 그 위에도 나무가 선다.
@@ -516,11 +554,15 @@ static func span_z(k: int, j: int) -> Vector2:
 ## 셰이더로 넘길 존 지도 텍스처. 여기가 지도의 단일 원천이고 셰이더는 이것을 읽는다
 ## (판정기는 읽지 않는다 — 자기 사본을 든다).
 static func zone_texture() -> ImageTexture:
-	var img := Image.create(CELL_COUNT, CELL_COUNT, false, Image.FORMAT_R8)
+	# §33: G 채널에 병합 그룹 id 를 함께 굽는다(0 = 비병합). 런타임 생성 텍스처라
+	# 임포트·압축 함정이 없고, 셰이더는 texelFetch 정수 조회로 읽는다(보간 금지 —
+	# R 채널과 같은 규약).
+	var img := Image.create(CELL_COUNT, CELL_COUNT, false, Image.FORMAT_RG8)
 	for j in range(CELL_MIN, CELL_MAX + 1):
 		for k in range(CELL_MIN, CELL_MAX + 1):
 			var v := float(zone_at(k, j) * ZONE_TEX_STEP) / 255.0
-			img.set_pixel(k - CELL_MIN, j - CELL_MIN, Color(v, v, v))
+			var g := float(merge_group(k, j)) / 255.0
+			img.set_pixel(k - CELL_MIN, j - CELL_MIN, Color(v, g, 0.0))
 	return ImageTexture.create_from_image(img)
 
 
@@ -535,8 +577,8 @@ func plan_block(rng: RandomNumberGenerator, k: int, j: int, out: Array) -> void:
 	var dz := zone_at(k, j)
 	if dz == Z_WATER:
 		return
-	# 공원은 수퍼블록 하나를 통째로 쓴다 — 대표 셀에서 한 번만 돈다.
-	if dz == Z_PARK and not is_super_root(k, j):
+	# 공원·병합 rect 는 수퍼블록 하나를 통째로 쓴다 — 대표 셀에서 한 번만 돈다(§33).
+	if (dz == Z_PARK or merge_group(k, j) != 0) and not is_super_root(k, j):
 		return
 	var prof: Dictionary = ZONE_PROFILE[dz]
 	# 블록 중앙 자리는 큰 것 전용이다. min_ext 를 안 걸면 이 한 번뿐인 기회를

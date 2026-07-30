@@ -67,6 +67,15 @@ const SPEC_Z_PARK := 3
 const SPEC_Z_WATER := 4
 ## 수역을 건너는 동서 도로 세그먼트 [중심선 인덱스, 셀 인덱스].
 const SPEC_BRIDGES := [[-3, 2], [0, 2], [3, 2]]
+## §33 병합 블록 [k0, j0, k1, j1] — city.gd MERGES 의 판정기 사본.
+const SPEC_MERGES := [
+	[-4, -2, -4, -1],
+	[-2, -2, -1, -2],
+	[4, -6, 5, -5],
+	[-6, 4, -5, 5],
+	[4, 1, 5, 2],
+	[-6, -6, -5, -5],
+]
 
 ## Z1: 존별 지면색을 **휘도**로 가르면 안 된다 — 네 지구가 전부 [아스팔트, 커브] 사이
 ## 좁은 띠 안에 있어야 D1·D4 가 성립하므로 휘도만으로는 서로 붙는다. 대신 조명 배율에
@@ -173,7 +182,9 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ## §31 에서 2125 → 2633 (수변 난간 508 조각이 plan 에 들어왔다 — 재시작 복원의 일부다).
 ## §32 에서 2633 → 2264 (물로 이어진 도로 스텁 54 세그먼트가 걷히며 그 위의
 ## 차도·보도 프롭 369 개가 함께 사라졌다).
-const RESTART_PROPS := 2264
+## §33 에서 2264 → 2100 (병합 rect 6개의 내부 도로 프롭이 사라지고 블록이 수퍼블록
+## 하나로 계획된다 — 셀 수만큼 겹치던 밀도가 하나로 줄어드는 것이 규격이다).
+const RESTART_PROPS := 2100
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -243,6 +254,9 @@ const HUD_KR_MIN := 10
 ## 없게 되고(측정 지점이 동시에 바뀌면 증감 주장이 성립하지 않는다), 그 함정을
 ## 실제로 밟았다(독립 감사가 실측으로 반증했다).
 ##   dense — §14 부터 써 온 지점. 실측상 드로우콜·프리미티브가 가장 많다(2535 / 2.70M).
+##   §33 주의: 이 지점의 셀 (-2,-2) 는 병합 rect B 에 들어가 내부 도로가 사라지고
+##   클러스터가 수퍼블록 중심으로 옮겨졌다 — §33 이전 계측표와의 비교성이 끊겼다.
+##   예산 판정 자체는 유효하다(환경이 가벼워진 쪽이라 보수적이지 않을 뿐).
 ##           역대 계측표와 like-for-like 비교를 위해 반드시 유지한다.
 ##   boul  — z = -96 대로에 접한 블록 중앙. 드로우콜은 더 적지만(2510 / 2.29M)
 ##           worst 프레임이 2배 나쁘다 — 대로 주변은 밀도가 아니라 **가려짐이 적어**
@@ -420,9 +434,30 @@ func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
 	return not (a == SPEC_Z_PARK and b == SPEC_Z_PARK)
 
 
-## §32 수변 끝 조항 포함 — city.gd·셰이더와 같은 규칙의 판정기 사본.
+## §33 Z9: 세그먼트 [축, 선, 셀] 의 픽셀 표본점 — 중심선에서 u=+2(도색 회피, Z8 규약).
+func seg_sample_pt(s: Array) -> Vector3:
+	if s[0] == "ew":
+		return Vector3((float(int(s[2])) + 0.5) * SPEC_PITCH, 0.0,
+			float(int(s[1])) * SPEC_PITCH + 2.0)
+	return Vector3(float(int(s[1])) * SPEC_PITCH + 2.0, 0.0,
+		(float(int(s[2])) + 0.5) * SPEC_PITCH)
+
+
+## §33: 셀이 속한 병합 그룹 (0 = 비병합) — city.gd merge_group 의 사본.
+func spec_merge_group(k: int, j: int) -> int:
+	for i in SPEC_MERGES.size():
+		var m: Array = SPEC_MERGES[i]
+		if k >= int(m[0]) and k <= int(m[2]) and j >= int(m[1]) and j <= int(m[3]):
+			return i + 1
+	return 0
+
+
+## §32 수변 끝 조항 + §33 병합 조항 포함 — city.gd·셰이더와 같은 규칙의 판정기 사본.
 func spec_seg_ew(jl: int, kc: int) -> bool:
 	if not spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc)):
+		return false
+	var g := spec_merge_group(kc, jl - 1)
+	if g != 0 and g == spec_merge_group(kc, jl):
 		return false
 	for d in [1, -1]:
 		if spec_zone(kc + d, jl - 1) == SPEC_Z_WATER \
@@ -434,6 +469,9 @@ func spec_seg_ew(jl: int, kc: int) -> bool:
 
 func spec_seg_ns(kl: int, jc: int) -> bool:
 	if not spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false):
+		return false
+	var g := spec_merge_group(kl - 1, jc)
+	if g != 0 and g == spec_merge_group(kl, jc):
 		return false
 	for d in [1, -1]:
 		if spec_zone(kl - 1, jc + d) == SPEC_Z_WATER \
@@ -452,9 +490,15 @@ func spec_passable(p: Vector3) -> bool:
 		and absf(p.z - float(jl) * SPEC_PITCH) <= spec_road_half(jl)
 
 
-## 공원 수퍼블록의 축별 병합 범위. E2 가 "블록 구간 안인가" 를 물을 때 쓴다.
+## 수퍼블록의 축별 병합 범위. E2 가 "블록 구간 안인가" 를 물을 때 쓴다.
+## §33: 병합 rect 도 인지한다 — 안 하면 옛 내부 도로 자리를 채운 프롭 전부가
+## 구역 이탈로 오탐된다(계획 감사 지적 2).
 func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 	var v := k if along_k else j
+	var g := spec_merge_group(k, j)
+	if g != 0:
+		var m: Array = SPEC_MERGES[g - 1]
+		return Vector2i(int(m[0]), int(m[2])) if along_k else Vector2i(int(m[1]), int(m[3]))
 	if spec_zone(k, j) != SPEC_Z_PARK:
 		return Vector2i(v, v)
 	var lo := v
@@ -3799,6 +3843,97 @@ func run_judge_7() -> void:
 			z8 = z8 and oka
 			print("JUDGE 7 Z8b 진입로 (%.0f,%.0f) 휘도=%.4f %s" % [pa.x, pa.z, lma, pf(oka)])
 
+	# --- Z9: 병합 블록 — 내부 도로 부재·경계 도로 존재(§33) --------------------
+	# 표본 전부 SPEC_MERGES 에서 유도. 세 단언:
+	#   Z9c 거동 대조 — rect 유도 세그먼트(내부+경계) 전부에서 CITY.seg_* 와
+	#       spec_seg_* 가 일치한다. 구현의 거동을 SPEC 에 **대조**하는 것은 원칙
+	#       위반이 아니다(기대값을 구현에서 읽는 것이 위반이다) — 시드 의존 없이
+	#       city.gd 조항 소실을 결정적으로 잡는다(계획 감사 지적 3).
+	#   Z9a 픽셀 — rect 마다 내부 세그먼트 하나의 중점이 아스팔트가 아니다(셰이더).
+	#       표본이 rect 당 하나여도 커버는 성립한다: A 는 EW 전용, B 는 NS 전용
+	#       rect 라 축별 셰이더 조항 소실이 각각 잡히고, 로직 전수는 Z9c 가 덮는다.
+	#   Z9b 픽셀 — **합성 spec(물 규칙+§32+§33)이 존재한다고 하는** 경계 세그먼트만
+	#       아스팔트다. 해안 rect 의 경계는 §32 가 이미 걷었다 — "rect 경계 전부" 로
+	#       물으면 정상 빌드가 거짓 탈락한다(계획 감사 지적 1). 과욕 병합(경계까지
+	#       제거)은 여전히 걸린다 — 합성 spec 이 남긴 세그먼트를 걷으면 F 다.
+	var z9 := true
+	var z9c_bad := 0
+	var z9a_pts := []
+	var z9b_pts := []
+	var cityn: Node = _main.get_node("City")
+	for mi in SPEC_MERGES.size():
+		var m: Array = SPEC_MERGES[mi]
+		var k0 := int(m[0])
+		var j0 := int(m[1])
+		var k1 := int(m[2])
+		var j1 := int(m[3])
+		var internal := []
+		var boundary := []
+		for kl in range(k0 + 1, k1 + 1):
+			for jc in range(j0, j1 + 1):
+				internal.append(["ns", kl, jc])
+		for jl in range(j0 + 1, j1 + 1):
+			for kc in range(k0, k1 + 1):
+				internal.append(["ew", jl, kc])
+		for kl in [k0, k1 + 1]:
+			for jc in range(j0, j1 + 1):
+				boundary.append(["ns", kl, jc])
+		for jl in [j0, j1 + 1]:
+			for kc in range(k0, k1 + 1):
+				boundary.append(["ew", jl, kc])
+		for s in internal + boundary:
+			var spec_has: bool = spec_seg_ew(int(s[1]), int(s[2])) if s[0] == "ew" \
+				else spec_seg_ns(int(s[1]), int(s[2]))
+			var city_has: bool = cityn.seg_ew(int(s[1]), int(s[2])) if s[0] == "ew" \
+				else cityn.seg_ns(int(s[1]), int(s[2]))
+			if spec_has != city_has:
+				z9c_bad += 1
+				if z9c_bad <= 5:
+					print("JUDGE 7 Z9c 거동 불일치: %s(%d,%d) spec=%s city=%s"
+						% [s[0], int(s[1]), int(s[2]), str(spec_has), str(city_has)])
+		z9a_pts.append(seg_sample_pt(internal[0]))
+		var exist := []
+		for s in boundary:
+			var has: bool = spec_seg_ew(int(s[1]), int(s[2])) if s[0] == "ew" \
+				else spec_seg_ns(int(s[1]), int(s[2]))
+			if has:
+				exist.append(s)
+		if exist.is_empty():
+			# 경계가 전부 걷힌 rect 는 정의상 없어야 한다 — 있으면 지도가 잘못됐다.
+			z9 = false
+			print("JUDGE 7 Z9b rect %d: 합성 spec 에 남은 경계 세그먼트가 0개다" % mi)
+		else:
+			z9b_pts.append(seg_sample_pt(exist[0]))
+			if exist.size() > 1:
+				z9b_pts.append(seg_sample_pt(exist[exist.size() - 1]))
+	z9 = z9 and z9c_bad == 0
+	print("JUDGE 7 Z9c 거동 불일치=%d %s" % [z9c_bad, pf(z9c_bad == 0)])
+	for i in z9a_pts.size():
+		var p9: Vector3 = z9a_pts[i]
+		top_down(p9)
+		for _i in 3:
+			await get_tree().process_frame
+		var img9 := await capture("merge_in_%d" % i)
+		var ch9 := chroma(img9, p9)
+		var lm9 := lum_at(img9, p9)
+		var asphalt9: bool = ch9.y < ROAD_B_MAX and absf(ch9.x) < ROAD_G_MAX \
+			and lm9 + ROAD_LUM_MARGIN <= land_min and lm9 >= water_lum + ROAD_LUM_MARGIN
+		z9 = z9 and not asphalt9
+		print("JUDGE 7 Z9a 내부 (%.0f,%.0f) 휘도=%.4f 아스팔트=%s %s"
+			% [p9.x, p9.z, lm9, str(asphalt9), pf(not asphalt9)])
+	for i in z9b_pts.size():
+		var p9: Vector3 = z9b_pts[i]
+		top_down(p9)
+		for _i in 3:
+			await get_tree().process_frame
+		var img9 := await capture("merge_bd_%d" % i)
+		var ch9 := chroma(img9, p9)
+		var lm9 := lum_at(img9, p9)
+		var ok9: bool = ch9.y < ROAD_B_MAX and absf(ch9.x) < ROAD_G_MAX \
+			and lm9 + ROAD_LUM_MARGIN <= land_min and lm9 >= water_lum + ROAD_LUM_MARGIN
+		z9 = z9 and ok9
+		print("JUDGE 7 Z9b 경계 (%.0f,%.0f) 휘도=%.4f %s" % [p9.x, p9.z, lm9, pf(ok9)])
+
 	# --- Z7d: 수변 산책로 띠가 실제로 그려지는가(§31) --------------------------
 	# 표본은 지도에서 유도한다: 물과 접한 육지 셀 가장자리의 스팬 중앙에서, 띠 안(경계
 	# 1m 안쪽)과 띠 밖(경계 SPEC_PROM_W+2.5 안쪽)을 한 캡처에서 함께 읽는다.
@@ -3986,12 +4121,12 @@ func run_judge_7() -> void:
 	print("JUDGE 7 Z7 난간 %d/%d (빠짐=%d 미아=%d) 산책로=%s"
 		% [rails.size(), pieces.size(), z7_missing, z7_stray, pf(z7d)])
 
-	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s Z8=%s (수역프롭=%d clamped=%s)"
-		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), pf(z8),
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s Z8=%s Z9=%s (수역프롭=%d clamped=%s)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), pf(z8), pf(z9),
 		   in_water, str(_clamped)])
 	# 표본이 화면 밖으로 잘렸으면 그 픽셀 판정은 무효다 — 가장자리 픽셀을 읽고
 	# 초록으로 인쇄되는 것이 최악이다(코드 감사가 잡았다. 기존 Z1~Z4 도 같은 패턴).
-	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and z8 and not _clamped
+	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and z8 and z9 and not _clamped
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
