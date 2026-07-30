@@ -1,4 +1,4 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 (rev.29)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 (rev.30)
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
 >
@@ -527,6 +527,9 @@ uniform vec3 water_color  : source_color = vec3(0.13, 0.28, 0.47);   // 강
 uniform vec3 ocean_color  : source_color = vec3(0.08, 0.19, 0.36);   // 지도 테두리 바다
 uniform vec3 bank_color   : source_color = vec3(0.62, 0.58, 0.42);   // 기슭
 uniform float bank_w = 2.4;
+// §31 수변 산책로: 물과 접한 육지 셀 가장자리의 포장 띠. 기슭 띠(물 쪽)와 대칭이다.
+uniform vec3 prom_color   : source_color = vec3(0.44, 0.43, 0.39);
+uniform float prom_w = 2.0;
 
 // 존 지도의 규격 상수. city.gd 의 CELL_MIN·CELL_COUNT·ZONE_TEX_STEP 과 같은 값이다.
 const int ZMIN = -7;
@@ -640,6 +643,26 @@ void fragment() {
 		base = zone_r_color;
 	} else {
 		base = zone_p_color;
+	}
+
+	// --- §31 수변 산책로 (육지 쪽) --------------------------------------------
+	// 도로보다 **먼저** 섞는다 — 뒤의 도로·보도 띠가 이 위에 덮여 "도로 > 산책로 >
+	// 존색" 우선순위가 된다(교량 접근부의 아스팔트에 가로 띠가 생기면 안 된다).
+	// 셀 가장자리에서 prom_w 이내인 픽셀만 이웃을 읽는다. 물가만이 아니라 **모든**
+	// 내부 셀 경계 근처(육지 픽셀의 ~2할)에서 fetch 가 도는 것은 맞다 — §25 의
+	// 완전 회피에는 못 미치는 완화이고, 예산 준수는 3c 가 최종 판정한다(실측 PASS).
+	if (zc != Z_W) {
+		float px = p.x - float(kc) * block_pitch;
+		float pz = p.y - float(jc) * block_pitch;
+		float m = min(min(px, block_pitch - px), min(pz, block_pitch - pz));
+		if (m < prom_w) {
+			float prom = 0.0;
+			if (zone_at(kc - 1, jc) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, px)); }
+			if (zone_at(kc + 1, jc) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, block_pitch - px)); }
+			if (zone_at(kc, jc - 1) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, pz)); }
+			if (zone_at(kc, jc + 1) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, block_pitch - pz)); }
+			base = mix(base, prom_color, prom);
+		}
 	}
 
 	// 도로 마스크. 남북 도로는 자기가 걸친 z-셀로, 동서 도로는 x-셀로 존재를 묻는다.
@@ -2106,7 +2129,8 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ## §25 에서 3876 → 2236 으로 줄었다. 줄어든 것이 규격이다 — 바다 테두리(52셀)와
 ## 강(14셀)에는 아무것도 놓지 않고, 공원 9셀은 수퍼블록 셋으로 합쳐 한 번만 채우며,
 ## 걷힌 도로 위의 보도·차도 프롭이 사라졌다.
-const RESTART_PROPS := 2125
+## §31 에서 2125 → 2633 (수변 난간 508 조각이 plan 에 들어왔다 — 재시작 복원의 일부다).
+const RESTART_PROPS := 2633
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -2274,6 +2298,77 @@ func spec_is_bridge_ew(jl: int, kc: int) -> bool:
 		if int(b[0]) == jl and int(b[1]) == kc:
 			return true
 	return false
+
+
+# --- §31 수변 난간 규격 사본 --------------------------------------------------
+## city.gd 의 plan_rails 와 같은 규칙을 판정기가 따로 든다(세 벌 규격의 관례).
+## 구현체의 상수·함수를 읽지 않는다 — 난간 간격을 바꾼 빌드는 여기에 걸려야 한다.
+const SPEC_RAIL_LEN := 4.0
+const SPEC_RAIL_INSET := 0.5
+const SPEC_RAIL_TRIM := 1.0
+const SPEC_RAIL_PREFIX := "rail_"        # 노드 이름은 판정과의 계약(§26)
+const SPEC_RAIL_PATH := "proc://rail"
+const SPEC_RAIL_TOL := 0.25              # 기대 자리와 실제 조각의 허용 거리
+const SPEC_PROM_W := 2.0                 # 산책로 띠 폭 (셰이더 사본)
+const PROM_SAMPLES := 6                  # Z7d 픽셀 표본 수 (강 3 + 바다 3)
+## Z7d: 띠 안팎 휘도 차 하한. 실측 최소 0.092 (Forward+, 존 지면 0.571~0.574 대
+## 산책로 0.478)의 1/3 — 백엔드별 렌더 차이 여유.
+const PROM_LUM_MARGIN := 0.03
+
+
+func spec_rail_open_half(jl: int) -> float:
+	return spec_curb_half(jl) + 1.0
+
+
+## 기대 난간 조각 위치 전부. plan_rails 의 판정기 사본 — 지도에서 유도하고
+## 손으로 적지 않는다(§25 의 교량 표본 함정).
+func spec_rail_pieces() -> Array:
+	var pieces := []
+	for k in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+		for j in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_zone(k, j) == SPEC_Z_WATER:
+				continue
+			for d in [[1, 0], [-1, 0], [0, 1], [0, -1]]:
+				spec_rail_edge(pieces, k, j, int(d[0]), int(d[1]))
+	return pieces
+
+
+func spec_rail_edge(pieces: Array, k: int, j: int, dk: int, dj: int) -> void:
+	if spec_zone(k + dk, j + dj) != SPEC_Z_WATER:
+		return
+	var along_x := dj != 0
+	var line: float
+	if dk != 0:
+		line = float(k + maxi(dk, 0)) * SPEC_PITCH - float(dk) * SPEC_RAIL_INSET
+	else:
+		line = float(j + maxi(dj, 0)) * SPEC_PITCH - float(dj) * SPEC_RAIL_INSET
+	var s0: float = float(k if along_x else j) * SPEC_PITCH
+	var s1: float = s0 + SPEC_PITCH
+	if along_x:
+		if spec_zone(k - 1, j) == SPEC_Z_WATER:
+			s0 += SPEC_RAIL_TRIM
+		if spec_zone(k + 1, j) == SPEC_Z_WATER:
+			s1 -= SPEC_RAIL_TRIM
+	else:
+		if spec_zone(k, j - 1) == SPEC_Z_WATER:
+			s0 += SPEC_RAIL_TRIM
+		if spec_zone(k, j + 1) == SPEC_Z_WATER:
+			s1 -= SPEC_RAIL_TRIM
+	var opens := []
+	if not along_x:
+		for b in SPEC_BRIDGES:
+			if k + dk == int(b[1]):
+				opens.append([float(int(b[0])) * SPEC_PITCH, spec_rail_open_half(int(b[0]))])
+	var c: float = s0 + SPEC_RAIL_LEN * 0.5
+	while c + SPEC_RAIL_LEN * 0.5 <= s1 + 0.001:
+		var blocked := false
+		for o in opens:
+			if absf(c - float(o[0])) < float(o[1]) + SPEC_RAIL_LEN * 0.5:
+				blocked = true
+				break
+		if not blocked:
+			pieces.append(Vector3(c, 0.0, line) if along_x else Vector3(line, 0.0, c))
+		c += SPEC_RAIL_LEN
 
 
 func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
@@ -3517,6 +3612,12 @@ func run_judge_3b() -> void:
 	var boul_lane_bad := 0
 	var e8_bad := 0
 	var canopy_n := 0
+	# §31: 난간의 기대 자리. 난간은 걷힌 도로의 기하 밴드 위에 서므로 zone_of 로
+	# 판정하면 안 된다(바다 안쪽 난간 전량이 대로 밴드에 선다 — 계획 감사가 산술로
+	# 보였다). 존 밴드 대신 **수변 규격 자리와의 일치**를 묻는다.
+	var rail_pieces := spec_rail_pieces()
+	var rail_n := 0
+	var rail_bad := 0
 	for o in props:
 		var n3 := o as Node3D
 		if n3 == null:
@@ -3526,15 +3627,51 @@ func run_judge_3b() -> void:
 			e5_bad += 1
 			continue
 		boxes.append(bx["pts"])
-		var z := zone_of(bx["pts"])
-		if z.is_empty():
-			e2_bad += 1
-			if e2_bad <= 5:
-				print("JUDGE 3b E2 구역 이탈: %s at %s" % [n3.name, str(n3.position)])
-		else:
-			zone_n[z] += 1
+		var is_rail := String(n3.name).begins_with(SPEC_RAIL_PREFIX)
+		if is_rail:
+			rail_n += 1
+			var best := INF
+			var best_rp := Vector3.ZERO
+			for rp in rail_pieces:
+				var d := Vector2(n3.position.x - (rp as Vector3).x,
+					n3.position.z - (rp as Vector3).z).length()
+				if d < best:
+					best = d
+					best_rp = rp
+			# 장축 방향도 묻는다 — 위치만 보면 전 조각을 90° 돌린 빌드가 통과한다
+			# (코드 감사). 규격 축은 자리에서 유도한다: 난간 선 좌표는 셀 경계에서
+			# inset(0.5) 만큼 안쪽이므로, x 가 그 꼴이면 남북(z 축) 난간이다.
+			var px_f := fposmod(best_rp.x, SPEC_PITCH)
+			var want_along_x: bool = not (absf(px_f - SPEC_RAIL_INSET) < 0.01
+				or absf(px_f - (SPEC_PITCH - SPEC_RAIL_INSET)) < 0.01)
+			var xmin := INF
+			var xmax := -INF
+			var zmin := INF
+			var zmax := -INF
+			for q in bx["pts"]:
+				xmin = minf(xmin, (q as Vector2).x)
+				xmax = maxf(xmax, (q as Vector2).x)
+				zmin = minf(zmin, (q as Vector2).y)
+				zmax = maxf(zmax, (q as Vector2).y)
+			var got_along_x: bool = (xmax - xmin) > (zmax - zmin)
+			if best > SPEC_RAIL_TOL or want_along_x != got_along_x:
+				e2_bad += 1
+				rail_bad += 1
+				if e2_bad <= 5:
+					print("JUDGE 3b E2 난간이 수변 규격 밖: %s at %s (최근접 %.2f, 축 기대/실제 %s/%s)"
+						% [n3.name, str(n3.position), best,
+						   "x" if want_along_x else "z", "x" if got_along_x else "z"])
+		var z := "" if is_rail else zone_of(bx["pts"])
+		if not is_rail:
+			if z.is_empty():
+				e2_bad += 1
+				if e2_bad <= 5:
+					print("JUDGE 3b E2 구역 이탈: %s at %s" % [n3.name, str(n3.position)])
+			else:
+				zone_n[z] += 1
 		# E7: 일반 도로 규격에서는 불가능한 자리에 선 프롭을 따로 센다.
-		var bs := boulevard_slot(bx["pts"])
+		# §31: 난간은 제외 — 걷힌 대로 밴드 위가 규격 자리다(위의 수변 판정이 담당).
+		var bs := ["", 0, 0.0, 0] if is_rail else boulevard_slot(bx["pts"])
 		if not str(bs[0]).is_empty():
 			boul_n[str(bs[0])] += 1
 			if str(bs[0]) == "road":
@@ -3633,7 +3770,10 @@ func run_judge_3b() -> void:
 	var e6: bool = e6_bad == 0 and jset == 8
 
 	get_tree().paused = false
-	var e2: bool = e2_bad == 0
+	# §31: 미아 없음(위의 rail_bad)에 더해 **빠짐 없음**도 묻는다 — 개수가 기대 조각
+	# 수와 같아야 한다. 한쪽만 물으면 난간 패스를 통째로 지운 빌드가 통과한다.
+	var e2: bool = e2_bad == 0 and rail_n == rail_pieces.size()
+	print("JUDGE 3b E2 난간: %d/%d (규격 밖 %d)" % [rail_n, rail_pieces.size(), rail_bad])
 	var e3: bool = e3_bad == 0
 	# E5 는 정지 판정도 포함한다: 도시는 구멍이 닿기 전까지 스스로 움직이지 않는다.
 	var e5: bool = e5_bad == 0 and moved <= SETTLE_MOVE_TOL and tilted <= TILT_TOL
@@ -5529,6 +5669,70 @@ func run_judge_7() -> void:
 		z4 = z4 and ok
 		print("JUDGE 7 교량아님 (%.0f,%.0f) 파랑우세=%.4f %s"
 			% [(p as Vector3).x, (p as Vector3).z, ch.y, pf(ok)])
+
+	# --- Z7d: 수변 산책로 띠가 실제로 그려지는가(§31) --------------------------
+	# 표본은 지도에서 유도한다: 물과 접한 육지 셀 가장자리의 스팬 중앙에서, 띠 안(경계
+	# 1m 안쪽)과 띠 밖(경계 SPEC_PROM_W+2.5 안쪽)을 한 캡처에서 함께 읽는다.
+	# 양방향 — "띠 안이 띠 밖과 다르다" 를 물으므로, 띠를 안 그린 빌드도(같음)
+	# 존 전체를 산책로색으로 칠한 빌드도(역시 같음) 걸린다. 물이면 안 된다는 것도 함께.
+	# 강 양안과 바다 가장자리를 **따로** 표본한다 — 하나의 목록에서 고르게 뽑으면
+	# 수가 많은 바다 가장자리가 표본을 전부 차지해 강 산책로가 판정을 안 받는다(실측:
+	# 첫 구현의 표본 6개가 전부 바다였다).
+	var prom_river := []
+	var prom_ocean := []
+	for kq in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+		for jq in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_zone(kq, jq) == SPEC_Z_WATER:
+				continue
+			var mid_x := (float(kq) + 0.5) * SPEC_PITCH
+			var mid_z := (float(jq) + 0.5) * SPEC_PITCH
+			for d in [[-1, 0], [1, 0], [0, -1], [0, 1]]:
+				var dk := int(d[0])
+				var dj := int(d[1])
+				if spec_zone(kq + dk, jq + dj) != SPEC_Z_WATER:
+					continue
+				var edge_w: float
+				var p_in: Vector3
+				var p_out: Vector3
+				if dk != 0:
+					edge_w = float(kq + maxi(dk, 0)) * SPEC_PITCH
+					p_in = Vector3(edge_w - float(dk) * 1.0, 0.0, mid_z)
+					p_out = Vector3(edge_w - float(dk) * (SPEC_PROM_W + 2.5), 0.0, mid_z)
+				else:
+					edge_w = float(jq + maxi(dj, 0)) * SPEC_PITCH
+					p_in = Vector3(mid_x, 0.0, edge_w - float(dj) * 1.0)
+					p_out = Vector3(mid_x, 0.0, edge_w - float(dj) * (SPEC_PROM_W + 2.5))
+				# 강 = 세로 물기둥(교량 규격 SPEC_BRIDGES 의 kc 열). 그 외는 바다 테두리다.
+				if dk != 0 and kq + dk == int(SPEC_BRIDGES[0][1]):
+					prom_river.append([p_in, p_out])
+				else:
+					prom_ocean.append([p_in, p_out])
+	# 가드는 **인덱싱보다 앞**에 둔다 — 빈 목록이면 FAIL 이어야지 크래시면 안 된다.
+	# 나눗수는 표본 수에서 유도한다(하드코딩하면 표본 수를 바꿀 때 조용히 어긋난다).
+	var z7d: bool = prom_river.size() >= 2 and prom_ocean.size() >= 2
+	var samples := []
+	if z7d:
+		var nr := 3      # 강: 서안 처음·중간·동안 끝 — 목록이 k 오름차순이라 양안이 걸린다
+		for i in nr:
+			samples.append(prom_river[i * (prom_river.size() - 1) / (nr - 1)])
+		var no := PROM_SAMPLES - nr
+		for i in no:
+			samples.append(prom_ocean[i * (prom_ocean.size() - 1) / maxi(no - 1, 1)])
+	for i in samples.size():
+		var pe: Array = samples[i]
+		var p_in: Vector3 = pe[0]
+		var p_out: Vector3 = pe[1]
+		top_down(p_in)
+		for _i in 3:
+			await get_tree().process_frame
+		var img := await capture("prom_%d" % i)
+		var lin := lum_at(img, p_in)
+		var lout := lum_at(img, p_out)
+		var cin := chroma(img, p_in)
+		var ok7: bool = absf(lin - lout) >= PROM_LUM_MARGIN and cin.y < ZONE_W_MARGIN
+		z7d = z7d and ok7
+		print("JUDGE 7 Z7d 산책로 (%.0f,%.0f) 띠휘도=%.4f 밖휘도=%.4f 차=%.4f(>=%.2f) 파랑=%.4f %s"
+			% [p_in.x, p_in.z, lin, lout, absf(lin - lout), PROM_LUM_MARGIN, cin.y, pf(ok7)])
 	restore_props(saved)
 
 	# 항공 뷰 두 장. **판정이 아니라 휴먼 검수용**이다 — 지구·강·공원·바다가 사람 눈에
@@ -5619,9 +5823,45 @@ func run_judge_7() -> void:
 			print("JUDGE 7 Z6 공원 연결성분 k[%d..%d] j[%d..%d] 셀=%d 외접=%d %s"
 				% [lo.x, hi.x, lo.y, hi.y, comp.size(), area, pf(rect)])
 
-	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s (수역프롭=%d)"
-		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), in_water])
-	var ok := z1 and z2 and z3 and z4 and z5 and z6
+	# --- Z7: 수변 난간 — 규격 조각 집합과 계획의 일치(§31) ---------------------
+	# 미아 없음(모든 난간이 규격 자리)과 빠짐 없음(모든 규격 자리에 난간) 양방향.
+	# 교량 개구·물 위 금지는 별도 기준이 아니다 — 규격 집합 자체가 개구를 비우고
+	# 육지에만 있으므로, 집합 일치가 셋을 한꺼번에 묻는다.
+	var pieces := spec_rail_pieces()
+	var rails := []
+	for it in items:
+		if String(it["path"]) == SPEC_RAIL_PATH:
+			rails.append(it["pos"] as Vector3)
+	var z7_missing := 0
+	for rp in pieces:
+		var best := INF
+		for ra in rails:
+			best = minf(best, Vector2((rp as Vector3).x - (ra as Vector3).x,
+				(rp as Vector3).z - (ra as Vector3).z).length())
+		if best > SPEC_RAIL_TOL:
+			z7_missing += 1
+			if z7_missing <= 3:
+				print("JUDGE 7 Z7 규격 자리에 난간 없음: %s (최근접 %.2f)" % [str(rp), best])
+	var z7_stray := 0
+	for ra in rails:
+		var best := INF
+		for rp in pieces:
+			best = minf(best, Vector2((rp as Vector3).x - (ra as Vector3).x,
+				(rp as Vector3).z - (ra as Vector3).z).length())
+		if best > SPEC_RAIL_TOL:
+			z7_stray += 1
+			if z7_stray <= 3:
+				print("JUDGE 7 Z7 규격 밖 난간: %s (최근접 %.2f)" % [str(ra), best])
+	var z7: bool = z7_missing == 0 and z7_stray == 0 \
+		and rails.size() == pieces.size() and z7d
+	print("JUDGE 7 Z7 난간 %d/%d (빠짐=%d 미아=%d) 산책로=%s"
+		% [rails.size(), pieces.size(), z7_missing, z7_stray, pf(z7d)])
+
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s (수역프롭=%d clamped=%s)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), in_water, str(_clamped)])
+	# 표본이 화면 밖으로 잘렸으면 그 픽셀 판정은 무효다 — 가장자리 픽셀을 읽고
+	# 초록으로 인쇄되는 것이 최악이다(코드 감사가 잡았다. 기존 Z1~Z4 도 같은 패턴).
+	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and not _clamped
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -6539,6 +6779,7 @@ func plan(s: int) -> Array:
 			plan_block(rng, k, j, out)
 			plan_walk(rng, k, j, out)
 			plan_road(rng, k, j, out)
+	plan_rails(out)      # §31: 수변 난간 — plan 안에 있어야 T5·E4 가 공짜로 덮는다
 	return out
 
 
@@ -6652,6 +6893,85 @@ static func is_bridge_ew(jl: int, kc: int) -> bool:
 		if int(b[0]) == jl and int(b[1]) == kc:
 			return true
 	return false
+
+
+# --- §31 수변 난간 -----------------------------------------------------------
+## 물과 접한 육지 셀 가장자리를 난간이 따라간다. 강 특례가 아니라 **존 지도의
+## 함수**다 — 강 양안과 바다 안쪽 테두리가 같은 규칙으로 처리된다.
+## 유저 피드백 4("도로가 물속으로 들어간다")의 대책: 걷힌 도로 자리(빈 띠)를
+## 난간이 가로질러 동서 도로 dead-end 의 끝단 처리를 겸한다.
+const RAIL_PATH := "proc://rail"   # 카탈로그 밖 절차 생성 — make_prop 이 분기한다
+const RAIL_LEN := 4.0              # 조각 배치 간격
+const RAIL_BODY := 3.8             # 벽 길이. 0.2 간격이 E3(생성 시점 겹침 배제)를 지킨다
+const RAIL_H := 0.9
+const RAIL_T := 0.18
+const RAIL_INSET := 0.5            # 물 경계에서 육지 쪽으로
+const RAIL_TRIM := 1.0             # 직교 난간과 만나는 모서리 여백 — 겹침 방지
+
+
+## 교량 어귀 개구 반폭. 교량 보도 바깥(curb)보다 넓어야 진입(차·시민)을 안 막는다.
+static func rail_open_half(jl: int) -> float:
+	return curb_half_at(jl) + 1.0
+
+
+## 난간 조각 전체를 계획한다. 난수가 없다 — 배치가 순수하게 지도의 함수다.
+static func plan_rails(out: Array) -> void:
+	for k in range(CELL_MIN, CELL_MAX + 1):
+		for j in range(CELL_MIN, CELL_MAX + 1):
+			if zone_at(k, j) == Z_WATER:
+				continue
+			rail_edge(out, k, j, 1, 0)
+			rail_edge(out, k, j, -1, 0)
+			rail_edge(out, k, j, 0, 1)
+			rail_edge(out, k, j, 0, -1)
+
+
+## 셀 (k,j) 의 (dk,dj) 쪽 이웃이 물이면 그 가장자리를 따라 조각을 놓는다.
+## 지도 밖 이웃은 zone_at 의 클램프가 자기 자신(육지)을 돌려주므로 자연히 걸러진다.
+static func rail_edge(out: Array, k: int, j: int, dk: int, dj: int) -> void:
+	if zone_at(k + dk, j + dj) != Z_WATER:
+		return
+	var along_x := dj != 0                       # 물이 남북 쪽 → 난간은 x 축을 따라 눕는다
+	# 난간 선: 셀 경계에서 육지 쪽으로 RAIL_INSET.
+	var line: float
+	if dk != 0:
+		line = float(k + maxi(dk, 0)) * PITCH - float(dk) * RAIL_INSET
+	else:
+		line = float(j + maxi(dj, 0)) * PITCH - float(dj) * RAIL_INSET
+	# 스팬: 셀의 직교 방향 구간. 양 끝의 직교 이웃도 물이면(모서리) 직교 난간과
+	# 겹치지 않게 물린다.
+	var s0: float = float(k if along_x else j) * PITCH
+	var s1: float = s0 + PITCH
+	if along_x:
+		if zone_at(k - 1, j) == Z_WATER:
+			s0 += RAIL_TRIM
+		if zone_at(k + 1, j) == Z_WATER:
+			s1 -= RAIL_TRIM
+	else:
+		if zone_at(k, j - 1) == Z_WATER:
+			s0 += RAIL_TRIM
+		if zone_at(k, j + 1) == Z_WATER:
+			s1 -= RAIL_TRIM
+	# 교량 개구: 강 양안(남북 방향 난간)에서만 성립한다 — 교량은 전부 동서 대로다.
+	var opens := []
+	if not along_x:
+		for b in BRIDGES:
+			if k + dk == int(b[1]):
+				opens.append([float(int(b[0])) * PITCH, rail_open_half(int(b[0]))])
+	var c: float = s0 + RAIL_LEN * 0.5
+	while c + RAIL_LEN * 0.5 <= s1 + 0.001:
+		var blocked := false
+		for o in opens:
+			if absf(c - float(o[0])) < float(o[1]) + RAIL_LEN * 0.5:
+				blocked = true
+				break
+		if not blocked:
+			var pos := Vector3(c, 0.0, line) if along_x else Vector3(line, 0.0, c)
+			var ex := Vector2(RAIL_BODY * 0.5, RAIL_T * 0.5) if along_x \
+				else Vector2(RAIL_T * 0.5, RAIL_BODY * 0.5)
+			out.append({ "path": RAIL_PATH, "scale": 1.0, "zone": "rail",
+				"pos": pos, "ex": ex, "yaw": 0.0 if along_x else PI * 0.5 })
+		c += RAIL_LEN
 
 
 ## 도로 세그먼트가 존재하는가. **존 지도에서 파생되는 순수 함수**이고 별도 데이터가 없다.
@@ -7003,7 +7323,44 @@ func build(items: Array) -> void:
 		add_child(make_prop(items[i], i))
 
 
+## §31 난간 조각. 에셋이 아니라 절차 생성이다(팩에 난간이 없다 — §28 의 시민과 같은
+## 판단). 나지막한 콘크리트 난간벽 하나 — 이 카메라 고도에서 "여기서 길이 끝난다" 로
+## 읽히는 가장 싼 형태다. 형상·색의 미감은 휴먼 검수의 몫(전역 원칙 §1).
+func make_rail(it: Dictionary, idx: int) -> RigidBody3D:
+	var body := RigidBody3D.new()
+	body.set_script(SWALLOWABLE)
+	body.collision_layer = 2
+	body.collision_mask = 1 | 2
+	body.name = "rail_%d" % idx          # 이름은 판정과의 계약이다(§26) — E2·Z7 이 읽는다
+	body.position = it["pos"]
+	body.rotation.y = it["yaw"]
+	body.add_to_group("swallowable")
+	body.start_frozen = true
+
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(RAIL_BODY, RAIL_H, RAIL_T)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.66, 0.66, 0.62)
+	bm.material = mat
+	mi.mesh = bm
+	mi.position.y = RAIL_H * 0.5
+	body.add_child(mi)
+
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(RAIL_BODY, RAIL_H, RAIL_T)
+	cs.shape = box
+	cs.position.y = RAIL_H * 0.5
+	body.add_child(cs)
+
+	body.mass = clampf(RAIL_BODY * RAIL_H * RAIL_T * 0.25, 0.5, 400.0)
+	return body
+
+
 func make_prop(it: Dictionary, idx: int) -> RigidBody3D:
+	if it["path"] == RAIL_PATH:
+		return make_rail(it, idx)
 	var mesh := mesh_of(it["path"])
 	var ab := mesh.get_aabb()
 	var s: float = it["scale"]
@@ -8399,7 +8756,7 @@ G5(4a의 "지면 밖으로 나간 구멍")도 함께 넓혔다 — 이제 **물 
 - **기슭에 걸친 구멍은 허용이다.** Z5는 구멍 **중심**만 본다 — 원반 절반이 물 위에 걸치는 것은 "강기슭이 파인" 연출이고, 반경 마진으로 막으면 교량 진입로 접근까지 막힌다. 구현자가 이를 버그로 오인해 고치지 말 것.
 - **교량에는 프롭이 없다.** Z3를 "수역 셀 안에 프롭 0개"라는 예외 없는 단언으로 두기 위한 선택이다. Phase B의 주행 차량은 교량을 건너므로, 그때 M3에 교량 예외를 명시해야 한다(PLAN2 §4에 적어 두었다).
 - **교량의 시각 경계와 통과 경계가 1.6m 어긋난다.** 셰이더는 교량 자리에 보도(반폭 8.5)까지 그리는데 `passable`은 아스팔트(6.5)까지만 연다. 보도처럼 보이는 띠에 구멍 중심이 못 올라간다. 보수적인 쪽이라 두었지만 두 사본의 경계가 다르다는 것은 기록해 둔다.
-- **강 양안의 걷힌 도로 자리는 빈 띠로 남는다.** 공원은 병합으로 옛 도로 자리까지 채웠지만(A4), 강기슭은 `span_x`가 여전히 없어진 도로의 커브에서 멈춰 폭 ~6.8m의 프롭 없는 띠가 두 줄 생긴다. 강변 완충지로 읽히므로 그대로 두었다 — **의도한 것이지 누락이 아니다.**
+- **강 양안의 걷힌 도로 자리는 빈 띠로 남는다.** 공원은 병합으로 옛 도로 자리까지 채웠지만(A4), 강기슭은 `span_x`가 여전히 없어진 도로의 커브에서 멈춰 폭 ~6.8m의 프롭 없는 띠가 두 줄 생긴다. 강변 완충지로 읽히므로 그대로 두었다 — ~~의도한 것이지 누락이 아니다.~~ **(§31 이 기각했다)** 유저 플레이 피드백이 "도로가 물속으로 들어간다" 로 읽었고, 이 띠는 §31 의 난간·산책로가 채운다.
 - **judge7은 존 지도의 어긋남을 표본 다섯 점 밖에서 스스로 잡지 못한다.** 지도를 한쪽만 고치면 3b의 E2(구역 이탈)와 5의 T5(프롭 수 정확 일치)가 잡는다 — 게이트 전체로는 막히지만 judge7 단독으로는 아니다.
 - **`zone_of`가 셀을 실측 발자국 중심에서 뽑는다.** 구현체는 슬롯 중심 `pos`로 뽑는데 콜라이더에는 XZ 오프셋이 있어, 셀 경계 근처에서 둘이 갈릴 수 있다(지금은 안 갈린다 — E2 bad=0). §25가 존 파생을 셀 인덱스에 얹으면서 새로 생긴 민감도다.
 - **존별 밀도·스케일 배수는 체감으로 조정할 값이다.** 유저가 아직 길게 플레이하지 않았다.
@@ -9779,3 +10136,42 @@ K8 을 보장 집합의 경계(q=1.053, 여유 5%)에 붙이려던 첫 시도는
 - 회색 지대(택시·SUV 등 fit < R < 외접)의 잔존 견인은 의도다 — 유저가 재차 신고하면 그때 다룬다.
 - 게이트 경계 판별은 [0.63, 1.41] 괄호 밖만 보장한다.
 - 대형차가 걸린 채 흡입만 0 이 되므로, 림 위에 얹혀 덜컹이는 시각 효과는 남는다(§23 림의 거동 — 의도).
+
+## §31. 수변에는 난간과 산책로가 있다 (구현·검증 완료, rev.30)
+
+유저 플레이 피드백 4 — "도로가 물로 이어지는 것이 어색하다." §25 가 "강변 완충지로 읽힌다" 며 의도로 남겼던 빈 띠(8402행)를 유저 피드백이 기각했다. 인수인계의 처방대로 **난간·둑(산책로)·도로 끝단** 셋을 규격으로 세웠다.
+
+### 규격 — 수변 처리는 존 지도의 함수다 (강 특례가 아니다)
+
+- **산책로(셰이더)**: 물 셀과 접한 육지 셀 가장자리에 폭 `prom_w`(2.0m) 포장 띠를 칠한다. 기존 기슭 띠(물 쪽 2.4m)와 대칭 — 물 쪽은 §25 가 이미 그렸고 육지 쪽을 새로 달았다. 우선순위는 **도로 > 산책로 > 존색**(산책로를 도로보다 먼저 섞는다) — 교량 접근부 아스팔트에 가로 띠가 생기면 안 된다(계획 감사). 셀 가장자리에서 prom_w 이내인 픽셀만 이웃 texelFetch — §25 의 fetch 회피 원칙을 거리 분기로 지킨다.
+- **난간(프롭)**: 물 경계에서 육지 쪽 0.5m 에 길이 4m(벽 3.8m — 0.2 간격이 E3 를 지킨다) 콘크리트 난간벽을 절차 생성(§28 의 시민과 같은 판단 — 팩에 난간이 없다)으로 잇는다. frozen swallowable — **삼킬 수 있다**(§23 세계관, 계획 감사가 금지 예외를 만들지 말라 했다). 교량 어귀는 `curb+1.0` 반폭으로 비운다. 모서리(물이 두 방향인 셀)는 1.0m 물려 직교 난간과의 겹침을 막는다. **걷힌 도로 자리도 난간이 가로지른다** — 동서 도로 dead-end 의 끝단 처리를 겸한다. 배치에 난수가 없다 — 순수하게 지도의 함수. 총 508조각.
+- **plan() 안에 넣었다** — 재시작 복원(T5)·시드 지문(E4)이 공짜로 덮는다(계획 감사 지적 4).
+
+### 판정 — Z7 (judge7) · E2 확장 (judge3b) · 주입 4종 실증
+
+| 기준 | 묻는 것 | 주입 | 결과 |
+|---|---|---|---|
+| Z7 집합 일치 | SPEC 지도에서 유도한 기대 조각 집합과 계획의 난간 집합이 **양방향** 일치(빠짐 0 · 미아 0 · 개수 동일). 교량 개구·물 위 금지는 별도 기준이 아니라 집합 자체의 성질이다 | I1 패스 제거 → 빠짐 508 · I2 개구 스킵 제거 → 미아 36 · I3 inset 반전 → 미아 508 + Z3 F | 전부 F ✓ |
+| Z7d 산책로 픽셀 | 수변 띠 안(경계 1m)과 밖(4.5m)의 렌더 휘도 차 ≥ 0.03 (실측 0.092 의 1/3) 그리고 물이 아님. **강 3 표본 + 바다 3 표본** | I4 띠 제거 → 차 0.0000 | F ✓ |
+| E2 확장 | 난간은 존 밴드가 아니라 수변 규격 자리로 판정(걷힌 대로 밴드 위가 규격 자리다 — zone_of 로 보면 바다 안쪽 난간 전량이 대로 밴드에 선다, 계획 감사가 산술로 보임). 미아 없음 + 개수 일치 | I1 이 여기도 걸림 | F ✓ |
+
+Z7d 의 첫 구현은 표본 6개가 **전부 바다**였다 — 목록에서 고르게 뽑으면 수가 많은 바다 가장자리가 표본을 다 차지해 정작 강 산책로가 판정을 안 받는다. 강/바다를 따로 표본한다(각 3개, 강 목록은 k 오름차순이라 양안이 걸린다).
+
+산책로색은 첫 값(0.55)이 존 지면과 휘도 차 0.0096 으로 **판별 불능**이었다 — 어둡게(0.44) 바꿔 차 0.092 를 확보했다. 시각적으로도 포장 산책로가 더 잘 읽힌다(미감의 최종 판단은 휴먼 검수 — 전역 원칙 §1).
+
+### 파생 상수 재유도
+
+- `RESTART_PROPS` 2125 → **2633** (+508, T5·T7)
+- 판정 개수는 그대로 13/13/12 — Z7 은 judge7 안의 기준 추가다.
+
+### 감사 (계획 86 → 코드 93/100)
+
+코드 감사가 규격 사본 두 벌(city/screenshot)을 독립 재현으로 **비트 단위 동일 집합**임을 확인했고(508조각·개구 미아 36 재현), 비차단 지적 4건을 반영했다: ① **난간 장축 방향 판정** — 위치만 대조하면 전 조각을 90° 돌린 빌드가 통과한다. E2 가 발자국 장축과 규격 축(난간 선 좌표의 inset 꼴에서 유도)을 대조한다. 주입 I5(90° 회전)로 실증 — 위치 오차 0.00 인데 축 불일치로 걸린다. ② Z7d 의 빈 목록 가드를 인덱싱 앞으로, 나눗수를 표본 수에서 유도. ③ judge7 통과식에 `not _clamped` — 표본이 화면 밖으로 잘리면 무효다(기존 Z1~Z4 도 같은 패턴이던 것을 §31 이 고쳤다). ④ 셰이더 fetch 주석의 과장 완화(내부 셀 경계 ~2할에서도 fetch 가 돈다 — 예산은 3c 실측 PASS).
+
+감사가 휴먼 검수로 넘긴 것: **난간 점수 362점/조각**(외접반경² 비례라 얇은 벽이 중형차급 — 기슭이 점수 밭이 된다), 난간·산책로 색과 4m 리듬의 미감. 밸런스는 유저 플레이로 판단한다.
+
+### 남긴 한계
+
+- 난간이 서 있는 곳은 물 **경계선**이지 물리적 벽이 아니다 — 밀려난 프롭·차가 난간을 넘어 물 위(셰이더 착시, 물리 지면은 평평)에 놓일 수 있다. 기존 거동 그대로다.
+- 동서 도로 dead-end 는 난간이 가로질러 닫았지만, **유저가 후속 지시로 "강으로 이어진 도로 자체를 없애라" 고 했다(§32 예정)** — 그때 이 난간 규격은 그대로 유효하다(배치가 물 가장자리의 함수라 도로 유무와 독립).
+- 산책로 띠에 벤치·가로등 같은 수변 프롭은 없다 — 밀도가 아쉬우면 후속.

@@ -50,6 +50,9 @@ uniform vec3 water_color  : source_color = vec3(0.13, 0.28, 0.47);   // 강
 uniform vec3 ocean_color  : source_color = vec3(0.08, 0.19, 0.36);   // 지도 테두리 바다
 uniform vec3 bank_color   : source_color = vec3(0.62, 0.58, 0.42);   // 기슭
 uniform float bank_w = 2.4;
+// §31 수변 산책로: 물과 접한 육지 셀 가장자리의 포장 띠. 기슭 띠(물 쪽)와 대칭이다.
+uniform vec3 prom_color   : source_color = vec3(0.44, 0.43, 0.39);
+uniform float prom_w = 2.0;
 
 // 존 지도의 규격 상수. city.gd 의 CELL_MIN·CELL_COUNT·ZONE_TEX_STEP 과 같은 값이다.
 const int ZMIN = -7;
@@ -163,6 +166,26 @@ void fragment() {
 		base = zone_r_color;
 	} else {
 		base = zone_p_color;
+	}
+
+	// --- §31 수변 산책로 (육지 쪽) --------------------------------------------
+	// 도로보다 **먼저** 섞는다 — 뒤의 도로·보도 띠가 이 위에 덮여 "도로 > 산책로 >
+	// 존색" 우선순위가 된다(교량 접근부의 아스팔트에 가로 띠가 생기면 안 된다).
+	// 셀 가장자리에서 prom_w 이내인 픽셀만 이웃을 읽는다. 물가만이 아니라 **모든**
+	// 내부 셀 경계 근처(육지 픽셀의 ~2할)에서 fetch 가 도는 것은 맞다 — §25 의
+	// 완전 회피에는 못 미치는 완화이고, 예산 준수는 3c 가 최종 판정한다(실측 PASS).
+	if (zc != Z_W) {
+		float px = p.x - float(kc) * block_pitch;
+		float pz = p.y - float(jc) * block_pitch;
+		float m = min(min(px, block_pitch - px), min(pz, block_pitch - pz));
+		if (m < prom_w) {
+			float prom = 0.0;
+			if (zone_at(kc - 1, jc) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, px)); }
+			if (zone_at(kc + 1, jc) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, block_pitch - px)); }
+			if (zone_at(kc, jc - 1) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, pz)); }
+			if (zone_at(kc, jc + 1) == Z_W) { prom = max(prom, 1.0 - smoothstep(prom_w - 0.3, prom_w, block_pitch - pz)); }
+			base = mix(base, prom_color, prom);
+		}
 	}
 
 	// 도로 마스크. 남북 도로는 자기가 걸친 z-셀로, 동서 도로는 x-셀로 존재를 묻는다.

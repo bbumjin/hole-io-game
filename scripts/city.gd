@@ -221,6 +221,7 @@ func plan(s: int) -> Array:
 			plan_block(rng, k, j, out)
 			plan_walk(rng, k, j, out)
 			plan_road(rng, k, j, out)
+	plan_rails(out)      # §31: 수변 난간 — plan 안에 있어야 T5·E4 가 공짜로 덮는다
 	return out
 
 
@@ -334,6 +335,85 @@ static func is_bridge_ew(jl: int, kc: int) -> bool:
 		if int(b[0]) == jl and int(b[1]) == kc:
 			return true
 	return false
+
+
+# --- §31 수변 난간 -----------------------------------------------------------
+## 물과 접한 육지 셀 가장자리를 난간이 따라간다. 강 특례가 아니라 **존 지도의
+## 함수**다 — 강 양안과 바다 안쪽 테두리가 같은 규칙으로 처리된다.
+## 유저 피드백 4("도로가 물속으로 들어간다")의 대책: 걷힌 도로 자리(빈 띠)를
+## 난간이 가로질러 동서 도로 dead-end 의 끝단 처리를 겸한다.
+const RAIL_PATH := "proc://rail"   # 카탈로그 밖 절차 생성 — make_prop 이 분기한다
+const RAIL_LEN := 4.0              # 조각 배치 간격
+const RAIL_BODY := 3.8             # 벽 길이. 0.2 간격이 E3(생성 시점 겹침 배제)를 지킨다
+const RAIL_H := 0.9
+const RAIL_T := 0.18
+const RAIL_INSET := 0.5            # 물 경계에서 육지 쪽으로
+const RAIL_TRIM := 1.0             # 직교 난간과 만나는 모서리 여백 — 겹침 방지
+
+
+## 교량 어귀 개구 반폭. 교량 보도 바깥(curb)보다 넓어야 진입(차·시민)을 안 막는다.
+static func rail_open_half(jl: int) -> float:
+	return curb_half_at(jl) + 1.0
+
+
+## 난간 조각 전체를 계획한다. 난수가 없다 — 배치가 순수하게 지도의 함수다.
+static func plan_rails(out: Array) -> void:
+	for k in range(CELL_MIN, CELL_MAX + 1):
+		for j in range(CELL_MIN, CELL_MAX + 1):
+			if zone_at(k, j) == Z_WATER:
+				continue
+			rail_edge(out, k, j, 1, 0)
+			rail_edge(out, k, j, -1, 0)
+			rail_edge(out, k, j, 0, 1)
+			rail_edge(out, k, j, 0, -1)
+
+
+## 셀 (k,j) 의 (dk,dj) 쪽 이웃이 물이면 그 가장자리를 따라 조각을 놓는다.
+## 지도 밖 이웃은 zone_at 의 클램프가 자기 자신(육지)을 돌려주므로 자연히 걸러진다.
+static func rail_edge(out: Array, k: int, j: int, dk: int, dj: int) -> void:
+	if zone_at(k + dk, j + dj) != Z_WATER:
+		return
+	var along_x := dj != 0                       # 물이 남북 쪽 → 난간은 x 축을 따라 눕는다
+	# 난간 선: 셀 경계에서 육지 쪽으로 RAIL_INSET.
+	var line: float
+	if dk != 0:
+		line = float(k + maxi(dk, 0)) * PITCH - float(dk) * RAIL_INSET
+	else:
+		line = float(j + maxi(dj, 0)) * PITCH - float(dj) * RAIL_INSET
+	# 스팬: 셀의 직교 방향 구간. 양 끝의 직교 이웃도 물이면(모서리) 직교 난간과
+	# 겹치지 않게 물린다.
+	var s0: float = float(k if along_x else j) * PITCH
+	var s1: float = s0 + PITCH
+	if along_x:
+		if zone_at(k - 1, j) == Z_WATER:
+			s0 += RAIL_TRIM
+		if zone_at(k + 1, j) == Z_WATER:
+			s1 -= RAIL_TRIM
+	else:
+		if zone_at(k, j - 1) == Z_WATER:
+			s0 += RAIL_TRIM
+		if zone_at(k, j + 1) == Z_WATER:
+			s1 -= RAIL_TRIM
+	# 교량 개구: 강 양안(남북 방향 난간)에서만 성립한다 — 교량은 전부 동서 대로다.
+	var opens := []
+	if not along_x:
+		for b in BRIDGES:
+			if k + dk == int(b[1]):
+				opens.append([float(int(b[0])) * PITCH, rail_open_half(int(b[0]))])
+	var c: float = s0 + RAIL_LEN * 0.5
+	while c + RAIL_LEN * 0.5 <= s1 + 0.001:
+		var blocked := false
+		for o in opens:
+			if absf(c - float(o[0])) < float(o[1]) + RAIL_LEN * 0.5:
+				blocked = true
+				break
+		if not blocked:
+			var pos := Vector3(c, 0.0, line) if along_x else Vector3(line, 0.0, c)
+			var ex := Vector2(RAIL_BODY * 0.5, RAIL_T * 0.5) if along_x \
+				else Vector2(RAIL_T * 0.5, RAIL_BODY * 0.5)
+			out.append({ "path": RAIL_PATH, "scale": 1.0, "zone": "rail",
+				"pos": pos, "ex": ex, "yaw": 0.0 if along_x else PI * 0.5 })
+		c += RAIL_LEN
 
 
 ## 도로 세그먼트가 존재하는가. **존 지도에서 파생되는 순수 함수**이고 별도 데이터가 없다.
@@ -685,7 +765,44 @@ func build(items: Array) -> void:
 		add_child(make_prop(items[i], i))
 
 
+## §31 난간 조각. 에셋이 아니라 절차 생성이다(팩에 난간이 없다 — §28 의 시민과 같은
+## 판단). 나지막한 콘크리트 난간벽 하나 — 이 카메라 고도에서 "여기서 길이 끝난다" 로
+## 읽히는 가장 싼 형태다. 형상·색의 미감은 휴먼 검수의 몫(전역 원칙 §1).
+func make_rail(it: Dictionary, idx: int) -> RigidBody3D:
+	var body := RigidBody3D.new()
+	body.set_script(SWALLOWABLE)
+	body.collision_layer = 2
+	body.collision_mask = 1 | 2
+	body.name = "rail_%d" % idx          # 이름은 판정과의 계약이다(§26) — E2·Z7 이 읽는다
+	body.position = it["pos"]
+	body.rotation.y = it["yaw"]
+	body.add_to_group("swallowable")
+	body.start_frozen = true
+
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = Vector3(RAIL_BODY, RAIL_H, RAIL_T)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = Color(0.66, 0.66, 0.62)
+	bm.material = mat
+	mi.mesh = bm
+	mi.position.y = RAIL_H * 0.5
+	body.add_child(mi)
+
+	var cs := CollisionShape3D.new()
+	var box := BoxShape3D.new()
+	box.size = Vector3(RAIL_BODY, RAIL_H, RAIL_T)
+	cs.shape = box
+	cs.position.y = RAIL_H * 0.5
+	body.add_child(cs)
+
+	body.mass = clampf(RAIL_BODY * RAIL_H * RAIL_T * 0.25, 0.5, 400.0)
+	return body
+
+
 func make_prop(it: Dictionary, idx: int) -> RigidBody3D:
+	if it["path"] == RAIL_PATH:
+		return make_rail(it, idx)
 	var mesh := mesh_of(it["path"])
 	var ab := mesh.get_aabb()
 	var s: float = it["scale"]
