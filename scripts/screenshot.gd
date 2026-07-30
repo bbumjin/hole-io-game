@@ -183,6 +183,22 @@ const SPEC_GROWTH_K := 1.0
 const FALL_R := 2.0
 ## 수관보다 넓은 구멍. 나무 픽스처의 수관(6x6, 외접반경 4.243)보다 커야 한다.
 const FALL_BIG_R := 5.0
+## K7(§30): 견인 금지 픽스처(wide, fit 3.162 > FALL_R)를 세우는 자리. 콜라이더가
+## x∈[1,7] 이라 감지 실린더(반경 2.0)에 확실히 걸치고, 림 바닥판(반경 R+30) 위에
+## 온전히 얹혀 가장자리 기울어짐이 없다.
+const K7_OFFSET := 4.0
+## K7: 변위 허용(m). 흡입이 없으면 평지 정착 후 움직일 이유가 없다 — 예산은 정착
+## 잔여 진동 몫이고, 게이트를 지운 주입은 240프레임에 미터 단위로 끌려온다.
+const K7_MOVE_MAX := 0.10
+## K8(§30): 보장 픽스처. 한 변 2.0 정육면체(fit = 외접 = 1.414, q=1.414)를 구멍
+## **옆**에 세운다 — 흡입이 끌어와 삼키는가까지 묻는다(K1 은 정중앙 낙하만 본다).
+## 경계에 더 붙이려던 시도는 실측이 기각했다: q=1.053(여유 5%)도 q=1.176(15%)도
+## 옆에서 끌려오다 **기울면 투영 반경이 커져 쐐기가 됐다**(최저 y −0.3 에서 끼임).
+## 옆-흡입 보장이 성립하는 조건은 외접이 아니라 **공간 대각 반경 < R** 이다 —
+## 2×2×2 는 1.732 < 2.0 이라 어떤 자세로 굴러도 낄 수 없다. 게이트 판별 정밀도는
+## 그래서 이 괄호까지다: [q=0.63(K7), q=1.41(K8)] 사이의 어긋난 문턱은 못 가른다.
+const K8_SIDE := 2.0
+const K8_OFFSET := 2.5
 ## 나무 픽스처: 밑동 0.8 각 3m + 수관 6x6 2m. 밑동만 보면 FALL_R 을 여유 있게
 ## 통과하지만(0.566 < 2.0) 수관이 걸린다(3.162 > 2.0).
 const FALL_TREE := [Vector3(0.8, 3.0, 0.8), Vector3(6.0, 2.0, 6.0)]
@@ -2707,6 +2723,17 @@ func gate_breaches(hole: Node3D, objs: Array) -> int:
 ## K5 지면 관통 없음 — 어느 시행에서도, 지면 아래로 내려간 물체는 **구멍 위**에 있다.
 ##    플레이 피드백의 "땅 위에서 녹아 사라진다" 가 이 기준이다.
 ## K6 긴 물체 — 폭이 구멍보다 좁으면 길이가 아무리 길어도 결국 들어간다(전봇대).
+## K7 견인 금지(§30) — 통과 반경이 구멍보다 큰 물체는 감지 범위에 걸쳐도 **끌려가지
+##    않는다.** 시작 반경 1.5 구멍이 주차된 구급차·버스를 끌고 다닌 플레이 피드백이
+##    이 기준이다. 픽스처는 구멍 **옆**에 세운다 — K1~K6 은 정중앙 배치라 흡입이
+##    사실상 개입하지 않고(중심 대칭이라 순변위를 만들지 못한다), 견인과 옆-흡입은
+##    K7·K8 이 처음 묻는 질문이다.
+## K8 옆-흡입 보장(§30) — 2×2×2 정육면체(fit = 외접 = 1.414, q=1.414)는 구멍
+##    옆에서도 끌려와 삼켜진다. K7 의 게이트를 과욕으로 잡으면(예: q >= 1.5 부터
+##    흡입) 여기서 걸린다 — 금지와 보장의 양방향 단언.
+##    경계 판별 정밀도는 이 괄호까지다: [q=0.63(K7), q=1.41(K8)] 사이의 어긋난
+##    문턱(예: q >= 1.2)은 두 기준이 못 가른다 — 더 붙인 픽스처(q=1.05·1.18)는
+##    옆-흡입 중 기울며 쐐기가 되어 실측이 기각했다(K8_SIDE 주석).
 func run_judge_6() -> void:
 	if not setup():
 		get_tree().quit(1)
@@ -2729,14 +2756,45 @@ func run_judge_6() -> void:
 	var k2: bool = not bool(wide["gone"])
 	var k3: bool = not bool(tree["gone"])
 	var k4: bool = bool(tree_big["gone"])
-	var k5 := true
-	for r in [flat, wide, pole, tree, tree_big]:
-		k5 = k5 and int(r["sink_bad"]) == 0
 	var k6: bool = bool(pole["gone"])
 
-	var ok: bool = k1 and k2 and k3 and k4 and k5 and k6
-	print("JUDGE 6 K1=%s K2=%s K3=%s K4=%s K5=%s K6=%s -> %s"
-		% [pf(k1), pf(k2), pf(k3), pf(k4), pf(k5), pf(k6), ("PASS" if ok else "FAIL")])
+	# --- K7: 견인 금지 ---------------------------------------------------------
+	hole.set_radius(FALL_R)
+	hole.move_to(Vector3.ZERO)
+	var wide7 := fall_fixture("Fall_wide7", [Vector3(6.0, 2.0, 6.0)])
+	_main.add_child(wide7)
+	wide7.position = Vector3(K7_OFFSET, 0.0, 0.0)
+	# 한 물리 프레임 정착 → 감지 진입 전제를 단언 → **그 프레임의 위치를 기준선**으로
+	# 변위를 잰다. 기준선을 스폰 시점에 찍으면 접촉 해소의 정착 튐이 예산을 갉아먹고,
+	# 전제를 안 물으면 픽스처를 너무 멀리 세운 대본이 공허하게 통과한다(계획 감사).
+	await get_tree().physics_frame
+	var k7_pre: bool = (int(wide7.collision_mask) & 8) != 0
+	var base7: Vector3 = wide7.global_position
+	for _i in FALL_FRAMES:
+		await get_tree().physics_frame
+	var moved7 := Vector2(wide7.global_position.x - base7.x,
+		wide7.global_position.z - base7.z).length()
+	var k7: bool = k7_pre and moved7 < K7_MOVE_MAX
+	print("JUDGE 6 K7 견인 금지: 감지=%s XZ변위=%.4f m (< %.2f) %s"
+		% [pf(k7_pre), moved7, K7_MOVE_MAX, pf(k7)])
+	wide7.queue_free()
+	await get_tree().physics_frame
+
+	# --- K8: 옆-흡입 보장 -------------------------------------------------------
+	var edge := await fall_run(hole, "edge", FALL_R,
+		[Vector3(K8_SIDE, K8_SIDE, K8_SIDE)], Vector3(K8_OFFSET, 0.0, 0.0))
+	var k8: bool = bool(edge["gone"])
+
+	# K5 는 옆-흡입 시행(edge)의 관통도 함께 본다 — 옆에서 끌려오는 경로에서
+	# 구멍 밖 지면 관통이 생겨도 중앙 5시행만 보면 침묵한다(코드 감사).
+	var k5 := true
+	for r in [flat, wide, pole, tree, tree_big, edge]:
+		k5 = k5 and int(r["sink_bad"]) == 0
+
+	var ok: bool = k1 and k2 and k3 and k4 and k5 and k6 and k7 and k8
+	print("JUDGE 6 K1=%s K2=%s K3=%s K4=%s K5=%s K6=%s K7=%s K8=%s -> %s"
+		% [pf(k1), pf(k2), pf(k3), pf(k4), pf(k5), pf(k6), pf(k7), pf(k8),
+		   ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -2744,13 +2802,17 @@ func run_judge_6() -> void:
 ## 시행 하나. 구멍을 r 로 되돌려 원점에 세우고, 픽스처를 **구멍 한가운데**에 놓은 뒤
 ## 구멍을 움직이지 않고 예산만큼 돌린다. 가운데에 놓는 것이 가장 강한 시험이다 —
 ## "가운데 놓아도 안 빠진다" 와 "가운데 놓으면 빠진다" 를 각각 단언할 수 있다.
+## §30: `at` 으로 옆에 세울 수도 있다(K8 — 흡입이 끌어오는가까지 묻는다).
+## 기본값은 중심이라 기존 다섯 시행은 무변경이다.
 ##
 ## 반환: gone(삼켜졌는가) / frames(삼켜진 프레임) / sink_bad(구멍 밖 지면 관통 횟수)
-func fall_run(hole: Node3D, tag: String, r: float, boxes: Array) -> Dictionary:
+func fall_run(hole: Node3D, tag: String, r: float, boxes: Array,
+		at := Vector3.ZERO) -> Dictionary:
 	hole.set_radius(r)
 	hole.move_to(Vector3.ZERO)
 	var body := fall_fixture("Fall_" + tag, boxes)
 	_main.add_child(body)
+	body.position = at
 	await get_tree().physics_frame
 	var rr: float = true_radius(body)
 	var rf: float = true_fit(body)

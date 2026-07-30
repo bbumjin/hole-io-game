@@ -294,6 +294,18 @@ func _physics_process(_dt: float) -> void:
 
 
 func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
+	# §30: 구멍은 자기가 삼킬 수 없는 물체를 끌지 않는다. 통과 반경이 구멍보다 큰
+	# 물체(fit_radius > radius)는 절대 안 삼켜지는 집합(§23)인데 흡입은 받고 있어서,
+	# 시작 반경 1.5 구멍이 주차된 구급차·버스를 지도 위로 끌고 다녔다(플레이 피드백 —
+	# 가속 26 이 질량 무관이라 22톤 급도 트래픽콘과 같이 끌려온다).
+	# 반드시 삼켜지는 집합(외접 < R)은 외접 >= fit 이라 항상 fit < R 이므로 보장은
+	# 그대로다. 회색 지대(fit < R < 외접)도 그대로 — 통과는 물리가 정한다.
+	# 낙하물 회수도 안전하다: 낙하 시점에 fit < R 이었고 R 은 줄지 않는다.
+	# 경사(램프)가 아니라 계단인 이유 — 원칙이 있는 문턱은 fit = R 하나뿐이다(§23 의
+	# 집합 경계). 위로 올리면 통과 가능한 것이 흡입을 잃고, 아래로 내리면
+	# 구급차(q=0.947)가 부분 흡입을 받아 문제가 남는다.
+	if float(rb.fit_radius) > radius:
+		return
 	var to_center := Vector3(here.x - rb.global_position.x, 0.0, here.z - rb.global_position.z)
 	if to_center.length_squared() < 1e-6:
 		return
