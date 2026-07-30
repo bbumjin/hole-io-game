@@ -1,4 +1,4 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 (rev.30)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 (rev.31)
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
 >
@@ -557,11 +557,20 @@ float seg_rule(int a, int b, bool bridge) {
 	if (a == Z_W || b == Z_W) { return bridge ? 1.0 : 0.0; }
 	return (a == Z_P && b == Z_P) ? 0.0 : 1.0;
 }
+// §32 수변 끝 조항: 끝 너머 두 셀이 모두 물이고 그 너머가 교량이 아니면 걷는다.
+// city.gd 의 seg_ew/seg_ns 와 같은 조항이다 — 한쪽만 고치면 그리는 도로와
+// 걷는 도로가 어긋난다.
 float seg_ew(int jl, int kc) {
-	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc));
+	if (seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)) < 0.5) { return 0.0; }
+	if (zone_at(kc + 1, jl - 1) == Z_W && zone_at(kc + 1, jl) == Z_W && !is_bridge_ew(jl, kc + 1)) { return 0.0; }
+	if (zone_at(kc - 1, jl - 1) == Z_W && zone_at(kc - 1, jl) == Z_W && !is_bridge_ew(jl, kc - 1)) { return 0.0; }
+	return 1.0;
 }
 float seg_ns(int kl, int jc) {
-	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false);
+	if (seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false) < 0.5) { return 0.0; }
+	if (zone_at(kl - 1, jc + 1) == Z_W && zone_at(kl, jc + 1) == Z_W) { return 0.0; }
+	if (zone_at(kl - 1, jc - 1) == Z_W && zone_at(kl, jc - 1) == Z_W) { return 0.0; }
+	return 1.0;
 }
 
 varying vec3 world_pos;
@@ -2130,7 +2139,9 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ## 강(14셀)에는 아무것도 놓지 않고, 공원 9셀은 수퍼블록 셋으로 합쳐 한 번만 채우며,
 ## 걷힌 도로 위의 보도·차도 프롭이 사라졌다.
 ## §31 에서 2125 → 2633 (수변 난간 508 조각이 plan 에 들어왔다 — 재시작 복원의 일부다).
-const RESTART_PROPS := 2633
+## §32 에서 2633 → 2264 (물로 이어진 도로 스텁 54 세그먼트가 걷히며 그 위의
+## 차도·보도 프롭 369 개가 함께 사라졌다).
+const RESTART_PROPS := 2264
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -2377,12 +2388,26 @@ func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
 	return not (a == SPEC_Z_PARK and b == SPEC_Z_PARK)
 
 
+## §32 수변 끝 조항 포함 — city.gd·셰이더와 같은 규칙의 판정기 사본.
 func spec_seg_ew(jl: int, kc: int) -> bool:
-	return spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc))
+	if not spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc)):
+		return false
+	for d in [1, -1]:
+		if spec_zone(kc + d, jl - 1) == SPEC_Z_WATER \
+				and spec_zone(kc + d, jl) == SPEC_Z_WATER \
+				and not spec_is_bridge_ew(jl, kc + d):
+			return false
+	return true
 
 
 func spec_seg_ns(kl: int, jc: int) -> bool:
-	return spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false)
+	if not spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false):
+		return false
+	for d in [1, -1]:
+		if spec_zone(kl - 1, jc + d) == SPEC_Z_WATER \
+				and spec_zone(kl, jc + d) == SPEC_Z_WATER:
+			return false
+	return true
 
 
 ## 구멍이 이 자리에 있을 수 있는가 — Z5 의 규격이다.
@@ -5670,6 +5695,75 @@ func run_judge_7() -> void:
 		print("JUDGE 7 교량아님 (%.0f,%.0f) 파랑우세=%.4f %s"
 			% [(p as Vector3).x, (p as Vector3).z, ch.y, pf(ok)])
 
+	# --- Z8: 물로 이어진 도로 스텁이 없다(§32) ---------------------------------
+	# 표본은 조항에서 유도한다: 기본 규칙으로는 있었는데 수변 끝 조항이 걷은 세그먼트.
+	# 세 범주(강 양안 · 바다 동서안 · 바다 남북안)를 **따로** 표본한다 — 남북 조항은
+	# 교량 분기가 없는 별도 코드 경로다(계획 감사). 표본점은 중심선에서 u=+2.0 —
+	# 일반 도로의 중앙선 도색(|u|<0.3)을 피해 아스팔트 본체를 읽는 자리다.
+	var stub_river := []
+	var stub_ocean_ew := []
+	var stub_ocean_ns := []
+	for jl in range(SPEC_CELL_MIN + 1, SPEC_CELL_MAX + 1):
+		for kc in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl),
+					spec_is_bridge_ew(jl, kc)) and not spec_seg_ew(jl, kc):
+				var p8 := Vector3((float(kc) + 0.5) * SPEC_PITCH, 0.0,
+					float(jl) * SPEC_PITCH + 2.0)
+				if kc == 1 or kc == 3:
+					stub_river.append(p8)
+				else:
+					stub_ocean_ew.append(p8)
+	for kl in range(SPEC_CELL_MIN + 1, SPEC_CELL_MAX + 1):
+		for jc in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false) \
+					and not spec_seg_ns(kl, jc):
+				stub_ocean_ns.append(Vector3(float(kl) * SPEC_PITCH + 2.0, 0.0,
+					(float(jc) + 0.5) * SPEC_PITCH))
+	print("JUDGE 7 Z8 걷힌 세그먼트: 강=%d 바다EW=%d 바다NS=%d"
+		% [stub_river.size(), stub_ocean_ew.size(), stub_ocean_ns.size()])
+	var z8 := not (stub_river.is_empty() or stub_ocean_ew.is_empty()
+		or stub_ocean_ns.is_empty())
+	var stub_samples := []
+	if z8:
+		for i in 4:
+			stub_samples.append(stub_river[i * (stub_river.size() - 1) / 3])
+		for i in 2:
+			stub_samples.append(stub_ocean_ew[i * (stub_ocean_ew.size() - 1)])
+		for i in 2:
+			stub_samples.append(stub_ocean_ns[i * (stub_ocean_ns.size() - 1)])
+	# 아스팔트 판별은 Z4 와 같은 술어다: 무채색이고 지면보다 어둡고 물보다 밝다.
+	for i in stub_samples.size():
+		var p8: Vector3 = stub_samples[i]
+		top_down(p8)
+		for _i in 3:
+			await get_tree().process_frame
+		var img8 := await capture("stub_%d" % i)
+		var ch8 := chroma(img8, p8)
+		var lm8 := lum_at(img8, p8)
+		var is_asphalt: bool = ch8.y < ROAD_B_MAX and absf(ch8.x) < ROAD_G_MAX \
+			and lm8 + ROAD_LUM_MARGIN <= land_min and lm8 >= water_lum + ROAD_LUM_MARGIN
+		var ok8: bool = not is_asphalt
+		z8 = z8 and ok8
+		print("JUDGE 7 Z8a 스텁 부재 (%.0f,%.0f) 휘도=%.4f 아스팔트=%s %s"
+			% [p8.x, p8.z, lm8, str(is_asphalt), pf(ok8)])
+	# Z8b 양방향 — 교량 진입 세그먼트 여섯은 **아스팔트다**. 조항을 교량 무시로
+	# 과욕화하면(진입로까지 걷으면) 여기서 걸린다. 표본은 SPEC_BRIDGES 에서 유도.
+	for b in SPEC_BRIDGES:
+		for kc in [1, 3]:
+			var pa := Vector3((float(kc) + 0.5) * SPEC_PITCH, 0.0,
+				float(int(b[0])) * SPEC_PITCH)
+			top_down(pa)
+			for _i in 3:
+				await get_tree().process_frame
+			var imga := await capture("approach_%d_%d" % [int(b[0]), kc])
+			var cha := chroma(imga, pa)
+			var lma := lum_at(imga, pa)
+			var oka: bool = cha.y < ROAD_B_MAX and absf(cha.x) < ROAD_G_MAX \
+				and lma + ROAD_LUM_MARGIN <= land_min \
+				and lma >= water_lum + ROAD_LUM_MARGIN
+			z8 = z8 and oka
+			print("JUDGE 7 Z8b 진입로 (%.0f,%.0f) 휘도=%.4f %s" % [pa.x, pa.z, lma, pf(oka)])
+
 	# --- Z7d: 수변 산책로 띠가 실제로 그려지는가(§31) --------------------------
 	# 표본은 지도에서 유도한다: 물과 접한 육지 셀 가장자리의 스팬 중앙에서, 띠 안(경계
 	# 1m 안쪽)과 띠 밖(경계 SPEC_PROM_W+2.5 안쪽)을 한 캡처에서 함께 읽는다.
@@ -5857,11 +5951,12 @@ func run_judge_7() -> void:
 	print("JUDGE 7 Z7 난간 %d/%d (빠짐=%d 미아=%d) 산책로=%s"
 		% [rails.size(), pieces.size(), z7_missing, z7_stray, pf(z7d)])
 
-	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s (수역프롭=%d clamped=%s)"
-		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), in_water, str(_clamped)])
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s Z8=%s (수역프롭=%d clamped=%s)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), pf(z8),
+		   in_water, str(_clamped)])
 	# 표본이 화면 밖으로 잘렸으면 그 픽셀 판정은 무효다 — 가장자리 픽셀을 읽고
 	# 초록으로 인쇄되는 것이 최악이다(코드 감사가 잡았다. 기존 Z1~Z4 도 같은 패턴).
-	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and not _clamped
+	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and z8 and not _clamped
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -6985,14 +7080,30 @@ static func seg_rule(a: int, b: int, bridge: bool) -> bool:
 
 
 ## 동서 도로(중심선 z = PITCH*jl)의, x 가 셀 kc 에 걸친 구간.
+## §32 수변 끝 조항: 어느 한쪽 끝의 너머 두 셀이 모두 물이고 그 너머 세그먼트가
+## 교량이 아니면 걷는다 — "실제 도시에는 물로 이어진 도로는 존재할 수 없다"(유저 지시).
+## 걷힌 뒤 도로는 물가 한 블록 전의 T 교차로에서 끝난다. 조항이 존 지도·교량표의
+## 순수 함수라 제거가 제거를 연쇄시키지 않는다(계획 감사가 증명).
 static func seg_ew(jl: int, kc: int) -> bool:
-	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc))
+	if not seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)):
+		return false
+	for d in [1, -1]:
+		if zone_at(kc + d, jl - 1) == Z_WATER and zone_at(kc + d, jl) == Z_WATER \
+				and not is_bridge_ew(jl, kc + d):
+			return false
+	return true
 
 
 ## 남북 도로(중심선 x = PITCH*kl)의, z 가 셀 jc 에 걸친 구간.
 ## 강이 남북이라 이를 건너는 교량은 없다 — 남북 도로는 수역을 만나면 항상 끊긴다.
+## §32: 수변 끝 조항도 교량 분기 없이 대칭 적용된다(바다로 뻗던 스텁이 걷힌다).
 static func seg_ns(kl: int, jc: int) -> bool:
-	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false)
+	if not seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false):
+		return false
+	for d in [1, -1]:
+		if zone_at(kl - 1, jc + d) == Z_WATER and zone_at(kl, jc + d) == Z_WATER:
+			return false
+	return true
 
 
 ## 구멍이 이 자리에 있을 수 있는가(§25). 수역은 막고, 교량 아스팔트 위는 연다.
@@ -10175,3 +10286,40 @@ Z7d 의 첫 구현은 표본 6개가 **전부 바다**였다 — 목록에서 �
 - 난간이 서 있는 곳은 물 **경계선**이지 물리적 벽이 아니다 — 밀려난 프롭·차가 난간을 넘어 물 위(셰이더 착시, 물리 지면은 평평)에 놓일 수 있다. 기존 거동 그대로다.
 - 동서 도로 dead-end 는 난간이 가로질러 닫았지만, **유저가 후속 지시로 "강으로 이어진 도로 자체를 없애라" 고 했다(§32 예정)** — 그때 이 난간 규격은 그대로 유효하다(배치가 물 가장자리의 함수라 도로 유무와 독립).
 - 산책로 띠에 벤치·가로등 같은 수변 프롭은 없다 — 밀도가 아쉬우면 후속.
+
+## §32. 물로 이어진 도로는 존재하지 않는다 — 수변 끝 세그먼트 제거 (구현·검증 완료, rev.31)
+
+유저 직접 지시(항공 스크린샷 붉은 X, "시급") — "실제 도시에는 강으로 이어진 도로는 존재할 수 없음." §31 의 난간이 시각적으로 막았지만, 유저는 도로 자체의 제거를 지시했다.
+
+### 규격 — 세그먼트 규칙에 수변 끝 조항
+
+**비교량 세그먼트는, 어느 한쪽 끝의 너머 두 셀이 모두 물이고 그 너머 세그먼트가 교량이 아니면 걷는다.** 남북 도로는 교량 분기 없이 대칭이다. 걷힌 도로는 물가 한 블록 전의 **T 교차로**에서 끝난다 — 유저 지적("교차로 없이 끊긴다")의 정확한 해소다.
+
+- 조항은 존 지도·교량표의 **순수 함수**다 — 다른 세그먼트의 존재를 참조하지 않으므로 제거가 제거를 연쇄시키지 않는다(계획 감사가 증명).
+- **교량 진입로 6개는 보존된다**: 너머 세그먼트가 교량이면 조항이 불발한다.
+- 유저 문구는 "강" 이지만 원리는 물 일반이다 — **바다 테두리의 스텁도 같은 조항이 걷는다**(강만 고치면 다음 스크린샷에서 같은 X 가 해안에 찍힌다 — 감사도 승인). 실측 걷힘: **강 16 · 바다EW 20 · 바다NS 18 = 54 세그먼트** (계획 추정 56 이 실측으로 54 로 확정 — 바다EW 의 두 라인은 물 셀에 걸쳐 기본 규칙에서 이미 부재였다).
+- 부수 효과: 해안·강변 셀들이 가로지르는 도로를 잃고 **긴 수변 스트립 블록으로 병합**된다(교량 대로만 관통). 이는 유저 지시 2건째(§33 블록 다변화)와 결이 같다. 걷힌 자리 54곳의 맨땅 띠는 §33 이 수변 스트립 블록 설계로 흡수할 예정인 **의도된 중간 상태**이며, 항공 스크린샷 휴먼 검수 항목이다.
+
+### 파급 — 판정 생태계가 이미 세그먼트 인지형이었다
+
+규격 3벌(city.gd `seg_ew/seg_ns` · 셰이더 · 판정기 `spec_seg_*`)에 같은 조항을 넣는 것으로 끝났다. zone_of(E2)·D 계열 스킵·on_spec_lane(M 계열)·시민 보도 목록이 전부 spec_seg_* 헬퍼를 경유하므로 **한 점 수정이 자동 전파된다**(계획 감사가 코드로 확인). 교통은 `traffic.gd` 의 차선 유효 구간 유도(`CITY.seg_ew` 99행)와 재스폰 경로가 마스크를 추종한다 — M1 경로장 중앙값 41.4m(하한 20)로 무사 실측.
+
+### 새 판정 — judge7 에 Z8 (주입 3종 실증)
+
+| 기준 | 묻는 것 | 주입 | 결과 |
+|---|---|---|---|
+| Z8a 스텁 부재 | 걷힌 세그먼트(SPEC 유도, 강 4 + 바다EW 2 + 바다NS 2 표본 — 남북 조항은 교량 분기 없는 별도 경로라 따로 표본)의 중심선 u=+2 점이 아스팔트가 **아니다** | J1-shader: 셰이더 조항 제거 | F ✓ (EW 6표본 아스팔트 복원. NS 2표본은 P — 두 조항의 독립성도 실증) |
+| Z8b 진입로 존재 | 교량 진입 세그먼트 6개(SPEC_BRIDGES 유도)의 점이 아스팔트**다** — 과욕 제거를 잡는 양방향 | J2: 교량 예외 제거 | F ✓ (6개 전부) |
+| E2 (기존) | 걷힌 세그먼트 위 도로 프롭은 구역 이탈 | J1-city: city.gd 조항만 제거 | F ✓ (이탈 236) |
+
+표본점은 중심선에서 u=+2.0 — 일반 도로 중앙선 도색(|u|<0.3)을 피해 아스팔트 본체를 읽는 자리다. 아스팔트 판별은 Z4 와 같은 술어(무채색·지면보다 어둡고 물보다 밝음).
+
+### 파생 상수 재유도
+
+- `RESTART_PROPS` 2633 → **2264** (스텁 위 차도·보도 프롭 369 소멸)
+- E7 하한은 그대로 두고 실측 여유 확인: road 140(≥88) · walk 246(≥162). M1 41.4m(≥20) · M8 9.3m(≥6) · M9 이탈 0.
+
+### 남긴 한계
+
+- 걷힌 자리의 맨땅 띠 54곳 — §33 의 수변 스트립 블록 설계가 흡수한다(위 서술).
+- 모서리 셀 4개는 경계 도로를 전부 잃는다 — 이동은 도로 비의존이라 무해(감사 확인).

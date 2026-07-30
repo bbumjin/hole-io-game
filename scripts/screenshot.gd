@@ -171,7 +171,9 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ## 강(14셀)에는 아무것도 놓지 않고, 공원 9셀은 수퍼블록 셋으로 합쳐 한 번만 채우며,
 ## 걷힌 도로 위의 보도·차도 프롭이 사라졌다.
 ## §31 에서 2125 → 2633 (수변 난간 508 조각이 plan 에 들어왔다 — 재시작 복원의 일부다).
-const RESTART_PROPS := 2633
+## §32 에서 2633 → 2264 (물로 이어진 도로 스텁 54 세그먼트가 걷히며 그 위의
+## 차도·보도 프롭 369 개가 함께 사라졌다).
+const RESTART_PROPS := 2264
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -418,12 +420,26 @@ func spec_seg_rule(a: int, b: int, bridge: bool) -> bool:
 	return not (a == SPEC_Z_PARK and b == SPEC_Z_PARK)
 
 
+## §32 수변 끝 조항 포함 — city.gd·셰이더와 같은 규칙의 판정기 사본.
 func spec_seg_ew(jl: int, kc: int) -> bool:
-	return spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc))
+	if not spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl), spec_is_bridge_ew(jl, kc)):
+		return false
+	for d in [1, -1]:
+		if spec_zone(kc + d, jl - 1) == SPEC_Z_WATER \
+				and spec_zone(kc + d, jl) == SPEC_Z_WATER \
+				and not spec_is_bridge_ew(jl, kc + d):
+			return false
+	return true
 
 
 func spec_seg_ns(kl: int, jc: int) -> bool:
-	return spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false)
+	if not spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false):
+		return false
+	for d in [1, -1]:
+		if spec_zone(kl - 1, jc + d) == SPEC_Z_WATER \
+				and spec_zone(kl, jc + d) == SPEC_Z_WATER:
+			return false
+	return true
 
 
 ## 구멍이 이 자리에 있을 수 있는가 — Z5 의 규격이다.
@@ -3711,6 +3727,75 @@ func run_judge_7() -> void:
 		print("JUDGE 7 교량아님 (%.0f,%.0f) 파랑우세=%.4f %s"
 			% [(p as Vector3).x, (p as Vector3).z, ch.y, pf(ok)])
 
+	# --- Z8: 물로 이어진 도로 스텁이 없다(§32) ---------------------------------
+	# 표본은 조항에서 유도한다: 기본 규칙으로는 있었는데 수변 끝 조항이 걷은 세그먼트.
+	# 세 범주(강 양안 · 바다 동서안 · 바다 남북안)를 **따로** 표본한다 — 남북 조항은
+	# 교량 분기가 없는 별도 코드 경로다(계획 감사). 표본점은 중심선에서 u=+2.0 —
+	# 일반 도로의 중앙선 도색(|u|<0.3)을 피해 아스팔트 본체를 읽는 자리다.
+	var stub_river := []
+	var stub_ocean_ew := []
+	var stub_ocean_ns := []
+	for jl in range(SPEC_CELL_MIN + 1, SPEC_CELL_MAX + 1):
+		for kc in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_seg_rule(spec_zone(kc, jl - 1), spec_zone(kc, jl),
+					spec_is_bridge_ew(jl, kc)) and not spec_seg_ew(jl, kc):
+				var p8 := Vector3((float(kc) + 0.5) * SPEC_PITCH, 0.0,
+					float(jl) * SPEC_PITCH + 2.0)
+				if kc == 1 or kc == 3:
+					stub_river.append(p8)
+				else:
+					stub_ocean_ew.append(p8)
+	for kl in range(SPEC_CELL_MIN + 1, SPEC_CELL_MAX + 1):
+		for jc in range(SPEC_CELL_MIN, SPEC_CELL_MAX + 1):
+			if spec_seg_rule(spec_zone(kl - 1, jc), spec_zone(kl, jc), false) \
+					and not spec_seg_ns(kl, jc):
+				stub_ocean_ns.append(Vector3(float(kl) * SPEC_PITCH + 2.0, 0.0,
+					(float(jc) + 0.5) * SPEC_PITCH))
+	print("JUDGE 7 Z8 걷힌 세그먼트: 강=%d 바다EW=%d 바다NS=%d"
+		% [stub_river.size(), stub_ocean_ew.size(), stub_ocean_ns.size()])
+	var z8 := not (stub_river.is_empty() or stub_ocean_ew.is_empty()
+		or stub_ocean_ns.is_empty())
+	var stub_samples := []
+	if z8:
+		for i in 4:
+			stub_samples.append(stub_river[i * (stub_river.size() - 1) / 3])
+		for i in 2:
+			stub_samples.append(stub_ocean_ew[i * (stub_ocean_ew.size() - 1)])
+		for i in 2:
+			stub_samples.append(stub_ocean_ns[i * (stub_ocean_ns.size() - 1)])
+	# 아스팔트 판별은 Z4 와 같은 술어다: 무채색이고 지면보다 어둡고 물보다 밝다.
+	for i in stub_samples.size():
+		var p8: Vector3 = stub_samples[i]
+		top_down(p8)
+		for _i in 3:
+			await get_tree().process_frame
+		var img8 := await capture("stub_%d" % i)
+		var ch8 := chroma(img8, p8)
+		var lm8 := lum_at(img8, p8)
+		var is_asphalt: bool = ch8.y < ROAD_B_MAX and absf(ch8.x) < ROAD_G_MAX \
+			and lm8 + ROAD_LUM_MARGIN <= land_min and lm8 >= water_lum + ROAD_LUM_MARGIN
+		var ok8: bool = not is_asphalt
+		z8 = z8 and ok8
+		print("JUDGE 7 Z8a 스텁 부재 (%.0f,%.0f) 휘도=%.4f 아스팔트=%s %s"
+			% [p8.x, p8.z, lm8, str(is_asphalt), pf(ok8)])
+	# Z8b 양방향 — 교량 진입 세그먼트 여섯은 **아스팔트다**. 조항을 교량 무시로
+	# 과욕화하면(진입로까지 걷으면) 여기서 걸린다. 표본은 SPEC_BRIDGES 에서 유도.
+	for b in SPEC_BRIDGES:
+		for kc in [1, 3]:
+			var pa := Vector3((float(kc) + 0.5) * SPEC_PITCH, 0.0,
+				float(int(b[0])) * SPEC_PITCH)
+			top_down(pa)
+			for _i in 3:
+				await get_tree().process_frame
+			var imga := await capture("approach_%d_%d" % [int(b[0]), kc])
+			var cha := chroma(imga, pa)
+			var lma := lum_at(imga, pa)
+			var oka: bool = cha.y < ROAD_B_MAX and absf(cha.x) < ROAD_G_MAX \
+				and lma + ROAD_LUM_MARGIN <= land_min \
+				and lma >= water_lum + ROAD_LUM_MARGIN
+			z8 = z8 and oka
+			print("JUDGE 7 Z8b 진입로 (%.0f,%.0f) 휘도=%.4f %s" % [pa.x, pa.z, lma, pf(oka)])
+
 	# --- Z7d: 수변 산책로 띠가 실제로 그려지는가(§31) --------------------------
 	# 표본은 지도에서 유도한다: 물과 접한 육지 셀 가장자리의 스팬 중앙에서, 띠 안(경계
 	# 1m 안쪽)과 띠 밖(경계 SPEC_PROM_W+2.5 안쪽)을 한 캡처에서 함께 읽는다.
@@ -3898,11 +3983,12 @@ func run_judge_7() -> void:
 	print("JUDGE 7 Z7 난간 %d/%d (빠짐=%d 미아=%d) 산책로=%s"
 		% [rails.size(), pieces.size(), z7_missing, z7_stray, pf(z7d)])
 
-	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s (수역프롭=%d clamped=%s)"
-		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), in_water, str(_clamped)])
+	print("JUDGE 7 Z1=%s Z2=%s Z3=%s Z4=%s Z5=%s Z6=%s Z7=%s Z8=%s (수역프롭=%d clamped=%s)"
+		% [pf(z1), pf(z2), pf(z3), pf(z4), pf(z5), pf(z6), pf(z7), pf(z8),
+		   in_water, str(_clamped)])
 	# 표본이 화면 밖으로 잘렸으면 그 픽셀 판정은 무효다 — 가장자리 픽셀을 읽고
 	# 초록으로 인쇄되는 것이 최악이다(코드 감사가 잡았다. 기존 Z1~Z4 도 같은 패턴).
-	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and not _clamped
+	var ok := z1 and z2 and z3 and z4 and z5 and z6 and z7 and z8 and not _clamped
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 

@@ -427,14 +427,30 @@ static func seg_rule(a: int, b: int, bridge: bool) -> bool:
 
 
 ## 동서 도로(중심선 z = PITCH*jl)의, x 가 셀 kc 에 걸친 구간.
+## §32 수변 끝 조항: 어느 한쪽 끝의 너머 두 셀이 모두 물이고 그 너머 세그먼트가
+## 교량이 아니면 걷는다 — "실제 도시에는 물로 이어진 도로는 존재할 수 없다"(유저 지시).
+## 걷힌 뒤 도로는 물가 한 블록 전의 T 교차로에서 끝난다. 조항이 존 지도·교량표의
+## 순수 함수라 제거가 제거를 연쇄시키지 않는다(계획 감사가 증명).
 static func seg_ew(jl: int, kc: int) -> bool:
-	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc))
+	if not seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)):
+		return false
+	for d in [1, -1]:
+		if zone_at(kc + d, jl - 1) == Z_WATER and zone_at(kc + d, jl) == Z_WATER \
+				and not is_bridge_ew(jl, kc + d):
+			return false
+	return true
 
 
 ## 남북 도로(중심선 x = PITCH*kl)의, z 가 셀 jc 에 걸친 구간.
 ## 강이 남북이라 이를 건너는 교량은 없다 — 남북 도로는 수역을 만나면 항상 끊긴다.
+## §32: 수변 끝 조항도 교량 분기 없이 대칭 적용된다(바다로 뻗던 스텁이 걷힌다).
 static func seg_ns(kl: int, jc: int) -> bool:
-	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false)
+	if not seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false):
+		return false
+	for d in [1, -1]:
+		if zone_at(kl - 1, jc + d) == Z_WATER and zone_at(kl, jc + d) == Z_WATER:
+			return false
+	return true
 
 
 ## 구멍이 이 자리에 있을 수 있는가(§25). 수역은 막고, 교량 아스팔트 위는 연다.

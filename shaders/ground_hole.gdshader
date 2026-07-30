@@ -80,11 +80,20 @@ float seg_rule(int a, int b, bool bridge) {
 	if (a == Z_W || b == Z_W) { return bridge ? 1.0 : 0.0; }
 	return (a == Z_P && b == Z_P) ? 0.0 : 1.0;
 }
+// §32 수변 끝 조항: 끝 너머 두 셀이 모두 물이고 그 너머가 교량이 아니면 걷는다.
+// city.gd 의 seg_ew/seg_ns 와 같은 조항이다 — 한쪽만 고치면 그리는 도로와
+// 걷는 도로가 어긋난다.
 float seg_ew(int jl, int kc) {
-	return seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc));
+	if (seg_rule(zone_at(kc, jl - 1), zone_at(kc, jl), is_bridge_ew(jl, kc)) < 0.5) { return 0.0; }
+	if (zone_at(kc + 1, jl - 1) == Z_W && zone_at(kc + 1, jl) == Z_W && !is_bridge_ew(jl, kc + 1)) { return 0.0; }
+	if (zone_at(kc - 1, jl - 1) == Z_W && zone_at(kc - 1, jl) == Z_W && !is_bridge_ew(jl, kc - 1)) { return 0.0; }
+	return 1.0;
 }
 float seg_ns(int kl, int jc) {
-	return seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false);
+	if (seg_rule(zone_at(kl - 1, jc), zone_at(kl, jc), false) < 0.5) { return 0.0; }
+	if (zone_at(kl - 1, jc + 1) == Z_W && zone_at(kl, jc + 1) == Z_W) { return 0.0; }
+	if (zone_at(kl - 1, jc - 1) == Z_W && zone_at(kl, jc - 1) == Z_W) { return 0.0; }
+	return 1.0;
 }
 
 varying vec3 world_pos;
