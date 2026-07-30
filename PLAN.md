@@ -7401,7 +7401,34 @@ func flat_dist(a: Vector3, b: Vector3) -> float:
 
 **브라우저에서 확인한 결함 하나**: 웹 빌드에는 시스템 폰트 폴백이 없어 **HUD 의 한글이 전부 두부(□)로 깨졌다.** 데스크톱에서는 시스템 폰트가 받쳐 줘서 안 보이던 문제다. UI 문자열을 ASCII 로 바꿔 해결했다(`SCORE / SIZE / EATEN / # NAME SCORE SIZE / TIME UP / PRESS R TO RESTART`). 한글 UI 를 유지하려면 폰트를 번들해야 한다.
 
-빌드 크기: `index.wasm` 37.7MB + `index.pck` 11.2MB.
+빌드 크기: `index.wasm` 39.5MB + `index.pck` 11.9MB (2026-07-30 CI 실측; rev.16 당시 37.7/11.2 에서 커졌다).
+
+#### 자동배포 (2026-07-30)
+
+**`main` 에 push 하면 Vercel 이 직접 export 해서 프로덕션을 갱신한다.** 그전까지는 로컬 export 후
+`vercel --prod` 수동 실행이었고(직전 프로덕션 3건 전부 `source=cli`), 그래서 "빌드했지만 배포를
+잊은 커밋"이 생길 수 있었다 — 실제로 카메라 수정 `c9a6c7a` 가 미배포 상태였다.
+
+- 배선: Vercel 프로젝트 `hole-io-game` ↔ 이 저장소 연결, production branch = `main`.
+- `vercel.json` → `buildCommand: bash scripts/vercel-build.sh`, `outputDirectory: build`.
+- `scripts/vercel-build.sh` 가 빌드마다 Godot 을 내려받는다(Vercel 이미지에 Godot 이 없다).
+  에디터 76MB + Web export template 88MB. 템플릿 번들 `.tpz` 전체는 1.22GB 인데 필요한 멤버만
+  HTTP Range 로 뽑는다. 빌드 시간 약 24초.
+- **엔진 핀**: `GODOT_VERSION=4.7.1-stable`. 스크립트가 `project.godot` 의 `config/features` 와
+  같은 계열인지 검사하고 어긋나면 배포를 깬다. 로컬에서 상위 버전으로 열어 저장했다면
+  `GODOT_VERSION`/`GODOT_TEMPLATE_DIR` 를 함께 올려야 한다.
+- `build/` 는 계속 `.gitignore` 다. 산출물을 커밋하지 않는다.
+
+**롤백** — 자동배포는 사람이 안 보고 있을 때 깨질 수 있으니 경로를 먼저 적어 둔다.
+
+1. **즉시 복구**: Vercel 대시보드 → 프로젝트 → Deployments → 직전의 정상 프로덕션 배포 →
+   *Promote to Production* (CLI 로는 `vercel promote <deployment-url>`). 과거 프로덕션 배포가
+   `READY` 로 남아 있어 재빌드 없이 alias 만 옮긴다.
+2. **원인 제거**: `git revert <sha> && git push` — push 가 곧 배포이므로 revert 가 곧 롤백이다.
+3. **브랜치 선검증**: 위험한 변경은 브랜치로 push 하면 preview 배포가 생긴다. 단 preview URL 은
+   팀 SSO 로 막혀 있어(`ssoProtection: all_except_custom_domains`) 브라우저 로그인 없이 확인하려면
+   Protection Bypass 시크릿이 필요하다. 302 를 파이프라인 고장으로 오독하지 말 것.
+   프로덕션 도메인 `hole-io-game-delta.vercel.app` 은 프로젝트 도메인이라 공개 상태다.
 
 
 ---

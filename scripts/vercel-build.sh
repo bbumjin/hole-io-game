@@ -11,10 +11,26 @@
 # 산출물(build/)은 git 에 커밋하지 않는다. 여기서 생성되고 Vercel 이 그대로 서빙한다.
 set -euo pipefail
 
-GODOT_VERSION="4.7.1-stable"          # project.godot 의 config/features = "4.7" 계열 최신 패치
+GODOT_VERSION="4.7.1-stable"          # project.godot 의 config/features 와 같은 계열이어야 한다(아래 검사)
 GODOT_TEMPLATE_DIR="4.7.1.stable"     # export_templates 아래 디렉터리명 규칙
 GODOT_BIN_NAME="Godot_v${GODOT_VERSION}_linux.x86_64"
 REL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}"
+# preset 이 thread_support=false / extensions_support=false 라서 실제로 쓰이는 템플릿.
+# 이게 없으면 export 가 조용히 다른 변형을 쓰거나 실패하므로 명시적으로 검사한다.
+REQUIRED_TEMPLATE="web_nothreads_release.zip"
+
+# 엔진 핀과 프로젝트가 어긋나면 "낡은 엔진으로 조용히 빌드된 다른 게임"이 배포된다.
+# 로컬에서 상위 버전으로 열어 저장하면 config/features 가 올라가므로 여기서 막는다.
+PROJECT_FEATURE="$(sed -n 's/^config\/features=PackedStringArray("\([0-9]*\.[0-9]*\)".*/\1/p' project.godot)"
+if [ -z "$PROJECT_FEATURE" ]; then
+  echo "FAIL: project.godot 에서 config/features 버전을 못 읽었다"; exit 1
+fi
+case "$GODOT_VERSION" in
+  "$PROJECT_FEATURE".*|"$PROJECT_FEATURE"-*) ;;
+  *) echo "FAIL: project.godot features=\"$PROJECT_FEATURE\" 인데 CI 는 $GODOT_VERSION 로 빌드한다."
+     echo "      scripts/vercel-build.sh 의 GODOT_VERSION/GODOT_TEMPLATE_DIR 를 맞춰라."; exit 1 ;;
+esac
+echo "==> 엔진 핀 확인: project.godot features=$PROJECT_FEATURE / CI=$GODOT_VERSION"
 
 WORK="$(pwd)/.godot-vercel"
 # Godot 은 export template 을 $XDG_DATA_HOME/godot 에서 찾는다. $HOME 쓰기 가능성에 기대지 않고 고정한다.
@@ -41,8 +57,11 @@ chmod +x "$GODOT"
 
 echo "==> Web export template 다운로드 (필요한 멤버만)"
 fetch_web_templates() {
-  python3 - "$1" "$2" <<'PY'
-import io, sys, zipfile, urllib.request
+  # ⚠ set -e 는 `if !` 조건 안에서 함수 본문에 적용되지 않는다.
+  #   본문이 여러 줄로 늘어나도 실패가 삼켜지지 않게 종료코드를 직접 돌려준다.
+  local rc=0
+  python3 - "$1" "$2" <<'PY' || rc=$?
+import io, sys, time, zipfile, urllib.request
 
 url, dest = sys.argv[1], sys.argv[2]
 
@@ -69,8 +88,19 @@ class HttpRangeFile(io.RawIOBase):
             return b""
         end = min(self.pos + n, self.length) - 1
         req = urllib.request.Request(self.url, headers={"Range": f"bytes={self.pos}-{end}"})
-        with urllib.request.urlopen(req, timeout=120) as r:
-            data = r.read()
+        # 한 번의 네트워크 순간장애가 1.28GB 폴백으로 번지지 않게 재시도한다
+        # (에디터 다운로드의 `curl --retry 3` 과 같은 수준을 맞춘다).
+        last = None
+        for attempt in range(3):
+            try:
+                with urllib.request.urlopen(req, timeout=120) as r:
+                    data = r.read()
+                break
+            except Exception as e:      # noqa: BLE001 — 네트워크 계열 전부 재시도 대상
+                last = e
+                if attempt == 2:
+                    raise
+                time.sleep(2 * (attempt + 1))
         self.pos += len(data)
         return data
 
@@ -93,6 +123,7 @@ print(f"    합계 {total}B")
 if total == 0:
     raise SystemExit("web export template 을 하나도 못 받았다")
 PY
+  return "$rc"
 }
 
 if ! fetch_web_templates "${REL}/Godot_v${GODOT_VERSION}_export_templates.tpz" "$TEMPLATE_DIR"; then
@@ -102,11 +133,24 @@ if ! fetch_web_templates "${REL}/Godot_v${GODOT_VERSION}_export_templates.tpz" "
   mv "${WORK}"/tpz/templates/* "$TEMPLATE_DIR"/
 fi
 ls -la "$TEMPLATE_DIR"
+# preset 이 실제로 요구하는 변형이 왔는지 확인한다. 목록이 줄어도 "합계>0" 은 통과하므로 따로 본다.
+[ -s "${TEMPLATE_DIR}/${REQUIRED_TEMPLATE}" ] || {
+  echo "FAIL: ${REQUIRED_TEMPLATE} 가 없다 — preset(thread_support=false)이 쓰는 템플릿이다"; exit 1; }
 
 echo "==> 리소스 임포트 (.godot/ 은 gitignore 라 체크아웃에 없다)"
-# 첫 임포트는 의존 순서 때문에 비정상 종료할 수 있다. 두 번 돌리고 종료코드는 무시한다.
+# 앞의 두 번은 의존 순서 때문에 비정상 종료할 수 있어 종료코드를 무시한다.
+# 세 번째는 반드시 성공해야 한다 — `|| true` 만 두면 OOM(137)·디스크풀·SIGSEGV 가
+# 전부 조용히 넘어가고, 메시 40개 빠진 pck 도 뒤의 존재검사는 통과한다.
 "$GODOT" --headless --import --path . || true
 "$GODOT" --headless --import --path . || true
+"$GODOT" --headless --import --path .
+
+# 임포트 산출물 수 점검. 임계치는 Godot 내부 규칙에 의존하므로 실패시키지 않고 경고만 한다
+# (하드 게이트는 위의 3회차 종료코드 + 아래 pck 하한선이다).
+want=$(find . -name '*.import' -not -path './.godot-vercel/*' | wc -l)
+got=$(ls -1 .godot/imported/*.md5 2>/dev/null | wc -l || echo 0)
+echo "    .import 파일 ${want}개 / .godot/imported/*.md5 ${got}개"
+[ "$got" -ge "$want" ] || echo "    WARN: 임포트 산출물이 .import 수보다 적다 — 에셋 누락 가능성"
 
 echo "==> Web export"
 mkdir -p build   # export 는 출력 디렉터리를 만들어주지 않는다
@@ -116,5 +160,21 @@ echo "==> 산출물 검증"
 for f in build/index.html build/index.js build/index.wasm build/index.pck; do
   [ -s "$f" ] || { echo "FAIL: $f 이 없거나 0바이트다"; ls -la build || true; exit 1; }
   printf '    %-24s %s bytes\n' "$f" "$(stat -c %s "$f")"
+done
+
+# 존재검사만으로는 "임포트가 반쯤 죽어 알맹이 빠진 pck" 를 못 잡는다.
+# 매직바이트로 형식을, 하한선으로 내용 누락을 본다(현재 실측: wasm 39.5MB / pck 11.9MB).
+[ "$(head -c4 build/index.pck)" = "GDPC" ] || { echo "FAIL: index.pck 매직이 GDPC 가 아니다"; exit 1; }
+head -c4 build/index.wasm | od -An -tx1 | grep -q '00 61 73 6d' || { echo "FAIL: index.wasm 매직이 \\0asm 이 아니다"; exit 1; }
+PCK_MIN=$((10 * 1024 * 1024))
+pck=$(stat -c %s build/index.pck)
+[ "$pck" -ge "$PCK_MIN" ] || { echo "FAIL: index.pck ${pck}B < 하한 ${PCK_MIN}B — 에셋이 통째로 빠졌다"; exit 1; }
+WASM_MIN=$((30 * 1024 * 1024))
+wasm=$(stat -c %s build/index.wasm)
+[ "$wasm" -ge "$WASM_MIN" ] || { echo "FAIL: index.wasm ${wasm}B < 하한 ${WASM_MIN}B"; exit 1; }
+
+# 생성된 index.html 이 참조하는 아이콘들. preset 에서 export_icon 을 끌 수도 있으니 경고만 한다.
+for f in build/index.png build/index.icon.png build/index.apple-touch-icon.png; do
+  [ -s "$f" ] || echo "    WARN: $f 없음 (index.html 이 참조한다)"
 done
 echo "==> OK"
