@@ -368,8 +368,9 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge9", "--judge8", "--judge7", "--judge6", "--judge5",
-	"--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2", "--judge1b", "--judge"]
+const JUDGE_ORDER := ["--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
+	"--judge5", "--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2",
+	"--judge1b", "--judge"]
 
 
 ## 이번 실행이 돌릴 판정 하나. 없으면 빈 문자열이다.
@@ -452,6 +453,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--judge10": await run_judge_10()
 		"--judge9": await run_judge_9()
 		"--judge8": await run_judge_8()
 		"--judge7": await run_judge_7()
@@ -3713,3 +3715,188 @@ func judge_hud_font() -> bool:
 		% [pf(src_ok), pf(glyph_ok), kr.size(), HUD_KR_MIN, ink, HUD_INK_MIN,
 		   x1 - x0, y1 - y0])
 	return src_ok and glyph_ok and kr_ok and ink_ok
+
+
+# --- §29: 카메라 멀미 판정 ---------------------------------------------------
+## 카메라 리그 규격의 **판정기 사본**. 구현체(camera_rig.gd)에서 읽으면 오프셋이나
+## 시정수를 바꾼 빌드가 자기 값끼리 일치해 통과한다 — 판정기가 따로 든다.
+const SPEC_CAM_OFFSET := Vector3(0.0, 22.0, 26.0)
+const SPEC_CAM_BASE_R := 5.0
+const SPEC_CAM_MIN_H := 14.0
+const SPEC_CAM_SMOOTH := 6.0
+## 합성 dt. 판정은 프레임을 실제로 넘기되 **시간은 이 값으로 센다.** 브라우저 rAF 의
+## 실측 dt 를 쓰면 저프레임 기기에서 목표점의 계단(ZOH) 간격이 커져 정상 빌드가
+## 속도 상한을 넘는다(해석 상계: 20fps 에서 16.7 m/s > 16). 합성 dt 로는 세 플랫폼에서
+## 궤적이 허용오차 안에서 결정적이고, 브라우저 게이트는 wasm 코드패스 검증만 진다.
+const CAM_DT := 1.0 / 60.0
+const CAM_MOVE_SPEED := 14.0     # 대본 주행 속도 (main.gd MOVE_SPEED 의 사본)
+## V1: 각속도 상한(도/초). 회전이 상수이므로 기대값은 0 — 부동소수 여유만 준다.
+## look_at 추적이던 §28 이전 리그는 방향 반전에서 86 °/s 를 냈다(실측, 멀미 기제).
+const CAM_ROT_MAX_DPS := 0.1
+## V1: 대본 전체의 누적 회전 편차 상한(도). 율 상한만으로는 문턱 밑의 일정한
+## 회전이 누적되는 것을 못 잡는다 — 시작 basis 대비 총 편차 각을 함께 본다.
+const CAM_ROT_TOTAL_DEG := 0.01
+## V2: 성장 후퇴 속도 상한. 구현의 grow_smooth 에서 파생하지 않는 **규격 선언**이다 —
+## "카메라는 주행 추적(14 m/s)보다 눈에 띄게 빨리 물러나지 않는다". 평활 없던 §28
+## 이전 리그는 83 m/s 를 냈다(실측).
+const CAM_RECEDE_MAX := 16.0
+const CAM_SETTLE_SEC := 2.5      # V2: 성장 후 수렴을 묻는 시점(초)
+const CAM_SETTLE_TOL := 1.0      # V2: 그때 목표점과의 허용 거리(m) — 수렴 하한
+const CAM_GROW_OBJ_R := 5.0      # V2: 성장 이벤트로 삼키는 물체 반경
+const CAM_STEP_D := 10.0         # V4: 계단 크기(m)
+const CAM_STEP_SEC := 0.5        # V4: 계단 후 관찰 시간(초)
+const CAM_STEP_TOL := 0.05       # V4: 잔차 허용 오차(m)
+const CAM_STEP_DTS := [1.0 / 30.0, 1.0 / 120.0]   # V4: 두 합성 dt
+const CAM_ELEV_DEG := 40.236     # V3: 앙각 atan2(22, 26) — H9 프레이밍 전제
+const CAM_ELEV_TOL := 0.01
+const CAM_POS_TOL := 1e-4        # V3·대본 전제: 위치 오차 허용
+## V1 대본: [이름, 프레임 수, 방향]. 실측 도구(cam_diag)의 대본을 판정이 흡수했다.
+## 반전 쌍을 두 축 모두 넣는다 — look_at 회귀의 각속도가 반전에서 최대였다.
+const CAM_SCRIPT := [
+	["주행+x", 90, Vector3(1, 0, 0)],
+	["반전-x", 90, Vector3(-1, 0, 0)],
+	["주행+z", 90, Vector3(0, 0, 1)],
+	["반전-z", 90, Vector3(0, 0, -1)],
+	["정지", 60, Vector3.ZERO],
+]
+
+
+## 규격 오프셋 배율. camera_rig.follow 의 k 와 같은 식이지만 **규격 상수로만** 계산한다.
+func cam_spec_k(r: float) -> float:
+	return maxf(r / SPEC_CAM_BASE_R, SPEC_CAM_MIN_H / SPEC_CAM_OFFSET.y)
+
+
+## §29 V1~V4. 판정기가 게임 루프의 카메라 호출을 재현한다 — 판정 모드에서는
+## main._process 가 일찍 반환해 follow 를 부르지 않으므로, 여기서 직접 부른다.
+## 스크린샷은 찍지 않는다. 묻는 것은 넷:
+##   V1 회전 안정 — 대본(주행·반전·정지·성장) 전 구간에서 카메라 회전이 상수인가.
+##   V2 성장 후퇴 — 반경이 계단으로 뛸 때 후퇴 속도가 상한 아래이고, 그러면서도
+##      제 시간 안에 목표점에 **수렴하는가** (상한만 물으면 안 움직이는 카메라가 통과한다).
+##   V3 스냅 프레이밍 — snap 경로가 규격 위치·앙각을 정확히 재현하는가 (H 계열 전제).
+##   V4 계단 응답 — 평활이 프레임률과 무관한가. 목표가 정지한 계단 응답은 ZOH 오차가
+##      없어 잔차가 정확히 D·e^(-smooth·T) 다. 두 합성 dt 에서 같은 값이 나와야 한다 —
+##      clampf(rate·dt) 식은 1/30 에서 0.352 를 내 확실히 걸린다(감사가 산술로 확인).
+func run_judge_10() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
+	var hole: Node3D = _reg.holes()[0]
+	# 카메라만 계측한다. 물리를 끄지 않으면 대본 경로의 프롭·픽스처가 흡입돼 반경이
+	# 규격에서 어긋나고 V2 의 기대 종점이 오염된다(계획 감사가 잡았다).
+	hole.set_physics_process(false)
+
+	# --- 대본 전제: 시작 반경이 규격이고, 원점(광장, 통행 가능)에 안착한다 -----
+	hole.move_to(Vector3.ZERO)
+	var pre_r: bool = absf(float(hole.radius) - SPEC_START_R) < 1e-6
+	var pre_p: bool = hole.global_position.distance_to(Vector3.ZERO) < CAM_POS_TOL
+	print("JUDGE 10 전제: 반경=%.4f(규격 %.1f) %s 원점 안착 %s"
+		% [float(hole.radius), SPEC_START_R, pf(pre_r), pf(pre_p)])
+	if not (pre_r and pre_p):
+		print("JUDGE RESULT -> FAIL")
+		get_tree().quit(1)
+		return
+
+	# --- V3: 스냅 프레이밍 (성장 전, r = SPEC_START_R) -------------------------
+	_cam.follow(hole, hole.radius, true)
+	var want0: Vector3 = hole.global_position + SPEC_CAM_OFFSET * cam_spec_k(SPEC_START_R)
+	var v3_pos: bool = _cam.global_position.distance_to(want0) <= CAM_POS_TOL
+	var fwd: Vector3 = -_cam.global_basis.z
+	var elev := rad_to_deg(atan2(-fwd.y, Vector2(fwd.x, fwd.z).length()))
+	var v3_elev: bool = absf(elev - CAM_ELEV_DEG) <= CAM_ELEV_TOL
+	var aim: Vector3 = (hole.global_position - _cam.global_position).normalized()
+	var v3_aim: bool = rad_to_deg(fwd.angle_to(aim)) <= CAM_ELEV_TOL
+	var v3: bool = v3_pos and v3_elev and v3_aim
+	print("JUDGE 10 V3 스냅 오차=%.6f 앙각=%.4f(규격 %.3f±%.2f) 조준오차=%.4f° %s"
+		% [_cam.global_position.distance_to(want0), elev, CAM_ELEV_DEG, CAM_ELEV_TOL,
+		   rad_to_deg(fwd.angle_to(aim)), pf(v3)])
+
+	# --- V4: 계단 응답 — 평활의 프레임률 독립 ----------------------------------
+	var v4 := true
+	for sdt_v in CAM_STEP_DTS:
+		var sdt := float(sdt_v)
+		hole.move_to(Vector3.ZERO)
+		_cam.follow(hole, hole.radius, true)
+		var stepped := Vector3(CAM_STEP_D, 0.0, 0.0)
+		hole.move_to(stepped)
+		# 전제: 순간이동이 미끄러지지 않았다. move_to 는 통행 불가 지점에서 축별로
+		# 미끄러지므로(§25), 착지점이 명령점과 다르면 판정이 아니라 대본이 틀린 것이다.
+		var landed: bool = hole.global_position.distance_to(stepped) < CAM_POS_TOL
+		var n := int(round(CAM_STEP_SEC / sdt))
+		for _i in n:
+			await get_tree().process_frame
+			_cam.follow(hole, hole.radius, false, sdt)
+		var want_s: Vector3 = stepped + SPEC_CAM_OFFSET * cam_spec_k(SPEC_START_R)
+		var rem := _cam.global_position.distance_to(want_s)
+		var expect := CAM_STEP_D * exp(-SPEC_CAM_SMOOTH * CAM_STEP_SEC)
+		var ok: bool = landed and absf(rem - expect) <= CAM_STEP_TOL
+		v4 = v4 and ok
+		print("JUDGE 10 V4 dt=1/%d 프레임=%d 잔차=%.4f 기대=%.4f±%.2f 안착=%s %s"
+			% [int(round(1.0 / sdt)), n, rem, expect, CAM_STEP_TOL, pf(landed), pf(ok)])
+
+	# --- V1: 대본 주행 — 회전이 상수인가 (성장 구간까지 계속 계측) --------------
+	hole.move_to(Vector3.ZERO)
+	_cam.follow(hole, hole.radius, true)
+	var basis0: Basis = _cam.global_basis
+	var max_dps := 0.0
+	var prev_basis: Basis = _cam.global_basis
+	# 대본 전제: 구멍이 규격 경로를 **실제로 달렸는가.** move_to 는 통행 불가 지점에서
+	# 미끄러지므로(§25), 배치가 바뀌어 경로가 막히면 구멍이 서고 V1 은 정지 카메라를
+	# 상수 회전으로 오판해 공허하게 통과한다(코드 감사가 잡았다). 세그먼트 끝마다
+	# 규격 누적 위치와 대조한다 — 대본이 원점 복귀 대칭이라 끝점만 보면 못 잡는다.
+	var drove := true
+	var expect_pos := Vector3.ZERO
+	for seg in CAM_SCRIPT:
+		var dir: Vector3 = seg[2]
+		for _i in int(seg[1]):
+			await get_tree().process_frame
+			if dir != Vector3.ZERO:
+				hole.move_to(hole.global_position + dir * CAM_MOVE_SPEED * CAM_DT)
+			_cam.follow(hole, hole.radius, false, CAM_DT)
+			var dps := rad_to_deg((prev_basis.inverse() * _cam.global_basis)
+				.get_rotation_quaternion().get_angle()) / CAM_DT
+			max_dps = maxf(max_dps, dps)
+			prev_basis = _cam.global_basis
+		expect_pos += dir * CAM_MOVE_SPEED * CAM_DT * int(seg[1])
+		if hole.global_position.distance_to(expect_pos) >= CAM_POS_TOL:
+			drove = false
+			print("JUDGE 10 V1 대본 전제 위반: %s 끝 위치 %s (기대 %s)"
+				% [seg[0], str(hole.global_position), str(expect_pos)])
+
+	# --- V2: 성장 후퇴 — 상한과 수렴 -------------------------------------------
+	hole.grow_by(CAM_GROW_OBJ_R)
+	var spec_r1 := sqrt(SPEC_START_R * SPEC_START_R
+		+ SPEC_GROWTH_K * CAM_GROW_OBJ_R * CAM_GROW_OBJ_R)
+	# 전제: 성장식이 규격과 일치. 성장식 자체는 C 계열의 몫이지만, 어긋나면
+	# V2 의 기대 종점이 무의미해지므로 전제로 못 박는다.
+	var pre_g: bool = absf(float(hole.radius) - spec_r1) < 1e-4
+	var max_recede := 0.0
+	var prev_pos: Vector3 = _cam.global_position
+	for _i in int(round(CAM_SETTLE_SEC / CAM_DT)):
+		await get_tree().process_frame
+		_cam.follow(hole, hole.radius, false, CAM_DT)
+		max_recede = maxf(max_recede, _cam.global_position.distance_to(prev_pos) / CAM_DT)
+		prev_pos = _cam.global_position
+		var dps := rad_to_deg((prev_basis.inverse() * _cam.global_basis)
+			.get_rotation_quaternion().get_angle()) / CAM_DT
+		max_dps = maxf(max_dps, dps)
+		prev_basis = _cam.global_basis
+	var want1: Vector3 = hole.global_position + SPEC_CAM_OFFSET * cam_spec_k(spec_r1)
+	var settle := _cam.global_position.distance_to(want1)
+	# 누적 편차: 율(도/초)만 물으면 문턱 밑에서 일정하게 도는 카메라가 대본 내내
+	# 0.66° 를 누적해도 통과한다. 스냅 직후 basis 대비 총 편차 각을 함께 단언한다.
+	var drift := rad_to_deg((basis0.inverse() * _cam.global_basis)
+		.get_rotation_quaternion().get_angle())
+	var v1: bool = drove and max_dps <= CAM_ROT_MAX_DPS and drift <= CAM_ROT_TOTAL_DEG
+	var v2: bool = pre_g and max_recede <= CAM_RECEDE_MAX and settle <= CAM_SETTLE_TOL
+	print("JUDGE 10 V1 주행=%s 최대 각속도=%.4f 도/초 (<= %.1f) 누적 편차=%.4f° (<= %.2f) %s"
+		% [pf(drove), max_dps, CAM_ROT_MAX_DPS, drift, CAM_ROT_TOTAL_DEG, pf(v1)])
+	print("JUDGE 10 V2 성장식=%s 후퇴 최대=%.2f m/s (<= %.0f) %.1f초 후 잔차=%.3f m (<= %.1f) %s"
+		% [pf(pre_g), max_recede, CAM_RECEDE_MAX, CAM_SETTLE_SEC, settle,
+		   CAM_SETTLE_TOL, pf(v2)])
+
+	var ok_all: bool = v1 and v2 and v3 and v4
+	print("JUDGE 10 V1=%s V2=%s V3=%s V4=%s -> %s"
+		% [pf(v1), pf(v2), pf(v3), pf(v4), "PASS" if ok_all else "FAIL"])
+	print("JUDGE RESULT -> %s" % ("PASS" if ok_all else "FAIL"))
+	get_tree().quit(0 if ok_all else 1)
