@@ -1,5 +1,7 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 (rev.33)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 (rev.34)
 
+> **rev.34 = 보도의 녹지를 진짜 나무로(§36).** 보도의 덤불 셋은 머티리얼이 `Leaves` + **`Tree`** 로 줄기가 있어 형태가 "축소된 나무" 였다 — 유저가 그것을 "축소된 가로수" 로 봤다. 스케일만으로는 **2.62m 가 천장**이다(보도 띠가 반extent 0.66 을 넘기지 못한다). 그래서 수관이 커브 밖으로 걸치는 것을 열되 **차도 쪽은 안 열었다**: `WALK_OVERHANG = BLOCK_SETBACK - GAP` = 0.5 로 유도하면 수관이 블록 프롭에 **원리적으로 못 닿아** `fits()`·E3 를 안 건드린다. 팩 150종을 다섯 조건으로 훑어 남은 `CommonTree_3` 계열로 **5.05m 가로수**를 세웠고, §34 의 미해결 한계 "덤불 겹침 −0.190" 이 **+0.122** 로 뒤집혔다. 신규 판정 **E9**(오버행 방향·높이·가로수 하한)를 주입 4종으로 실증했다 — 높이만 보면 보도의 **4m 초과 폴 156개**에 묻혀 아무것도 못 잡는다. `RESTART_PROPS` 2099 → **2112**.
+>
 > **rev.33 = 시민에게 옷과 걸음을 준다(§34).** §28 이 미룬 에셋 조달 결정을 열어 캡슐+구를 **Kenney Blocky Characters(CC0) 10종**으로 바꿨다. 팩 선정의 결정타는 정점 수가 아니라 **스키닝**이다 — 260명 군중에 62본 스킨을 걸 수 없다. GLB 가 텍스처를 **외부 URI** 로 물어 `*.glb` 만 옮기면 **에러 없이 흰 캐릭터**가 되고(실제로 그렇게 됐다), 팔 폭 0.9867 이 보도에 안 들어가 **프롭 중심선을 +1.0 → +1.34** 로 밀었다(그래도 오늘보다 모든 프롭에서 여유가 커진다). 판정 여섯(M11~M15·E7c)을 세워 주입 15종으로 실증했고, 그 판정이 **구현 결함 둘**(`reset()` 이 `_tick` 을 안 되돌림 · 판정 헬퍼의 프레임 정렬)을 잡았다. `RESTART_PROPS` 2100 → **2099**.
 
 > **rev.23 = 브라우저에서 판정을 돌린다(§24).** 익스포트본을 **실제 Chrome 안에서** 돌려 판정 아홉 종을 전부 받았다(전부 PASS). 브라우저에는 명령줄이 없으므로 쿼리 문자열로 판정을 켜고, `console.log`를 감싸 결과를 하네스(`tools/web_judge.mjs`)로 되돌린다 — **결과가 오지 않으면 `FAIL(무응답)`이다.** 첫 실행이 판정기의 어긋남 둘을 드러냈다: H10의 기대값이 플랫폼의 함수가 아니었고, **C2는 §23이 걷어낸 크기 게이트 위에 서 있어 `main`이 이미 red였다.** 한글 HUD는 이제 육안이 아니라 WebGL2 프레임버퍼의 잉크 2515픽셀이 근거다.
@@ -749,6 +751,9 @@ const CITY := preload("res://scripts/city.gd")
 
 ## 구멍 반경의 단일 진실 원천(SSOT). 우물의 반경과 깊이가 모두 여기서 파생된다.
 ## 시작값 1.5 — 크기 게이트(R × 0.45 = 0.675)가 트래픽콘·덤불·표지판만 열어 준다.
+## (§23 에서 그 게이트는 사라지고 통과를 물리가 정한다. §36 에서 보도의 덤불이 가로수로
+## 바뀌었지만 **먹이 밀도는 안 변했다** — 삼킬 수 있는 프롭은 R=1.5 에서 971 → 968 이고
+## 수관까지 통과는 833 → 839 로 오히려 늘었다. `tools/measure_nature.gd` ④ 가 잰다.)
 ## 5.0 은 시작부터 나무가 걸림 없이 삼켜지고 90초에 지도를 비웠다(플레이 피드백).
 @export var radius := 1.5
 ## 우물 벽 반경 배율. 1.02 가 이음새가 닫히는 최소값(V21), 1.03 은 여유분.
@@ -2166,7 +2171,33 @@ const SETTLE_FRAMES := 180                         # E5: 정지 판정 전에 �
 const SETTLE_MOVE_TOL := 0.01                      # E5: 그동안 허용되는 최대 이동(월드 단위)
 
 # --- 4a 아레나 판정 -------------------------------------------------------
-const ARENA_FRAMES := 900                          # G2·G5: 자유 실행 물리 프레임(15초)
+## G2·G5·G7: 자유 실행 물리 프레임. **§36 에서 900(15초) → 2700(45초).**
+##
+## 하한을 낮추지 않고 **관측 창을 넓혔다.** 근거: G7 의 성장 합은 **포식 한 번에 좌우되는
+## 지표**다 — §36 직전 baseline 의 +4.309 중 **+4.170 이 포식 하나**였다(AI 가 AI 를 먹으면
+## 반경이 계단식으로 뛰고, 커진 AI 가 이어서 프롭을 쓸어담아 objects_eaten 이 19 까지 간다).
+## §36 이 배치를 흔들자 AI3 의 생성 자리가 (-101,-78) → (-91,-75) 로 옮겼고, 15초 안에
+## 일어나던 포식이 그 창 **밖으로 밀렸다**(성장 +0.072). 45초로 넓히면 다시 일어난다(+0.986).
+##
+## **난도는 안 변했다 — 통제 실험으로 확인했다.** 가로수 스케일을 1.46 → 1.10 으로 낮춰
+## 수관을 시작 반경 아래로 내려도 **성장과 섭취 수가 같았다**(objects_eaten 2, +0.072;
+## AI3 경로만 52.2 → 41.5 로 달랐다). 즉 §36 이 만든 회귀가 아니라 **원래 운에 기대던
+## 기준이 운을 잃은 것**이다.
+##
+## 전역 먹이 밀도도 그대로다(R=1.5 에서 971 → 968, 수관까지 통과는 833 → 839 로 오히려
+## 늘었다 — `tools/measure_nature.gd` ④). **다만 이 수는 근거로 약하다** — G7 이 재는 것은
+## *그 AI 주변* 의 먹이지 도시 전체가 아니다(실측: AI3 의 프롭 섭취 성장률은 생성 자리가
+## 옮기면서 대략 1/3 로 떨어졌다). 무게는 위의 통제 실험에 있다.
+##
+## **남은 한계**: 45초에서도 **포식을 빼면 성장이 +0.132 로 하한 0.20 에 미달**한다
+## (0.986 중 0.854 가 포식). 창을 넓혀 동전이 떨어질 때까지 기다린 것이지 동전을 없앤
+## 것이 아니다. 미래의 배치 변경이 포식을 이 창 밖으로 또 밀면 다시 빨개진다. 근본
+## 해결은 "프롭을 먹어 자란 양" 과 "AI 를 먹어 자란 양" 을 갈라 묻는 것이지만, 그것은
+## G7 의 재설계라 §36 의 범위 밖이다.
+##
+## 비용: `--judge4` 자유 실행이 3배가 된다(데스크톱·브라우저 양쪽). G2(면적 보존)·G5
+## (오프그라운드)·G6 은 누적 기회가 3배가 되므로 **더 엄해진다** — 실측 오차 0, offground 0.
+const ARENA_FRAMES := 2700
 const BITE_FRAMES := 20                            # G3·G4: 포식이 성사될 때까지 주는 프레임
                                                    # (첫 프레임에 성립한다. 길게 잡으면
                                                    #  그사이 오브젝트가 삼켜져 기대값이 흐려진다)
@@ -2227,7 +2258,18 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 ##   Bush3 74→71(−3)  Bush2 72→70(−2)  Sign_Triangle 61→59(−2)
 ##   TrafficSign2 59→62(+3)  TrafficLight 63→64(+1)  TrafficSign1 61→62(+1)  Bush1 80→81(+1)
 ## (E7 의 `MIN_BOUL_WALK` 카운터는 244 로 **불변**이다 — road 분기가 먼저 걸러서다.)
-const RESTART_PROPS := 2099
+##
+## **§36 에서 2099 → 2112.** 보도의 덤불 셋(Bush1~3, 반extent 0.428~0.537)이 가로수 둘
+## (StreetTree1·2, 1.1400)로 바뀌었다. zone 별 변화는 **walk 630→637 · block 504→491 ·
+## road 457→476** 이고 가로수는 122 개다(E9 가 센다).
+##
+## 순증 +13 의 원인은 둘이다. ① `WALK_OVERHANG` 완화가 `Streetlight_Double`(1.1524)까지
+## **가로 방향** 후보로 열었다(35→59). ② 그보다 큰 것은 **RNG 스트림 이동**이다 —
+## `add_slot` 은 `cands` 가 비면 `rng.randi_range` 를 한 번 덜 뽑으므로, walk 카탈로그가
+## 11종→10종이 된 순간 이후 **모든 자리의 난수가 다시 굴러간다**. block −13 · road +19 가
+## 그것이다(카탈로그 변경이 차도 자리를 직접 늘릴 수는 없다 — 코드 감사가 갈라냈다).
+## 대로 보도 카운터는 244→200 으로 줄지만 하한 162 위다.
+const RESTART_PROPS := 2112
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
 const SPEC_GROWTH_K := 1.0
@@ -2268,6 +2310,11 @@ const CANOPY_RATIO := 1.5
 ## E8: 그런 프롭의 하한. 이 하한이 잡는 것은 "밑동 셰이프가 다시 메시 전체가 되어
 ## 수관이 사라졌는가" 하나다 — 그때 0 이 된다.
 ## §25 재유도: 실측 955 → 687(도시 총량이 줄었다). 하한은 그 절반이다.
+## §36 실측 **446**(537 에서 줄었다 — 보도 덤불 162개가 수관 프롭이었는데 그 자리가
+## 가로수 122 로 바뀌었고, 새 관목은 수관비 ~1.0 이라 애초에 세지 않는다). 여유가
+## 34% → **21%** 로 얇아졌다. **재유도하지 않는다** — 이 하한이 잡는 것은 "수관이 통째로
+## 사라졌는가"(그때 0)이고, 446 은 그 질문에 여전히 넉넉하다. 절반 관례로 다시 뽑으면
+## 223 이 되어 오히려 변별력이 준다.
 const MIN_CANOPY_PROPS := 354
 
 # --- §21 한글 HUD 판정 -----------------------------------------------------
@@ -3615,9 +3662,15 @@ func zone_of(pts: PackedVector2Array) -> String:
 			or (ax.y <= rx and ax.x >= spec_median(kx) and az.x >= rz + SPEC_CROSS_W \
 				and spec_seg_ns(kx, jc)):
 		return "road"
-	if (az.x >= rz and az.y <= spec_curb_half(kz) and ax.x >= rx and spec_seg_ew(kz, kc)) \
-			or (ax.x >= rx and ax.y <= spec_curb_half(kx) and az.x >= rz \
-				and spec_seg_ns(kx, jc)):
+	# §36: 보도 띠의 바깥 경계만 `SPEC_WALK_OVERHANG` 만큼 느슨하다. **차도 쪽은 그대로다**
+	# (`az.x >= rz`). `prop_box` 가 수관 셰이프까지 헐에 넣으므로, 이 완화가 없으면
+	# 가로수가 전량 "구역 이탈" 로 잡힌다(바깥 끝 2.48 > curb 2.0).
+	# 오분류 걱정은 없다: `SPEC_WALK_OVERHANG`(0.5) < `SPEC_BLOCK_SETBACK`(0.8) 이라
+	# 블록 프롭은 이 띠에 못 들어온다.
+	if (az.x >= rz and az.y <= spec_curb_half(kz) + SPEC_WALK_OVERHANG \
+				and ax.x >= rx and spec_seg_ew(kz, kc)) \
+			or (ax.x >= rx and ax.y <= spec_curb_half(kx) + SPEC_WALK_OVERHANG \
+				and az.x >= rz and spec_seg_ns(kx, jc)):
 		return "walk"
 	# 블록 구간은 **셀 좌표**로 묻는다. 공원 수퍼블록은 여러 셀이 한 구간으로 병합되고
 	# 걷힌 내부 도로 자리까지 프롭이 들어가는 것이 규격이라, 중심선 기준 편차만 보던
@@ -3759,6 +3812,11 @@ func run_judge_3b() -> void:
 	var e7c_seen := 0
 	var e8_bad := 0
 	var canopy_n := 0
+	# E9(§36): 보도 오버행의 방향(차도 침범) · 양 · 높이, 그리고 가로수 수.
+	var e9_road_bad := 0
+	var e9_over_bad := 0
+	var e9_low_bad := 0
+	var e9_trees := 0
 	# §31: 난간의 기대 자리. 난간은 걷힌 도로의 기하 밴드 위에 서므로 zone_of 로
 	# 판정하면 안 된다(바다 안쪽 난간 전량이 대로 밴드에 선다 — 계획 감사가 산술로
 	# 보였다). 존 밴드 대신 **수변 규격 자리와의 일치**를 묻는다.
@@ -3856,11 +3914,17 @@ func run_judge_3b() -> void:
 			# **도로가 살아 있는 띠만 본다.** §25 가 공원 안쪽·강기슭의 도로를 걷어냈고,
 			# 그 자리는 블록 프롭이 정상적으로 차지한다(span 이 병합돼 옛 도로 자리까지
 			# 채운다) — 세그먼트 생존을 안 물으면 나무·바위·덤불이 무더기로 걸린다(실측).
-			var in_band: bool = \
-				(uwx > spec_road_half(kwx) and uwx <= spec_curb_half(kwx)
-					and spec_seg_ns(kwx, spec_cell_of(n3.position.z))) \
-				or (uwz > spec_road_half(kwz) and uwz <= spec_curb_half(kwz)
-					and spec_seg_ew(kwz, spec_cell_of(n3.position.x)))
+			# 이 프롭이 앉은 보도 축 목록 [가로지르는 축이 x 인가, 도로 중심선 인덱스].
+			# **E7c 의 "띠 안인가" 와 E9 의 축 선택은 같은 질문이다** — 따로 적으면 둘이
+			# 어긋나도 아무도 모른다(코드 감사 지적). 한 번 만들어 둘 다 쓴다.
+			var axes9 := []
+			if uwx > spec_road_half(kwx) and uwx <= spec_curb_half(kwx) \
+					and spec_seg_ns(kwx, spec_cell_of(n3.position.z)):
+				axes9.append([true, kwx])
+			if uwz > spec_road_half(kwz) and uwz <= spec_curb_half(kwz) \
+					and spec_seg_ew(kwz, spec_cell_of(n3.position.x)):
+				axes9.append([false, kwz])
+			var in_band: bool = not axes9.is_empty()
 			var on_center: bool = \
 				absf(uwx - (spec_road_half(kwx) + SPEC_WALK_CENTER)) <= WALK_CENTER_TOL \
 				or absf(uwz - (spec_road_half(kwz) + SPEC_WALK_CENTER)) <= WALK_CENTER_TOL
@@ -3873,6 +3937,93 @@ func run_judge_3b() -> void:
 							spec_road_half(kwx) + SPEC_WALK_CENTER,
 							spec_road_half(kwz) + SPEC_WALK_CENTER])
 				e7c_bad += 1
+			# --- E9(§36): 보도 오버행과 가로수 ---
+			#
+			# §36 이 보도 띠의 **바깥 경계만** 열었다(수관은 블록 여백 위로 걸치고
+			# 차도 쪽으로는 한 뼘도 안 나간다). 그 비대칭을 여기서 못 박는다.
+			#
+			# **셰이프를 개별로 순회한다.** `prop_box` 는 밑동과 수관을 헐 하나로 합쳐
+			# 돌려주므로 "어느 부피가 얼마나 높이 있는가" 를 못 묻는다. 그것을 물으려고
+			# `prop_box` 를 늘리면 그것을 쓰는 E2·E5 가 함께 흔들린다.
+			# **어느 한 축에서 성립하면 통과다.** `in_zone("walk")` 이 `on_z or on_x`
+			# 이므로 판정도 같아야 한다 — 두 축을 모두 요구하면 정상 프롭이 탈락한다:
+			# 프롭이 앉지 않은 **교차 축**의 |u| 는 8~13 이라 커브를 한참 넘는다.
+			# (E7c 가 같은 이유로 OR 를 쓴다. 처음에 두 축을 다 보게 짰다가 853건이
+			# 위양성으로 떴다 — 보도 프롭 거의 전량이었다.)
+			if in_band:
+				var best9 := [999, 0, 0, 0, 0.0, 0.0]   # [합, 차도, 초과, 낮음, |u|하한, 초과량]
+				for pair9 in axes9:
+					var is_x9: bool = pair9[0]
+					var kk9: int = pair9[1]
+					var r9 := spec_road_half(kk9)
+					var cv9 := spec_curb_half(kk9)
+					var line9 := float(kk9) * SPEC_PITCH
+					var nroad := 0
+					var nover := 0
+					var nlow := 0
+					var vin := INF
+					var vover := 0.0
+					for c9 in n3.find_children("", "CollisionShape3D", false, false):
+						var col9 := c9 as CollisionShape3D
+						if col9 == null or col9.shape == null:
+							continue
+						# 셰이프별 y 하단이 필요하다. `prop_box` 는 밑동과 수관을 헐
+						# 하나로 합쳐 돌려주므로 못 쓴다 — 늘리면 그것을 쓰는
+						# E2·E5 가 함께 흔들린다.
+						var pts9 := PackedVector2Array()
+						var sy9 := world_box(n3.global_transform * col9.transform,
+							col9.shape.get_debug_mesh().get_aabb(), pts9)
+						var lo9 := INF
+						var hi9 := -INF
+						for q in pts9:
+							var d9: float = ((q as Vector2).x if is_x9 \
+								else (q as Vector2).y) - line9
+							lo9 = minf(lo9, d9)
+							hi9 = maxf(hi9, d9)
+						var rng9 := abs_range(lo9, hi9)
+						# (a) 차도 쪽으로 넘었는가. **E9 가 자기 상수로 다시 잰다** —
+						# `zone_of` 를 재사용하면 완화를 되돌린 고장을 못 잡는다.
+						if rng9.x < r9 - 1e-4:
+							nroad += 1
+							vin = minf(vin, rng9.x)
+						# (b) 커브를 넘은 부피는 양이 제한되고 **시민 키 위**에 있어야 한다.
+						var over9: float = rng9.y - cv9
+						if over9 > 1e-4:
+							vover = maxf(vover, over9)
+							if over9 > SPEC_WALK_OVERHANG + 1e-4:
+								nover += 1
+							if sy9 <= SPEC_CITIZEN_TOP:
+								nlow += 1
+					var sum9: int = nroad + nover + nlow
+					if sum9 < int(best9[0]):
+						best9 = [sum9, nroad, nover, nlow, vin, vover]
+				if int(best9[0]) > 0:
+					if int(best9[1]) > 0:
+						if e9_road_bad < 5:
+							print("JUDGE 3b E9 보도 프롭이 차도를 침범: %s |u|하한=%.3f"
+								% [n3.name, float(best9[4])])
+						e9_road_bad += 1
+					if int(best9[2]) > 0:
+						if e9_over_bad < 5:
+							print("JUDGE 3b E9 커브 초과 과다: %s %.3f (<= %.3f)"
+								% [n3.name, float(best9[5]), SPEC_WALK_OVERHANG])
+						e9_over_bad += 1
+					if int(best9[3]) > 0:
+						if e9_low_bad < 5:
+							print("JUDGE 3b E9 커브를 넘은 부피가 시민 키 아래: %s (> %.3f)"
+								% [n3.name, SPEC_CITIZEN_TOP])
+						e9_low_bad += 1
+				# (c) 가로수인가. 높이 **와** 좁은 축을 함께 본다 — 높이만 보면 4m 를
+				# 넘는 폴 156개가 전부 가로수로 세어져 하한이 공허해진다.
+				var mh9 := Vector3.ZERO
+				for c9m in n3.find_children("", "MeshInstance3D", false, false):
+					var mi9 := c9m as MeshInstance3D
+					if mi9 == null or mi9.mesh == null:
+						continue
+					mh9 = mh9.max(mi9.mesh.get_aabb().size * mi9.scale.abs())
+				if mh9.y >= SPEC_TREE_MIN_H \
+						and minf(mh9.x, mh9.z) * 0.5 >= SPEC_TREE_MIN_HALF:
+					e9_trees += 1
 		# 접지는 **보이는 메시**로도 재야 한다. 콜라이더만 재면 피벗 보정을 지운
 		# 빌드가 통과한다 — 콜라이더는 제자리이고 모델만 뜨거나 박히기 때문이다.
 		var why5 := ""
@@ -3982,7 +4133,17 @@ func run_judge_3b() -> void:
 	#   ② 그런 프롭이 하한 이상 있는가 — 밑동 셰이프를 다시
 	#      메시 전체로 되돌리면 둘이 같아져 걸림이 조용히 사라진다.
 	var e8: bool = e8_bad == 0 and canopy_n >= MIN_CANOPY_PROPS
-	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7 and e8
+	# E9(§36): 보도 오버행은 **한쪽으로만, 머리 위로만** 열렸는가, 그리고 보도에 실제로
+	# 나무 크기의 녹지가 서는가. 셋을 함께 묻는다 — 하나라도 빠지면 다음이 조용히 샌다:
+	#   ① 차도 침범 0     완화를 양쪽으로 열면 수관이 차 위로 간다
+	#   ② 초과량·높이     수관이 시민 눈높이로 내려오면 겉보기 관통이 된다
+	#   ③ 가로수 하한     덤불 크기로 되돌린 빌드를 잡는 유일한 조건
+	# **①은 현재 카탈로그에서 잉여 방어다** — walk 10종의 최대 반extent 가 1.1524 로
+	# WALK_CENTER(1.34)보다 작아 중심선을 옮기지 않는 한 차도를 못 넘는다. 넓은 보도
+	# 자산이 들어올 때를 위해 둔다. **잉여인 줄 알고 두는 것**과 모르고 두는 것은 다르다.
+	var e9: bool = e9_road_bad == 0 and e9_over_bad == 0 and e9_low_bad == 0 \
+		and e9_trees >= MIN_STREET_TREES
+	var ok: bool = e1 and e2 and e3 and e4 and e5 and e6 and e7 and e8 and e9
 	print("JUDGE 3b props=%d catalog=%d albedos=%d zones road=%d walk=%d block=%d"
 		% [props.size(), cat.size(), albedos.size(),
 		   zone_n["road"], zone_n["walk"], zone_n["block"]])
@@ -3994,8 +4155,11 @@ func run_judge_3b() -> void:
 		% [e1_bad, e2_bad, e3_bad, e5_bad, e6_bad, e8_bad, jset, f1.length(), f3.length(),
 		   moved, tilted])
 	print("JUDGE 3b E8 수관프롭=%d(>=%d, 수관/밑동 >= %.1f)" % [canopy_n, MIN_CANOPY_PROPS, CANOPY_RATIO])
-	print("JUDGE 3b E1=%s E2=%s E3=%s E4=%s E5=%s E6=%s E7=%s E8=%s -> %s"
-		% [pf(e1), pf(e2), pf(e3), pf(e4), pf(e5), pf(e6), pf(e7), pf(e8),
+	print("JUDGE 3b E9 가로수=%d(>=%d, 높이>=%.1f 좁은반축>=%.2f) 차도침범=%d 초과과다=%d 낮은수관=%d (오버행<=%.2f, 시민 %.3f)"
+		% [e9_trees, MIN_STREET_TREES, SPEC_TREE_MIN_H, SPEC_TREE_MIN_HALF,
+		   e9_road_bad, e9_over_bad, e9_low_bad, SPEC_WALK_OVERHANG, SPEC_CITIZEN_TOP])
+	print("JUDGE 3b E1=%s E2=%s E3=%s E4=%s E5=%s E6=%s E7=%s E8=%s E9=%s -> %s"
+		% [pf(e1), pf(e2), pf(e3), pf(e4), pf(e5), pf(e6), pf(e7), pf(e8), pf(e9),
 		   ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
@@ -5295,6 +5459,23 @@ const WALK_CENTER_TOL := 0.05
 ## E7c 가 실제로 봐야 할 보도 프롭 수의 하한(실측 630). 밴드 조건이나 세그먼트 판정이
 ## 미래에 뒤집혀 표본이 0 이 되면 **E7c 는 공허하게 참**이 되고 로그에 흔적도 안 남는다.
 const MIN_WALK_SAMPLES := 500
+
+## E9(§36): 보도 프롭이 커브 **바깥쪽**으로 걸칠 수 있는 양. 차도 쪽은 0 이다.
+## 구현체의 `WALK_OVERHANG` 을 읽지 않고 판정기가 자기 값으로 적는다 — 읽으면 완화를
+## 늘린 빌드가 자기 값끼리 일치해 통과한다.
+const SPEC_WALK_OVERHANG := 0.5
+## E9: 가로수 판별. **높이만으로는 안 갈린다** — 보도에는 4m 를 넘는 폴이 **191개** 있다
+## (가로등 7.96×63 · 8.03×59, 신호등 4.53×69 — `tools/measure_nature.gd` ③ 이 센다).
+## 두 축을 함께 보면 갈린다: 폴은 좁은 축이 최대 **0.4807**(가로등)이고 가로수는 0.9308 이다.
+const SPEC_TREE_MIN_H := 4.0
+const SPEC_TREE_MIN_HALF := 0.60
+## E9: 가로수 하한. **실측 122 의 절반**이다(E7a 와 같은 관례 — 자리 하나가 빠지는
+## 부분 회귀는 비율로 안 걸리지만, 가로수가 덤불로 되돌아가면 0 이 된다).
+## 판별 축이 실제로 폴을 걸러 내는지 확인했다: 실측 122 는 `StreetTree1·2` 의 수(69+53)와
+## 같고, 4m 초과 폴 191개는 좁은 반축이 최대 0.4807 이라 전부 빠진다.
+## **`RESTART_PROPS` 도 T5·T7 도 이 회귀를 못 잡는다** — 카탈로그에서 가로수 두 줄을 지우면
+## 프롭 수와 zone 별 분포가 **비트 단위로 그대로**다(코드 감사가 주입해 확인했다).
+const MIN_STREET_TREES := 61
 
 ## M13 프로브 조건. **조건이 규격의 일부다** — 같은 대비를 게임 카메라 각(내려보는 40.2°,
 ## 거리 21.7m)에서 재면 앞뒤 비가 1.84배에서 **1.14배로 무너진다**(머리가 화면에서 10픽셀
@@ -7709,11 +7890,14 @@ const CATALOG := [
 	{ "path": "res://assets/nature/Rock1.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
 	{ "path": "res://assets/nature/Rock2.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
 	{ "path": "res://assets/nature/Rock3.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
-	# 공원 전용 덤불. 같은 에셋이 보도에도 있지만 자리의 종류가 다르다 —
+	# 공원 전용 관목(§36). 옛 Bush1~3 은 머티리얼이 Leaves + **Tree** 로 줄기가 있어
+	# 형태가 "축소된 나무" 였다 — 유저가 보도에서 그것을 "축소된 가로수" 로 봤다.
+	# 이 셋은 머티리얼이 Green(+Berry) 하나뿐이라 줄기가 없다. 수관비 1.00~1.03 이므로
+	# make_prop 이 셰이프를 하나만 단다(그게 맞다 — 덩어리에는 가지가 없다).
 	# "bush" 는 P 의 kinds 에만 있으므로 D·C·R 블록에는 나타나지 않는다.
-	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Shrub1.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Shrub2.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Shrub3.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
 	# --- 가로 시설물: 보도 ---
 	{ "path": "res://assets/streets/Streetlight_Single.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
 	{ "path": "res://assets/streets/Streetlight_Double.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
@@ -7723,9 +7907,14 @@ const CATALOG := [
 	{ "path": "res://assets/streets/Sign_Triangle.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
 	{ "path": "res://assets/transport/TrafficSign1.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
 	{ "path": "res://assets/transport/TrafficSign2.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
-	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
+	# --- 가로수: 보도 (§36) ---
+	# 보도의 녹지는 **진짜 나무 크기**다(유저 지시). 스케일 1.46 은 고른 값이 아니라
+	# 좁은 창의 한가운데다 — 아래는 `s >= 1.4425`(수관 셰이프 하단이 시민 키 1.665 위로
+	# 0.08 이상), 위는 `s <= 1.4856`(반extent <= WALK_OVERHANG 이 허용하는 1.16).
+	# **폭이 0.043(2.9%)뿐이라 "조금만 키우자" 가 곧바로 E2 를 깬다.** 판정 E9 가 양끝을 문다.
+	# 두 종은 정점 데이터가 byte-identical 이고 잎 색만 다르다 — 실측 한 벌이 둘 다에 맞는다.
+	{ "path": "res://assets/nature/StreetTree1.obj", "scale": 1.46, "zone": "walk", "kind": "tree" },
+	{ "path": "res://assets/nature/StreetTree2.obj", "scale": 1.46, "zone": "walk", "kind": "tree" },
 	# --- 차량: 차도 ---
 	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0, "zone": "road", "kind": "car" },
 	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0, "zone": "road", "kind": "car" },
@@ -7801,6 +7990,11 @@ static func curb_half_at(k: int) -> float:
 ## **가로등 기둥 안쪽 모서리까지 0.758** 뿐인데 팔 span 이 0.9867 이다 — 어떤 오프셋으로도
 ## 안 들어간다. 중심선을 밀어 프롭을 비켜 준다.
 ##
+## **§36 주의**: 아래 유도는 보도에 덤불이 서 있던 시절의 것이다. 그 덤불(Bush1~3)은
+## §36 에서 보도를 떠났고(가로수로 교체) 저장소에서도 지웠다. 값은 **그대로 둔다** —
+## 가로수가 이 자리에서 성립하고(팔 높이대 시민 여유 −0.190 → **+0.122**), 옮기면
+## `RESTART_PROPS` 와 E7c 규격을 다시 유도해야 한다. 아래는 그 값이 어떻게 나왔는지의 기록이다.
+##
 ## **1.34 인 이유.** [1.24, 1.44] 는 배치가 완전히 같은 고원이다(총 프롭 2099 · walk 630 ·
 ## boul_walk 244 로 불변 — 실측). 1.46 부터 Bush1(반extent 0.537)이 보도 축 자격을 잃고
 ## 1.50 에서 구성이 무너진다(Bush1 80→21). 고원 안에서 **시민 여유**(신호등 기둥까지
@@ -7816,6 +8010,27 @@ static func curb_half_at(k: int) -> float:
 const WALK_CENTER := 1.34
 static func walk_center_at(k: int) -> float:
 	return road_half_at(k) + WALK_CENTER
+
+
+## 보도 프롭이 커브 **바깥쪽(블록 쪽)** 으로 걸칠 수 있는 양. 차도 쪽은 0 이다(§36).
+##
+## §35 까지 보도 프롭은 띠 [road_half, curb_half] 안에 온전히 들어가야 했다. 그 규격에서
+## 허용 반extent 는 `min(WALK_CENTER, SIDEWALK_W - WALK_CENTER)` = **0.66** 이고, 팩의 나무를
+## 거기에 맞추면 **가장 큰 것이 2.62m** 다(Tree1, 좁은 축 기준). 가로등 7.96m 옆에서 그것은
+## 나무가 아니라 덤불이라, 보도의 녹지가 "축소된 가로수" 로 읽혔다(유저 피드백).
+##
+## **실제 가로수의 수관은 보도 밖으로 나간다 — 지면에 닿는 것은 밑동뿐이다.** 이 저장소는
+## 이미 그 구분 위에 서 있다(§17·§19·§23 의 밑동/수관, `BASE_FRAC`, `base_extent`).
+##
+## **값을 고르지 않고 유도한다.** 블록 여백(`BLOCK_SETBACK` 0.8)에서 생성 시점 간격
+## (`GAP` 0.3)을 뺀다. 그러면 보도 프롭의 바깥 끝이 최대 `curb_half + 0.5` 이고 블록 구간은
+## `curb_half + 0.8` 에서 시작하므로 **수관이 블록 프롭에 원리적으로 못 닿는다** — 간격이
+## 정확히 `GAP` 이라 `fits()` 의 `absf(d) < ex + o + GAP` 가 부등호로 성립하지 않는다.
+##
+## 차도 쪽을 열지 않는 것이 이 상수의 요점이다. 열면 수관이 정차·주행 차량 위로 나가고,
+## 그때는 `fits()`·E3 가 2D 라서 **차를 거절하거나 겹침을 통과시키거나** 둘 중 하나가 된다.
+## 안 열면 둘 다 손댈 필요가 없다(현행 최대 반extent 1.1400 < WALK_CENTER 1.34).
+const WALK_OVERHANG := BLOCK_SETBACK - GAP     # 0.5
 
 
 ## 차량이 넘어설 수 없는 안쪽 경계. 일반 도로의 한 줄은 노면 위 표시일 뿐이라 0 이고,
@@ -8283,9 +8498,14 @@ func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
 			return on_z or on_x
 		"walk":
 			# 한 축은 보도 띠 안, 다른 축은 교차 도로를 침범하지 않아야 한다.
-			var on_z: bool = uz - ex.y >= rz and uz + ex.y <= curb_half_at(kz) \
+			# **차도 쪽(`- ex >= r`)과 블록 쪽(`+ ex <= curb`)은 대칭이 아니다**(§36):
+			# 차도 쪽으로는 한 뼘도 못 나가고, 블록 쪽으로는 `WALK_OVERHANG` 만큼 수관이
+			# 걸친다. 그 여백은 어차피 `BLOCK_SETBACK` 이 비워 둔 자리다.
+			var on_z: bool = uz - ex.y >= rz \
+				and uz + ex.y <= curb_half_at(kz) + WALK_OVERHANG \
 				and ux - ex.x >= rx and seg_ew(kz, kc)
-			var on_x: bool = ux - ex.x >= rx and ux + ex.x <= curb_half_at(kx) \
+			var on_x: bool = ux - ex.x >= rx \
+				and ux + ex.x <= curb_half_at(kx) + WALK_OVERHANG \
 				and uz - ex.y >= rz and seg_ns(kx, jc)
 			return on_z or on_x
 		_:
@@ -11672,3 +11892,219 @@ zone 별: walk 631→630, block 1012·road 457 불변
 5. **진단 `--diag34` 는 일부러 남겼다**(`screenshot.gd` 끝, `JUDGE_ORDER` 첫 항목).
    §35 를 닫을 때 **반드시 지운다**. 브라우저 쿼리로는 도달할 수 없다(`?judge=` 는
    `--judge` 접두사만 만든다).
+
+---
+
+## §36. 보도의 녹지를 진짜 나무로 — 가로수와 관목 (구현·검증 완료, rev.34)
+
+유저 피드백: **"축소된 가로수(나무) 어색함. 그냥 나무 크기로 키우고 bush는 따로 에셋을 찾아보자"**
+
+### 무엇이 어색했나
+
+보도(`zone: "walk"`)의 유일한 녹지는 `Bush1/2/3` 이었다. 셋 다 머티리얼이 `Leaves` + **`Tree`**
+로 **줄기가 있다** — 형태가 덤불이 아니라 "축소된 나무" 다. 시민 1.665m·가로등 7.96m 옆에
+1.0~1.5m 짜리 줄기 달린 나무가 늘어서니 축소된 가로수로 읽혔다.
+
+| 에셋 | 높이 | XZ 반extent | 정점 |
+|---|---|---|---|
+| Bush1 | 1.491 | (0.537, 0.537) | 45 |
+| Bush2 | 0.957 | (0.499, 0.386) | 107 |
+| Bush3 | 1.252 | (0.428, 0.478) | 54 |
+
+### 스케일만 올리면 2.6m 가 천장이다 — 불가능은 아니고 부족하다
+
+`in_zone("walk")` 은 `uz - ex.y >= rz` 와 `uz + ex.y <= curb_half` 를 함께 요구한다.
+`WALK_CENTER` 1.34 · `SIDEWALK_W` 2.0 이므로 **허용 반extent = min(1.34, 0.66) = 0.66**.
+
+**회전은 자리마다 하나다.** `add_slot` 은 `spin` 을 자리당 한 번 뽑고 모든 카탈로그 항목을
+그 하나의 yaw 에서 심사한다. 따라서 **좁은 축 하나만** 0.66 이하면 그 에셋은 자리의 절반에서
+후보가 된다. 계획 1판은 이것을 "두 축 모두" 로 잘못 읽어 상한을 1.81m 로 계산했고,
+그 위에 "원리적으로 불가능" 이라는 틀린 결론을 세웠다(계획 감사가 잡았다).
+
+| 에셋 | 좁은 축 반extent | 허용 스케일 | 그때 높이 |
+|---|---|---|---|
+| Tree1 | 1.0336 | 0.639 | **2.62m** |
+| Tree2 | 1.4475 | 0.456 | 2.27m |
+| Tree3 | 1.0307 | 0.640 | **2.61m** |
+| Tree4 | 1.8843 | 0.350 | 2.40m |
+
+2.62m 는 덤불 1.49m 보다는 크지만 가로등 7.96m 옆에서 여전히 난쟁이고, 배치도 자리의
+절반으로 준다. **정도의 문제이지 불가능 증명이 아니다** — 그래도 유저 지시를 만족하지 못한다.
+
+### 수관은 커브 밖으로 나간다 — `WALK_OVERHANG` 을 유도한다
+
+실제 가로수의 수관은 보도 밖으로 나가고 지면에 닿는 것은 밑동뿐이다. 이 저장소는 이미 그
+구분 위에 서 있다(§17·§19·§23 의 밑동/수관, `BASE_FRAC`, `base_extent`).
+
+**값을 고르지 않고 유도한다.**
+
+```gdscript
+const WALK_OVERHANG := BLOCK_SETBACK - GAP     # 0.5
+```
+
+블록 여백 0.8 에서 생성 시점 간격 0.3 을 뺀다. 그러면 보도 프롭의 바깥 끝이 최대
+`curb_half + 0.5` 이고 블록 구간은 `curb_half + 0.8` 에서 시작하므로 **수관이 블록 프롭에
+원리적으로 못 닿는다** — 간격이 정확히 `GAP` 이라 `fits()` 의 `absf(d) < ex + o + GAP` 가
+부등호로 성립하지 않는다.
+
+**차도 쪽은 안 연다.** 열면 수관이 정차·주행 차량 위로 나가고, 그때는 `fits()`·E3 가 2D 라서
+차를 거절하거나 겹침을 통과시키거나 둘 중 하나가 된다. 안 열면 **둘 다 손댈 필요가 없다.**
+
+허용 반extent = `min(WALK_CENTER, SIDEWALK_W - WALK_CENTER + WALK_OVERHANG)` = **1.16**.
+
+### 에셋 — 150종을 훑어 남은 것은 한 계열뿐이었다
+
+Quaternius *Ultimate Nature Pack*(CC0, 같은 작가) 150종을 다섯 조건으로 전수 스윕했다:
+① 높이 ≥ 4.0m ② 수관 셰이프 하단 − 시민 키(1.665) ≥ 0.08 ③ §34 팔 높이대 시민 여유 ≥ +0.05
+④ `min(반extent) ≥ 0.60`(폴과 판별) ⑤ 수관비 ≥ 1.5.
+
+통과 4종 = `CommonTree_3` · `CommonTree_Autumn_3` · `CommonTree_Snow_3` · `Wheat`.
+밀과 눈 변종은 **조건이 아니라 아트 판단으로** 뺐다. 즉 기하가 허락하는 나무는 한 계열뿐이다.
+
+| 저장명 | 원본 | 정점 | 서피스 |
+|---|---|---|---|
+| `StreetTree1` | `CommonTree_3` | 798 | 3 (Wood/Green/DarkGreen) |
+| `StreetTree2` | `CommonTree_Autumn_3` | 798 | 3 (Wood/Orange/LightOrange) |
+| `Shrub1` | `Bush_1` | 184 | 1 (Green) |
+| `Shrub2` | `Bush_2` | 136 | 1 (Green) |
+| `Shrub3` | `BushBerries_1` | 470 | 2 (Green/Berry) |
+
+두 가로수는 **정점 데이터가 byte-identical** 이다(MD5 `227568e6…`) — 잎 색만 다르므로
+실측 한 벌이 둘 다에 정확히 적용된다. 관목 셋은 머티리얼이 `Green`(+`Berry`) 하나뿐이라
+**줄기가 없다**. 수관비 1.00~1.03 이므로 셰이프가 하나다(덩어리에는 가지가 없다 — E8 무영향).
+
+### 스케일 1.46 — 창이 2.9% 뿐이다
+
+| 항목 | 값 | 여유 |
+|---|---|---|
+| 높이 | **5.046 m** | 덤불 1.49 → 3.4배 |
+| 반extent (X, Z) | (0.9308, 1.1400) | 한계 1.16 대비 +0.0200 |
+| 차도 쪽 안쪽 끝 | 0.2000 | 아스팔트까지 +0.2000 |
+| 커브 초과 | 0.4800 | `WALK_OVERHANG` 0.5 대비 +0.0200 |
+| 수관 셰이프 하단 | 1.766 | 시민 1.665 대비 **+0.101** |
+| 잎 메시 온셋 | 2.172 | 시민 대비 +0.507. **겉보기 관통의 실제 지표는 이쪽**이지만 E9(b)가 무는 것은 셰이프 하단(높이의 순수 함수)이다 — 잎이 낮은 메시로 갈아 끼우면 E9 는 통과한다. `measure_nature.gd` ② 가 인쇄한다 |
+| §34 팔 높이대 여유 | **+0.122** | 현행 덤불 **−0.190** |
+| `min(반extent)` | 0.9308 | E9 폴 판별 0.60 (폴 최대 0.481) |
+
+**스케일 창은 `[1.4425, 1.4856]`, 폭 0.043(2.9%)이다.** 아래는 수관 하단이 시민 키로
+내려가는 지점, 위는 반extent 가 1.16 을 넘는 지점이다. 1.46 은 창의 40% 지점이고,
+**양끝을 E9(b)와 E2 가 각각 문다** — "조금만 키우자" 가 곧바로 E2 를 깬다.
+
+**시민 여유는 한 정의로만 적는다**(§34 규약): `WALK_CENTER − 프롭 반폭 − (0.5 + 0.9867/2)`,
+반폭은 **월드 y ∈ [0.6, 1.4] 의 실제 반폭을 메시 XZ 중심 기준 회전 4방향 최악값**으로 잰다.
+`make_prop` 이 피벗을 메시 XZ 중심으로 정규화하므로 **줄기가 중심에서 벗어난 모델은 90°
+회전 넷 중 하나에서 그만큼 차도 쪽으로 밀린다.** 이것을 빼먹으면 여유가 실제보다 크게 나온다
+— 계획 1판이 `BirchTree_5` 를 "+0.21" 로 적었는데 실측은 **−0.0035** 였고, 2판도 스케일
+곱을 빠뜨려 +0.1928 로 적었다(실제 +0.1220). **두 판 연속 같은 자리에서 틀렸다.**
+
+→ §34 의 미해결 한계 "덤불 겹침 −0.190"(보도 폭 2.0 에 덤불 1.074 + 시민 0.987 = 2.06 이라
+기하적으로 못 피한다)이 **실제로 해소된다.**
+
+### 판정 E9 — 높이만으로는 나무와 가로등이 안 갈린다
+
+계획 1판의 E9 는 "보도 + 높이 ≥ 4m" 로 가로수를 세려 했다. **보도에는 4m 넘는 폴이
+191개 있다**(가로등 7.96×63 · 8.03×59, 신호등 4.53×69 — §35 에는 156개였고 이 절이 그 수를 바꿨다). 하한을 실측의 절반으로 잡아도
+가로수를 전부 지운 빌드가 폴만으로 통과한다 — 감사가 산술로 보였다.
+
+두 축을 함께 보면 갈린다: **가로수 좁은 반축 0.9308 대 폴 최대 0.4807.** 문턱 0.60.
+
+E9 는 셋을 함께 묻는다.
+
+| | 묻는 것 | 없으면 새는 것 |
+|---|---|---|
+| (a) | 보도 프롭이 차도를 안 넘는가 | 완화를 양쪽으로 열면 수관이 차 위로 간다 |
+| (b) | 커브를 넘은 부피가 `WALK_OVERHANG` 이내이고 **시민 키 위**인가 | 수관이 눈높이로 내려오면 겉보기 관통 |
+| (c) | 가로수가 `MIN_STREET_TREES`(61 = 실측 122 의 절반) 이상인가 | 덤불 크기로 되돌린 빌드 |
+
+**셰이프를 개별로 순회한다.** `prop_box` 는 밑동과 수관을 헐 하나로 합쳐 돌려주므로 "어느
+부피가 얼마나 높이 있는가" 를 못 묻는다. 늘리면 그것을 쓰는 E2·E5 가 함께 흔들린다.
+
+**어느 한 축에서 성립하면 통과다.** `in_zone("walk")` 이 `on_z or on_x` 이므로 판정도 같아야
+한다 — 처음에 두 축을 다 보게 짰더니 **853건이 위양성**으로 떴다(보도 프롭 거의 전량).
+프롭이 앉지 않은 교차 축의 |u| 는 8~13 이라 커브를 한참 넘는다. E7c 가 같은 이유로 OR 를 쓴다.
+
+**(a)는 현재 카탈로그에서 잉여 방어다.** walk 10종의 최대 반extent 는 `Streetlight_Double`
+1.1524 로 `WALK_CENTER` 1.34 보다 작다 — 중심선을 옮기지 않는 한 어떤 프롭도 차도를 못 넘는다.
+잉여 방어를 두는 것은 옳다(넓은 보도 자산이 들어올 때를 위한 것). **잉여인 줄 모르고 두는
+것**이 위험이라 여기 적는다.
+
+### 고장 주입 4종
+
+| 주입 | 결과 |
+|---|---|
+| 가로수 스케일 0.64(= 옛 천장) | **E9(c) 가로수 0 < 61 → FAIL.** E1~E8 은 전부 P |
+| 보도 중심선 `road_half + 0.9` | E7c 637 이탈 + E9(c). **E9(a)는 안 터진다** — `in_zone` 이 차도 쪽을 계속 강제하므로 어떤 프롭도 안 넘는다 |
+| 중심선 0.9 **+** 차도 쪽 부등식도 대칭 개방 | **E9(a) 차도 침범 검출**(\|u\|하한 3.760·3.969 < 4.0), E9(b) 초과 0.640 > 0.5 |
+| `BASE_FRAC` 0.35 → 0.30 (수관 하단 1.514) | **E9(b) 낮은 수관 122건 → FAIL.** E1~E8 은 전부 P |
+
+두 번째 줄이 계획 감사의 지적이다: 원래 주입안(`WALK_OVERHANG` 을 차도 쪽에도 적용)은
+**결함 자체를 못 만든다** — 바깥 경계(1.16)가 항상 먼저 걸려 배치가 비트 단위로 안 변한다.
+그대로 뒀으면 "E9(a) 검증됨" 이 거짓으로 기록될 뻔했다.
+
+### 판정 4 G7 이 빨개졌다 — 원인은 §36 이 아니었다
+
+`--judge4` G7(AI 성장 합 ≥ 0.20)이 **+0.072** 로 떨어졌다. 세 가지를 재고 원인을 갈랐다.
+
+1. **먹이 밀도는 안 변했다.** 삼킬 수 있는 프롭 수는 R=1.5 에서 **971 → 968**, 수관까지
+   통과는 **833 → 839** 로 오히려 늘었다(`tools/measure_nature.gd` ④).
+2. **난도도 아니다.** 가로수 스케일을 1.46 → 1.10 으로 낮춰 수관을 시작 반경 아래로 내려도
+   **성장과 섭취 수가 같았다**(objects_eaten 2, +0.072 — AI3 경로만 52.2 → 41.5 로 달랐다).
+3. **원인은 포식이 창 밖으로 밀린 것이다.** §36 직전 baseline 의 +4.309 중 **+4.170 이 포식
+   하나**였다(AI 가 AI 를 먹으면 반경이 계단식으로 뛰고, 커진 AI 가 프롭을 쓸어담아
+   objects_eaten 이 19 까지 간다). §36 이 배치를 흔들자 AI3 의 생성 자리가 (-101,-78) →
+   (-91,-75) 로 옮겼고 15초 안에 일어나던 포식이 그 창 밖으로 나갔다.
+
+**하한을 낮추지 않고 관측 창을 넓혔다** — `ARENA_FRAMES` 900 → **2700**(45초), `AI_MIN_GROW`
+는 0.20 그대로. 45초에서 성장 +0.986 으로 통과한다.
+
+**남은 한계**: 45초에서도 통과의 대부분이 포식에서 온다(0.986 중 0.854). 미래의 배치 변경이
+포식을 이 창 밖으로 또 밀면 다시 빨개진다. 근본 해결은 "프롭을 먹어 자란 양" 과 "AI 를 먹어
+자란 양" 을 갈라 묻는 것이지만 그것은 G7 의 재설계라 이 절의 범위 밖이다.
+
+### 실측 변화
+
+| | §35 | §36 |
+|---|---|---|
+| `RESTART_PROPS` | 2099 | **2112** |
+| zone 별 | walk 630 · block 504 · road 457 | walk **637** · block 491 · road 476 |
+| 대로 보도(E7) | 244 | 200 (하한 162) |
+| E7c 표본 | 630 | 637 (하한 500) |
+| 수관 프롭(E8) | 537 | 446 (하한 354) |
+| 가로수(E9) | — | **122** (StreetTree1 69 + StreetTree2 53) |
+| 관목 | 덤불 **162**(보도) + **60**(공원) | Shrub 53 (공원만) |
+| albedo 색 | 49 | 54 |
+| draws / prims (dense) | 2266 / 1.42M | **2390 / 1.98M** |
+| avg / worst | 1.46 / 1.89 ms | **1.52 / 2.13 ms** (예산 16.67) |
+
+프롭 총수가 **는** 이유: 프롭이 커지면 `fits()` 가 이웃을 더 밀어내는데도, `WALK_OVERHANG`
+완화가 `Streetlight_Double`(1.1527)까지 **가로 방향** 후보로 열었다. 대로 보도가 244 → 200 으로
+주는 것도 같은 자리의 구성 변화다(하한 162 위).
+
+드로우콜은 **줄 것으로 예상했으나 늘었다**(2266 → 2390). 프리미티브도 +6% 로 봤으나 **+39%**
+였다. 서피스 2→3 과 정점 45~107 → 798 이 개수 감소를 압도한다. 여유가 11배라 F1·F2 는 통과다.
+
+### 안 한 것
+
+- `WALK_CENTER`(1.34) 불변. 가로수가 그 자리에서 성립하고, 옮기면 `RESTART_PROPS`·E7c 규격을
+  다시 유도해야 한다.
+- `fits()`·E3 에 높이 축을 넣지 않았다. 수관이 차도로 안 나가므로(여유 +0.200) 필요가 없다.
+- `in_zone` 을 발자국(밑동) 기준으로 바꾸지 않았다. 가장 근본적이지만 `fits()`·E3·`zone_of`
+  가 전부 전체 AABB 전제 위에 서 있어, 바꾸면 **모든 구역·모든 에셋의 배치를 다시 유도**해야
+  한다(`city.gd` 의 "배치는 여전히 메시 전체 AABB 를 쓴다 — 가지가 이웃을 파고들면 안 된다"
+  가 경고하는 자리다).
+- `judge6` 의 `FALL_TREE` 는 **합성 픽스처**라 에셋 교체와 무관하다.
+- 주거(R) 블록에 관목 추가, `Grass1~3`(미사용) 정리 — 범위 밖.
+- `simplebuildings/`·`transport/` 의 라이선스 파일 부재 — 범위 밖(`nature/` 만 넣었다).
+
+### 유저 검수 대기
+
+- **초록 + 단풍을 한 거리에 섞는다.** 두 가로수는 기하가 같고 잎 색만 다르다. 아트 판단이라
+  사람이 본다 — 마음에 안 들면 `CATALOG` 한 줄 삭제로 단일 수종이 된다.
+- 5.05m 가로수가 7.96m 가로등·건물 사이에서 의도한 인상인가.
+- 공원의 관목이 줄기 없는 덩어리로 잘 읽히는가.
+
+### 계획 감사
+
+1판 **70/100**(치명 2·중대 4). 치명은 ① E9 가 폴 156개 때문에 아무것도 못 잡는다
+② 수관 하단과 시민 키가 2.9cm(자산을 바꿔 해소). 2판 **84/100**(치명 1·중대 1) — 치명은
+위의 "결함을 못 만드는 주입", 중대는 팔 여유 숫자가 정의와 안 맞는 것. 둘 다 반영했다.

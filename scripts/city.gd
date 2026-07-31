@@ -188,11 +188,14 @@ const CATALOG := [
 	{ "path": "res://assets/nature/Rock1.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
 	{ "path": "res://assets/nature/Rock2.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
 	{ "path": "res://assets/nature/Rock3.obj", "scale": 1.0, "zone": "block", "kind": "rock" },
-	# 공원 전용 덤불. 같은 에셋이 보도에도 있지만 자리의 종류가 다르다 —
+	# 공원 전용 관목(§36). 옛 Bush1~3 은 머티리얼이 Leaves + **Tree** 로 줄기가 있어
+	# 형태가 "축소된 나무" 였다 — 유저가 보도에서 그것을 "축소된 가로수" 로 봤다.
+	# 이 셋은 머티리얼이 Green(+Berry) 하나뿐이라 줄기가 없다. 수관비 1.00~1.03 이므로
+	# make_prop 이 셰이프를 하나만 단다(그게 맞다 — 덩어리에는 가지가 없다).
 	# "bush" 는 P 의 kinds 에만 있으므로 D·C·R 블록에는 나타나지 않는다.
-	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Shrub1.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Shrub2.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
+	{ "path": "res://assets/nature/Shrub3.obj", "scale": 1.0, "zone": "block", "kind": "bush" },
 	# --- 가로 시설물: 보도 ---
 	{ "path": "res://assets/streets/Streetlight_Single.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
 	{ "path": "res://assets/streets/Streetlight_Double.obj", "scale": 7.3, "zone": "walk", "kind": "street" },
@@ -202,9 +205,14 @@ const CATALOG := [
 	{ "path": "res://assets/streets/Sign_Triangle.obj", "scale": 4.4, "zone": "walk", "kind": "street" },
 	{ "path": "res://assets/transport/TrafficSign1.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
 	{ "path": "res://assets/transport/TrafficSign2.obj", "scale": 1.6, "zone": "walk", "kind": "street" },
-	{ "path": "res://assets/nature/Bush1.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush2.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
-	{ "path": "res://assets/nature/Bush3.obj", "scale": 1.0, "zone": "walk", "kind": "bush" },
+	# --- 가로수: 보도 (§36) ---
+	# 보도의 녹지는 **진짜 나무 크기**다(유저 지시). 스케일 1.46 은 고른 값이 아니라
+	# 좁은 창의 한가운데다 — 아래는 `s >= 1.4425`(수관 셰이프 하단이 시민 키 1.665 위로
+	# 0.08 이상), 위는 `s <= 1.4856`(반extent <= WALK_OVERHANG 이 허용하는 1.16).
+	# **폭이 0.043(2.9%)뿐이라 "조금만 키우자" 가 곧바로 E2 를 깬다.** 판정 E9 가 양끝을 문다.
+	# 두 종은 정점 데이터가 byte-identical 이고 잎 색만 다르다 — 실측 한 벌이 둘 다에 맞는다.
+	{ "path": "res://assets/nature/StreetTree1.obj", "scale": 1.46, "zone": "walk", "kind": "tree" },
+	{ "path": "res://assets/nature/StreetTree2.obj", "scale": 1.46, "zone": "walk", "kind": "tree" },
 	# --- 차량: 차도 ---
 	{ "path": "res://assets/cars/Taxi.obj", "scale": 1.0, "zone": "road", "kind": "car" },
 	{ "path": "res://assets/cars/Cop.obj", "scale": 1.0, "zone": "road", "kind": "car" },
@@ -280,6 +288,11 @@ static func curb_half_at(k: int) -> float:
 ## **가로등 기둥 안쪽 모서리까지 0.758** 뿐인데 팔 span 이 0.9867 이다 — 어떤 오프셋으로도
 ## 안 들어간다. 중심선을 밀어 프롭을 비켜 준다.
 ##
+## **§36 주의**: 아래 유도는 보도에 덤불이 서 있던 시절의 것이다. 그 덤불(Bush1~3)은
+## §36 에서 보도를 떠났고(가로수로 교체) 저장소에서도 지웠다. 값은 **그대로 둔다** —
+## 가로수가 이 자리에서 성립하고(팔 높이대 시민 여유 −0.190 → **+0.122**), 옮기면
+## `RESTART_PROPS` 와 E7c 규격을 다시 유도해야 한다. 아래는 그 값이 어떻게 나왔는지의 기록이다.
+##
 ## **1.34 인 이유.** [1.24, 1.44] 는 배치가 완전히 같은 고원이다(총 프롭 2099 · walk 630 ·
 ## boul_walk 244 로 불변 — 실측). 1.46 부터 Bush1(반extent 0.537)이 보도 축 자격을 잃고
 ## 1.50 에서 구성이 무너진다(Bush1 80→21). 고원 안에서 **시민 여유**(신호등 기둥까지
@@ -295,6 +308,27 @@ static func curb_half_at(k: int) -> float:
 const WALK_CENTER := 1.34
 static func walk_center_at(k: int) -> float:
 	return road_half_at(k) + WALK_CENTER
+
+
+## 보도 프롭이 커브 **바깥쪽(블록 쪽)** 으로 걸칠 수 있는 양. 차도 쪽은 0 이다(§36).
+##
+## §35 까지 보도 프롭은 띠 [road_half, curb_half] 안에 온전히 들어가야 했다. 그 규격에서
+## 허용 반extent 는 `min(WALK_CENTER, SIDEWALK_W - WALK_CENTER)` = **0.66** 이고, 팩의 나무를
+## 거기에 맞추면 **가장 큰 것이 2.62m** 다(Tree1, 좁은 축 기준). 가로등 7.96m 옆에서 그것은
+## 나무가 아니라 덤불이라, 보도의 녹지가 "축소된 가로수" 로 읽혔다(유저 피드백).
+##
+## **실제 가로수의 수관은 보도 밖으로 나간다 — 지면에 닿는 것은 밑동뿐이다.** 이 저장소는
+## 이미 그 구분 위에 서 있다(§17·§19·§23 의 밑동/수관, `BASE_FRAC`, `base_extent`).
+##
+## **값을 고르지 않고 유도한다.** 블록 여백(`BLOCK_SETBACK` 0.8)에서 생성 시점 간격
+## (`GAP` 0.3)을 뺀다. 그러면 보도 프롭의 바깥 끝이 최대 `curb_half + 0.5` 이고 블록 구간은
+## `curb_half + 0.8` 에서 시작하므로 **수관이 블록 프롭에 원리적으로 못 닿는다** — 간격이
+## 정확히 `GAP` 이라 `fits()` 의 `absf(d) < ex + o + GAP` 가 부등호로 성립하지 않는다.
+##
+## 차도 쪽을 열지 않는 것이 이 상수의 요점이다. 열면 수관이 정차·주행 차량 위로 나가고,
+## 그때는 `fits()`·E3 가 2D 라서 **차를 거절하거나 겹침을 통과시키거나** 둘 중 하나가 된다.
+## 안 열면 둘 다 손댈 필요가 없다(현행 최대 반extent 1.1400 < WALK_CENTER 1.34).
+const WALK_OVERHANG := BLOCK_SETBACK - GAP     # 0.5
 
 
 ## 차량이 넘어설 수 없는 안쪽 경계. 일반 도로의 한 줄은 노면 위 표시일 뿐이라 0 이고,
@@ -762,9 +796,14 @@ func in_zone(pos: Vector3, ex: Vector2, zone: String) -> bool:
 			return on_z or on_x
 		"walk":
 			# 한 축은 보도 띠 안, 다른 축은 교차 도로를 침범하지 않아야 한다.
-			var on_z: bool = uz - ex.y >= rz and uz + ex.y <= curb_half_at(kz) \
+			# **차도 쪽(`- ex >= r`)과 블록 쪽(`+ ex <= curb`)은 대칭이 아니다**(§36):
+			# 차도 쪽으로는 한 뼘도 못 나가고, 블록 쪽으로는 `WALK_OVERHANG` 만큼 수관이
+			# 걸친다. 그 여백은 어차피 `BLOCK_SETBACK` 이 비워 둔 자리다.
+			var on_z: bool = uz - ex.y >= rz \
+				and uz + ex.y <= curb_half_at(kz) + WALK_OVERHANG \
 				and ux - ex.x >= rx and seg_ew(kz, kc)
-			var on_x: bool = ux - ex.x >= rx and ux + ex.x <= curb_half_at(kx) \
+			var on_x: bool = ux - ex.x >= rx \
+				and ux + ex.x <= curb_half_at(kx) + WALK_OVERHANG \
 				and uz - ex.y >= rz and seg_ns(kx, jc)
 			return on_z or on_x
 		_:

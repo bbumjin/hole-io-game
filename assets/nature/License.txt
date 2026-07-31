@@ -1,0 +1,30 @@
+------------------------------------------------------
+Nature Pack / Ultimate Nature Pack by Quaternius
+Consider supporting me on Patreon, even $1 helps me a lot!
+
+https://www.patreon.com/quaternius
+-------------------------------------------------------
+
+License:
+CC0 1.0 Universal (CC0 1.0)
+Public Domain Dedication
+https://creativecommons.org/publicdomain/zero/1.0/
+
+-------------------------------------------------------
+Files in this folder
+-------------------------------------------------------
+
+Nature Pack
+  Tree1..4, Rock1..3, Grass1..3
+
+Ultimate Nature Pack (Jun 2019) - renamed for this project
+  StreetTree1  <- CommonTree_3
+  StreetTree2  <- CommonTree_Autumn_3
+  Shrub1       <- Bush_1
+  Shrub2       <- Bush_2
+  Shrub3       <- BushBerries_1
+
+Only the file name and the `mtllib` line were changed. Geometry and
+materials are untouched. Each .obj keeps its original Blender header
+(`# ... OBJ File: 'CommonTree_3.blend'`), so the table above is
+machine-checkable -- tools/measure_nature.gd verifies it.

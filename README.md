@@ -29,7 +29,7 @@ scripts/
   main.gd              아레나. 포식 해소·타이머·리더보드·승패·재시작
   camera_rig.gd        반경 비례 추적 + 최저 높이 clamp
   screenshot.gd        기계 판정기 (--judge ~ --judge6)
-assets/                Quaternius CC0 76모델 (OBJ + MTL 단색)
+assets/                Quaternius CC0 78모델 (OBJ + MTL 단색)
 tools/
   web_judge.mjs        브라우저 판정 하네스 — build/ 서빙 + 판정 결과 수집(§24)
   sync_plan_blocks.ps1 PLAN.md 에 실린 소스 전문이 실제 파일과 같은지 대조(§24)
@@ -46,7 +46,7 @@ $GODOT = "...\Godot_v4.7.1-stable_win64_console.exe"
 & $GODOT --path . -- --judge1b    # 1b  이동 + 흡입 물리 (B1~B4)
 & $GODOT --path . -- --judge2     # 2   성장 · 거절 규격 · 스코어 (C1~C4)
 & $GODOT --path . -- --judge3     # 3a  도로 셰이더 · 도시 격자 (D1~D6, 도로 위계 포함)
-& $GODOT --path . -- --judge3b    # 3b  절차적 배치 (E1~E8)
+& $GODOT --path . -- --judge3b    # 3b  절차적 배치 (E1~E9, §36 가로수 포함)
 & $GODOT --path . -- --judge3c    # 3c  성능 (F1~F2) — 단독으로 돌린다
 & $GODOT --path . -- --judge4     # 4a  AI 경쟁 · 포식 (G1~G7)
 & $GODOT --path . -- --judge5     # 4b  게임 루프 · 픽스처 격리 · 한글 HUD (T1~T8)
@@ -101,4 +101,5 @@ node tools/web_judge.mjs --expect --judge,--judge1b,--judge2,--judge3,--judge3b,
 ## 라이선스
 
 코드는 이 저장소를 따른다. `assets/` 는 [Quaternius](https://quaternius.com) 의 CC0 에셋이며
-각 팩의 `License.txt` 를 함께 두었다.
+각 팩의 `License.txt` 를 함께 두었다(`simplebuildings/`·`transport/` 두 팩은 원본 배포에
+라이선스 파일이 없어 아직 비어 있다).

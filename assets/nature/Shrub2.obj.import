@@ -1,0 +1,25 @@
+[remap]
+
+importer="wavefront_obj"
+importer_version=1
+type="Mesh"
+uid="uid://5v0l727vqyv1"
+path="res://.godot/imported/Shrub2.obj-796713c08ce853632c721e9a030507cf.mesh"
+
+[deps]
+
+files=["res://.godot/imported/Shrub2.obj-796713c08ce853632c721e9a030507cf.mesh"]
+
+source_file="res://assets/nature/Shrub2.obj"
+dest_files=["res://.godot/imported/Shrub2.obj-796713c08ce853632c721e9a030507cf.mesh", "res://.godot/imported/Shrub2.obj-796713c08ce853632c721e9a030507cf.mesh"]
+
+[params]
+
+generate_tangents=true
+generate_lods=true
+generate_shadow_mesh=true
+generate_lightmap_uv2=false
+generate_lightmap_uv2_texel_size=0.2
+scale_mesh=Vector3(1, 1, 1)
+offset_mesh=Vector3(0, 0, 0)
+force_disable_mesh_compression=false
