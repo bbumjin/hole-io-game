@@ -4,10 +4,14 @@ extends Node3D
 ##
 ## 유저 지적 (2) 의 둘째 줄이다 — "시민 등 동적 오브젝트 추가 필요".
 ##
-## **에셋을 조달하지 않고 절차로 만든다.** 저장소에 사람 모델이 없고, 외부 팩을 들이면
-## 라이선스·임포트·스케일 맞추기가 따라온다. 캡슐 몸통 + 구 머리 둘이면 이 카메라
-## 고도에서 충분히 "사람" 으로 읽힌다. 걷기 애니메이션 대신 **위아래 흔들림(bob)** 과
-## 진행 방향 기울임을 준다 — 뼈대 없이 움직임이 읽히는 가장 싼 방법이다.
+## **§34 에서 실제 캐릭터 모델로 바꿨다.** §28 은 "에셋을 조달하지 않는다 — 라이선스·임포트·
+## 스케일이 따라온다" 며 캡슐 몸통 + 구 머리로 갔고, 유저 피드백이 그 결정을 뒤집었다
+## ("실제 hole.io 는 다양한 복장·모션의 시민 모델을 쓴다"). Kenney Blocky Characters(CC0).
+##
+## **군중이라서 이 팩이다.** 시민은 260명이고 아래 총량 유지 규칙까지 있다. 화풍이 더 맞는
+## Quaternius 팩은 캐릭터당 15,349 정점 · **62본 스키닝**이라 260벌을 WASM 단일 스레드
+## gl_compatibility 에서 돌릴 수 없다(LOD 로 줄지 않는 종류의 비용이다). 이 팩은 143 정점 ·
+## **스킨 없음** — 애니메이션이 6개 노드의 TRS 뿐이라 스키닝 비용이 0 이다.
 ##
 ## 이동 모형은 교통(§27)과 같은 1D 다. 보도 중심선 위를 오가고, 구간 끝에서 **되돌아선다**
 ## (교통은 재스폰하지만 사람은 돌아서는 편이 자연스럽다).
@@ -31,20 +35,61 @@ const SWALLOWABLE := preload("res://scripts/swallowable.gd")
 ## 시야 밖(구멍에서 이 거리 이상)은 네 프레임에 한 번만 갱신한다.
 @export var lod_dist := 80.0
 
-## 몸 치수(m). 총 키 = BODY_H + HEAD_R*1.75 = 1.665 — 승용차 지붕(1.4)보다 확실히 크다.
-## 처음 1.52 로 잡았더니 화면에서 승용차와 키가 비슷해 "사람" 으로 안 읽혔다.
-const BODY_R := 0.20
-const BODY_H := 1.28
-const HEAD_R := 0.22
+## 모델 원본 치수(팩 단위). 18종 전부 동일하다(임포트 후 AABB 실측):
+## 팔 포함 폭 1.6 · 키 2.7 · 깊이 0.8 · 몸통 0.8×0.6 · **발 발자국 0.8×0.4**.
+## 발이 정확히 y=0 에 있어 원점 배치가 그대로 접지다.
+const MODEL_H := 2.7
+const FOOT_SPAN := Vector2(0.8, 0.4)
 
-## 지구별 옷 색. 도심은 무채색 정장, 주거는 알록달록하다.
-const COATS := {
-	0: [Color(0.22, 0.24, 0.30), Color(0.30, 0.31, 0.34), Color(0.16, 0.18, 0.24)],
-	1: [Color(0.72, 0.36, 0.28), Color(0.28, 0.44, 0.62), Color(0.66, 0.58, 0.26)],
-	2: [Color(0.80, 0.42, 0.44), Color(0.36, 0.62, 0.44), Color(0.74, 0.66, 0.36)],
-	3: [Color(0.36, 0.60, 0.38), Color(0.70, 0.52, 0.30), Color(0.44, 0.50, 0.68)],
+## 총 키 1.665 — §28 이 "승용차 지붕(1.4)보다 확실히 커야 사람으로 읽힌다" 로 유도한 값이다
+## (처음 1.52 로 잡았더니 화면에서 승용차와 키가 비슷해 안 읽혔다). 그 키를 그대로 지킨다.
+const TOP := 1.665
+const SCALE := TOP / MODEL_H          # 0.6166667
+
+## 애니메이션 클립 길이(초). **GLB 원본에서 유도한다** — 임포트본을 읽으면 임포터의 키
+## 최적화 결과에 규격을 얹게 된다.
+const WALK_LEN := 0.6666667
+const SPRINT_LEN := 0.5
+
+## 배역은 아래 `ZONE_WARDROBE` 의 합집합이 **유일한 원천**이다(a b c e f j k m p q, 10종).
+## 팩 18종 중 도시 보행자로 쓸 것만 골랐다 — 나머지는 로봇·기사·오크·뱀파이어·닌자이고,
+## `i` 는 시민처럼 생겼지만 18종 중 **혼자만 KHR_materials_unlit 이 아니라** 그것만 조명을
+## 받는다(전수 파싱으로 확인). 열 명 중 하나만 다르게 보이므로 뺐다.
+##
+## **배역을 되돌리는 것은 상수 하나가 아니다** — 여기 옷장, 판정기의 `SPEC_ZONE_WARDROBE`
+## 와 `SPEC_CITIZEN_CAST`, 그리고 §34 가 유도한 채도 축(0.0316)의 재유도까지 따라온다.
+## 별도 배역 목록 상수를 두지 않는 이유가 이것이다 — 안 쓰이는 사본이 있으면 그것만
+## 고치고 아무 일도 안 일어난다.
+
+## 지구별 복장. §28 은 `COATS` 로 "**도심은 무채색, 나머지는 알록달록**" 이라는 판별 축을
+## 세웠고, 그 축은 지켜야 한다(전역 아트 규율의 "판별 축 회귀" 는 치명이다).
+##
+## **버킷은 PNG 채도가 아니라 렌더 채도로 나눈다** — 플레이어가 보는 것이 관측값이고 두
+## 순서는 실제로 어긋난다(PNG 는 f=m=0.17 < j=0.20 인데 렌더는 j 0.390 < f=m 0.422).
+## 유도는 `tools/measure_char.gd` 가 재현한다.
+##
+##   Z0 [0.234 q, 0.390 j]   Z1 [0.422 f, 0.423 m, 0.461 p]
+##   Z2 [0.468 e, 0.470 c, 0.484 a]   Z3 [0.527 k, 0.574 b]
+##
+## **Z0 를 두 종으로 좁힌 이유.** 셋으로 하면(q·j·f) 도심 상한이 나머지 하한과 붙어 축이
+## 0.0007 로 무너진다 — 현행 §28(0.0149)보다 나쁘다. 둘이면 0.0316 으로 **오늘의 2.1배**다.
+## 하나(q)면 0.156 까지 넓어지지만 도심 시민이 전원 같은 옷이 된다. 가짓수와 축의 맞바꿈에서
+## "축을 개선하면서 가짓수 2 를 지키는" 자리를 골랐다.
+##
+## **10종은 메시가 완전히 같다**(기하 지문 전수 일치). "정장" 도 "제복" 도 그려진 것이지
+## 모델링된 것이 아니다 — 실루엣은 열 명 모두 같은 블록 사람이고, **판별은 전적으로 색이
+## 진다.** 그래서 이 축을 지켜야 한다.
+const ZONE_WARDROBE := {
+	0: ["q", "j"],
+	1: ["f", "m", "p"],
+	2: ["e", "c", "a"],
+	3: ["k", "b"],
 }
-const SKIN := Color(0.85, 0.70, 0.58)
+
+## 배역 씬. 경로가 판정과의 계약이다 — M15 는 구현체의 자기 신고가 아니라 시민 노드에서
+## 읽은 `scene_file_path` 를 규격 집합과 대조한다.
+static func model_path(letter: String) -> String:
+	return "res://assets/characters/character-%s.glb" % letter
 
 var _rng := RandomNumberGenerator.new()
 ## 각 원소: { rb, mesh, axis, line, u, lo, hi, s, dir, speed, phase }
@@ -85,7 +130,12 @@ func boot() -> void:
 ## 가로등·신호등·표지판·덤불을 정확히 그 자리(walk_center_at)에 세워 두었다.
 ## 둘 다 frozen 강체라 충돌 해소가 없고 시민은 매 프레임 위치를 덮어쓰므로,
 ## 중심선을 걸으면 **가로등을 그대로 통과한다**(감사가 잡았다).
-## 보도 폭이 2.0 이므로 차도 쪽에 붙여 [+0.3, +0.7] 를 점유한다 — 프롭은 중앙에 남는다.
+##
+## §34 에서 시민이 캡슐(폭 0.4)에서 실제 모델(팔 포함 0.9867)로 넓어졌다. 이 값은
+## **바꾸지 않았다** — 대신 `city.walk_center_at` 을 +1.0 → +1.34 로 밀었다. 차도 쪽
+## 빈 띠가 0.758 뿐이라 어떤 오프셋으로도 팔이 안 들어가기 때문이다. 그 결과 점유가
+## [+0.30, +0.70] → **[+0.007, +0.993]** 로 넓어지는데도 가로등까지 여유는 0.058 →
+## **0.105** 로 늘었다(덤불 겹침은 0.237 → 0.190). 자세한 산술은 PLAN.md §34.
 static func walk_lane_u(k: int) -> float:
 	return CITY.road_half_at(k) + 0.5
 
@@ -138,12 +188,15 @@ func spawn_all() -> void:
 		var dz := CITY.zone_at(CITY.cell_of(pos.x), CITY.cell_of(pos.z))
 		var rb := make_person(dz, pos, i)
 		add_child(rb)
-		_people.append({ "rb": rb, "mesh": rb.get_child(0),
+		# **난수 소비 순서를 지킨다** — dir → speed → phase. 하나만 빼도 스트림이 밀려
+		# 260명이 통째로 다른 자리에 선다(§34 가 bob 을 지우면서 phase 를 남긴 이유다).
+		var dir := 1.0 if _rng.randf() < 0.5 else -1.0
+		var speed := walk_speed * _rng.randf_range(0.8, 1.25)
+		var phase := _rng.randf() * TAU
+		_people.append({ "rb": rb, "anim": anim_of(rb), "clip": "", "t": anim_t0(phase),
 			"axis": w["axis"], "line": w["line"], "u": w["u"],
 			"lo": w["lo"], "hi": w["hi"], "s": s,
-			"dir": 1.0 if _rng.randf() < 0.5 else -1.0,
-			"speed": walk_speed * _rng.randf_range(0.8, 1.25),
-			"phase": _rng.randf() * TAU })
+			"dir": dir, "speed": speed, "phase": phase })
 
 
 ## 새 시민이 날 자리. **구멍에서 먼 구간**을 고른다 — 눈앞에서 사람이 튀어나오면
@@ -181,12 +234,13 @@ func spawn_one(spot: Dictionary) -> void:
 	var dz := CITY.zone_at(CITY.cell_of(pos.x), CITY.cell_of(pos.z))
 	var rb := make_person(dz, pos, _rng.randi_range(0, 99999))
 	add_child(rb)
-	_people.append({ "rb": rb, "mesh": rb.get_child(0),
+	var dir := 1.0 if _rng.randf() < 0.5 else -1.0
+	var speed := walk_speed * _rng.randf_range(0.8, 1.25)
+	var phase := _rng.randf() * TAU
+	_people.append({ "rb": rb, "anim": anim_of(rb), "clip": "", "t": anim_t0(phase),
 		"axis": w["axis"], "line": w["line"], "u": w["u"],
 		"lo": w["lo"], "hi": w["hi"], "s": s,
-		"dir": 1.0 if _rng.randf() < 0.5 else -1.0,
-		"speed": walk_speed * _rng.randf_range(0.8, 1.25),
-		"phase": _rng.randf() * TAU })
+		"dir": dir, "speed": speed, "phase": phase })
 
 
 ## 판정용. 판정 모드에서도 시민을 낸다 — M 계열이 명시적으로 요청한다.
@@ -205,47 +259,56 @@ func make_person(dz: int, pos: Vector3, idx: int) -> RigidBody3D:
 	body.add_to_group("swallowable")
 	body.start_frozen = true
 
-	# 몸통과 머리를 한 노드 아래 묶는다. 흔들림은 이 노드만 움직이므로
-	# 콜라이더는 제자리에 있고 **접지 판정(E5)이 흔들리지 않는다.**
-	var pivot := Node3D.new()
-	pivot.name = "Body"
-	body.add_child(pivot)
+	# **variant 는 난수를 쓰지 않는다.** §28 의 `COATS[dz][idx % 3]` 과 같은 결이다 —
+	# 여기서 `_rng` 를 한 번이라도 당기면 스트림이 밀려 260명의 배치·방향·속도가 전부
+	# 달라진다(스폰 루프가 사람마다 정해진 횟수만 소비하는 것을 전제로 서 있다).
+	var wardrobe: Array = ZONE_WARDROBE[dz] if ZONE_WARDROBE.has(dz) else ZONE_WARDROBE[2]
+	var letter: String = wardrobe[idx % wardrobe.size()]
+	var model := (load(model_path(letter)) as PackedScene).instantiate() as Node3D
+	model.name = "Model"
+	model.scale = Vector3(SCALE, SCALE, SCALE)
+	body.add_child(model)
 
-	var coat: Color = (COATS[dz] if COATS.has(dz) else COATS[2])[idx % 3]
-	var torso := MeshInstance3D.new()
-	var cm := CapsuleMesh.new()
-	cm.radius = BODY_R
-	cm.height = BODY_H
-	torso.mesh = cm
-	torso.position.y = BODY_H * 0.5
-	var mt := StandardMaterial3D.new()
-	mt.albedo_color = coat
-	torso.material_override = mt
-	pivot.add_child(torso)
-
-	var head := MeshInstance3D.new()
-	var sm := SphereMesh.new()
-	sm.radius = HEAD_R
-	sm.height = HEAD_R * 2.0
-	head.mesh = sm
-	head.position.y = BODY_H + HEAD_R * 0.75
-	var mh := StandardMaterial3D.new()
-	mh.albedo_color = SKIN
-	head.material_override = mh
-	pivot.add_child(head)
-
-	# 콜라이더는 몸 전체를 덮는 상자 하나다. 캡슐로 두면 구멍 가장자리에서 굴러
-	# 나가고, 삼킴 판정(§23)이 보는 것은 **꼭대기 높이**뿐이라 상자로 충분하다.
+	# 콜라이더는 **발 발자국**이다(§34).
+	#
+	# §17 의 절차(하위 35% 밴드의 XZ bbox)를 그대로 돌리면 안 된다 — 시민은 팔이 y=0.8
+	# 까지 내려와 컷(0.945) 아래에 들어가고, 산출이 발 0.8x0.4 가 아니라 **팔 포함
+	# 1.6x0.5** 가 된다(성장 기여 +234%, 실측). 전이되는 것은 절차가 아니라 취지다:
+	# "지면에 닿아 있는 부분이 곧 지지면". 시민이 닿는 것은 발이다.
+	#
+	# 이 선택은 밸런스를 사실상 그대로 둔다 — score_value 8 로 §28 과 **같고**, 성장 기여는
+	# 0.0800 → 0.0761(−4.9%)이다. 머리 발자국으로 키우면 점수 +50% · 성장 +52% 로 260명
+	# 규모에서 판 진행 속도가 바뀐다.
+	#
+	# **Y 는 전체 키다.** 삼킴 판정(§23)이 보는 것은 `top_height` 이고 그것이 콜라이더
+	# 꼭대기에서 나오므로, 여기를 발 높이로 줄이면 사람이 반쯤 잠긴 채 삼켜진다.
+	#
+	# 상자는 **물리 프록시이지 실루엣이 아니다** — 팔 좌우 각 0.247, 머리 앞뒤 각 0.123,
+	# 걸음 중 다리 앞뒤 각 0.498 이 밖에 있다. 이 저장소의 도시 프롭도 전부 같은 성질이다.
 	var cs := CollisionShape3D.new()
 	var box := BoxShape3D.new()
-	var top := BODY_H + HEAD_R * 1.75
-	box.size = Vector3(BODY_R * 2.0, top, BODY_R * 2.0)
+	box.size = Vector3(FOOT_SPAN.x * SCALE, TOP, FOOT_SPAN.y * SCALE)
 	cs.shape = box
-	cs.position.y = top * 0.5
+	cs.position.y = TOP * 0.5
 	body.add_child(cs)
 
 	body.mass = 3.0
 	return body
+
+
+## 이 시민의 AnimationPlayer. 임포트본은 모델 루트의 **자식**으로 하나를 둔다.
+static func anim_of(body: Node) -> AnimationPlayer:
+	var model := body.get_node_or_null("Model")
+	if model == null:
+		return null
+	return model.find_child("AnimationPlayer", true, false) as AnimationPlayer
+
+
+## 판정용. M15 는 구현체가 신고하는 variant 가 아니라 **실제 로드된 씬 경로**를 본다 —
+## 그래야 "옷장이 한 칸 밀려 A 자리에 B 가 들어간" 결함이 걸린다.
+func citizen_scene_path(i: int) -> String:
+	var model: Node = (_people[i]["rb"] as Node).get_node_or_null("Model")
+	return "" if model == null else model.scene_file_path
 
 
 func _physics_process(dt: float) -> void:
@@ -300,7 +363,8 @@ func _physics_process(dt: float) -> void:
 			if away != 0.0:
 				p["dir"] = signf(away)
 			step *= flee_mult
-		var s: float = float(p["s"]) + float(p["dir"]) * step
+		var s0: float = float(p["s"])
+		var s: float = s0 + float(p["dir"]) * step
 		if s < float(p["lo"]):
 			s = float(p["lo"])
 			p["dir"] = 1.0
@@ -309,17 +373,55 @@ func _physics_process(dt: float) -> void:
 			p["dir"] = -1.0
 		p["s"] = s
 		rb.global_position = walk_pos(p, s)
-		# 진행 방향으로 돌려 세우고, 걸음에 맞춰 위아래로 흔든다.
+		# 진행 방향으로 돌려 세운다. **모델은 +Z 를 본다** — Godot 관례(-Z)와 반대이고,
+		# 육안이 아니라 렌더 대비로 정했다(머리 밴드의 휘도 표준편차. 얼굴은 밝은 피부 위
+		# 어두운 눈이라 대비가 크고 뒤통수는 고르다 — 처음에 "어두운 픽셀 수" 로 물었더니
+		# **검은 머리 뒤통수가 얼굴을 이겨서** 지표를 바꿨다).
+		# 그래서 이 식에 오프셋이 붙지 않는다: yaw θ 는 +Z 를 (sinθ, 0, cosθ) 로 보내므로
+		# θ=+PI/2 → +X 이고 그것이 `axis=="x", dir>0` 의 진행 방향과 같다.
 		var yaw: float = 0.0
 		if str(p["axis"]) == "x":
 			yaw = PI * 0.5 if float(p["dir"]) > 0.0 else -PI * 0.5
 		else:
 			yaw = 0.0 if float(p["dir"]) > 0.0 else PI
 		rb.rotation.y = yaw
-		var mesh: Node3D = p["mesh"]
-		var t: float = float(_tick) * 0.18 + float(p["phase"])
-		mesh.position.y = absf(sin(t)) * 0.06
-		mesh.rotation.x = sin(t * 2.0) * 0.05
+		pose(p, absf(s - s0), scare != Vector3.ZERO)
+
+
+## 걸음을 팩의 애니메이션으로 그린다(§34 — §28 의 사인 bob 을 대신한다).
+##
+## **AnimationPlayer 를 스스로 돌리지 않는다.** `play` → `pause` → 매 프레임 `seek` 다.
+## 그래야 ① 시간이 물리 dt 에서만 오고(결정성) ② 아래 LOD 게이트를 그대로 타며
+## ③ **공유 리소스를 건드리지 않는다** — loop_mode 나 머티리얼을 런타임에 고치면 그것은
+## 배역 열 종이 나눠 쓰는 리소스라, "최초 1회" 로 세팅하는 순간 한 종만 맞고 아홉 종이
+## 어긋난다(그리고 판정이 한 종만 표본하면 초록으로 통과한다).
+func pose(p: Dictionary, moved: float, fleeing: bool) -> void:
+	var ap: AnimationPlayer = p["anim"]
+	if ap == null:
+		return
+	var clip := "sprint" if fleeing else "walk"
+	var clip_len: float = SPRINT_LEN if fleeing else WALK_LEN
+	# 클립을 갈아탈 때만 play 한다. **pause() 가 `current_animation` 을 빈 문자열로 만들므로**
+	# 그 값으로 물으면 매 프레임 play 가 다시 돈다 — 상태를 따로 기억한다(실측).
+	if str(p["clip"]) != clip:
+		ap.play(clip)
+		ap.pause()
+		p["clip"] = clip
+	# 애니메이션 시간은 **걸은 거리**에서 나온다(t += 거리 / 규격 속도). 실시각을 쓰면
+	# 결정성이 깨지고, dt 만 쓰면 속도가 ±25% 흩어진 시민들의 발이 미끄러진다.
+	# LOD 가 네 프레임에 한 번 갱신할 때는 moved 가 네 배이므로 평균이 그대로 맞는다.
+	var nominal: float = walk_speed * (flee_mult if fleeing else 1.0)
+	var t := fmod(float(p["t"]) + moved / maxf(nominal, 0.001), clip_len)
+	p["t"] = t
+	# 임포트본은 `loop_mode == LOOP_NONE` 인데 고치지 않는다(공유 리소스다).
+	# `fmod` 로 항상 [0, len) 안이라 끝 포즈에 고정될 일이 없다 — 넘겨서 seek 하면 고정된다.
+	ap.seek(t, true)
+
+
+## 시민마다 걸음 위상을 흩어 놓는다. 안 그러면 260명이 발을 맞춰 걷는다.
+## §28 이 bob 에 쓰던 `phase` 난수를 그대로 재사용한다 — 지우면 `_rng` 스트림이 밀린다.
+static func anim_t0(phase: float) -> float:
+	return fmod(phase / TAU, 1.0) * WALK_LEN
 
 
 ## 판을 되돌린다. main.gd 의 restart() 가 부른다(§27 의 교통과 같은 이유).
@@ -328,6 +430,10 @@ func reset() -> void:
 		c.free()
 	_people.clear()
 	_orphans.clear()
+	# **틱도 되돌린다.** LOD 게이트가 `_tick % 4` 로 갈리므로, 여기를 안 되돌리면 새 판의
+	# 시민 갱신 위상이 **직전 판이 얼마나 길었느냐**에 달린다 — 같은 시드로 두 번 돌려도
+	# 90프레임 뒤 위치가 달라진다(§34 의 M14 결정성이 잡았다).
+	_tick = 0
 	boot()
 
 
@@ -342,3 +448,9 @@ func citizen_pos(i: int) -> Vector3:
 
 func citizen_id(i: int) -> int:
 	return (_people[i]["rb"] as Node).get_instance_id()
+
+
+## 판정용. 강체 자체를 넘긴다 — 치수·콜라이더·다리 회전은 **구현체의 신고가 아니라
+## 노드에서 직접** 재야 한다(§34 의 M12·M14).
+func citizen_body(i: int) -> Node3D:
+	return _people[i]["rb"] as Node3D
