@@ -777,6 +777,11 @@ const CITY := preload("res://scripts/city.gd")
 ## 이 깊이보다 내려가면 "구멍에 빠졌다" 로 본다. 지면 아래로 확실히 내려간 값이어야
 ## 한다 — 0 으로 두면 림 위에서 덜컹이는 것도 낙하로 오인한다.
 @export var fall_depth := 0.6
+## 감지 Area 바닥이 낙하 문턱보다 이만큼 더 깊어야 한다(§35). 물체가 기울면 꼭대기가
+## 낮아져 문턱이 얕아지므로, 가장 크게 기운 경우에도 문턱을 넘기 전에 Area 를 벗어나지
+## 않을 만큼 여유가 있어야 한다. 시민 기준: 직립 문턱 −2.265 · 완전히 누운 문턱 −1.093,
+## 둘 다 바닥 −1.8 보다 얕다.
+@export var area_fall_margin := 1.2
 
 ## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
 ## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
@@ -833,10 +838,20 @@ func rebuild() -> void:
 
 	# 반경 R 짜리 구를 지면 높이에 두면 지면 위에 얹힌 박스(중심 y>0)를 놓치므로
 	# 세로로 긴 원기둥을 쓴다. 치수도 전부 SSOT 파생이다.
+	#
+	# §35: **아래쪽은 낙하 문턱보다 깊어야 한다.** 옛 치수(바닥 = −0.4R)는 R=1.5 에서
+	# `fall_depth`(0.6)와 **정확히 같아 여유가 0** 이었다 — 직립 물체가 "꼭대기가 Area
+	# 바닥에 닿는 그 프레임" 에 문턱을 넘는 우연으로만 성립했다. 물체가 기울면 꼭대기가
+	# 낮아져 문턱에 닿기 전에 Area 를 벗어나고, `_on_body_exited` 가 후보에서 지워
+	# `begin_fall` 에 영영 못 닿는다 → 아무도 인수하지 않는 **영구 낙하 개체**가 남는다
+	# (실측: 넘어진 시민이 y=−37 까지 떨어져도 삼켜지지 않았다).
+	# 큰 반경에서는 −0.4R 이 이미 더 깊으므로 둘 중 깊은 쪽을 쓴다.
 	var s: CylinderShape3D = area_shape.shape
+	var top_y := radius * 1.2
+	var bot_y := minf(-radius * 0.4, -(fall_depth + area_fall_margin))
 	s.radius = radius
-	s.height = radius * 1.6
-	area_shape.position.y = radius * 0.4
+	s.height = top_y - bot_y
+	area_shape.position.y = (top_y + bot_y) * 0.5
 
 	rim_shape.shape.set_faces(rim_faces())
 
@@ -937,7 +952,14 @@ func _exit_tree() -> void:
 	# 이 구멍이 사라질 때 우물 안에서 떨어지던 것들을 함께 정리한다.
 	# 그러지 않으면 레이어 4·마스크 0 인 채로 **아무와도 부딪히지 않고 영원히 낙하하는**
 	# 개체가 남는다 — 아무도 인수하지 않으므로 해제되지도, 점수가 되지도 않는다.
-	# (_candidates 쪽은 Area3D 가 사라질 때 body_exited 가 발화해 exit_rim 이 돌므로 안전하다.)
+	# **후보도 함께 되돌린다**(§35). 옛 주석은 "Area3D 가 사라질 때 body_exited 가 발화해
+	# exit_rim 이 돈다" 고 했지만, 그것에 기대면 신호 순서에 규격이 얹힌다 — 구멍은 서로
+	# 잡아먹으므로(bite) 판 중에 실제로 사라지고, 그때 후보가 지면 충돌 없이 남으면
+	# 아무 데도 못 딛는 개체가 된다. 여기서 명시적으로 돌려준다.
+	for rb in _candidates:
+		if is_instance_valid(rb) and rb.has_method("hold_awake"):
+			rb.hold_awake(false)
+			rb.exit_rim()
 	for rb in _falling:
 		if is_instance_valid(rb):
 			rb.queue_free()
@@ -1003,7 +1025,11 @@ func _physics_process(_dt: float) -> void:
 			continue
 		# **꼭대기까지** 지면 아래로 내려갔을 때만 낙하로 본다. 원점만 보면 키 큰
 		# 물체가 가지도 림에 닿기 전에 충돌을 잃고 그대로 빠진다(실측).
-		if rb.global_position.y + float(rb.top_height) < -fall_depth:
+		#
+		# §35: 꼭대기를 **월드 공간**에서 잰다. `top_height` 는 직립 기준 상수라, 넘어진
+		# 물체에 그것을 요구하면 실제 형상보다 한참 깊이 내려가야 하고 그 전에 감지 Area 를
+		# 벗어난다. 누우면 꼭대기가 낮아지는 것이 물리적으로 맞다.
+		if rb.global_position.y + world_top(rb) < -fall_depth:
 			rb.begin_fall()          # 확실히 구멍 안 → 서로에 대한 충돌만 끊는다
 			_candidates.remove_at(i)
 			_falling.append(rb)
@@ -1019,6 +1045,10 @@ func _physics_process(_dt: float) -> void:
 		# 소멸은 **우물 안에서만** 일어난다. 구멍이 떠나 버려 우물 밖에 있는 낙하물은
 		# 흡입으로 다시 끌어온 뒤에 사라진다 — 지면 아래 아무 데서나 없어지면
 		# "먹지도 않았는데 점수가 오른다" 가 된다.
+		# **깊이만으로 지우면 안 된다**(§35 에서 실증). 여기에 `y < kill_y*2` 같은 하한을
+		# 두면 아직 구멍 밖에 있던 낙하물이 **점수 없이** 사라진다 — judge2 C1 이 기대
+		# 성장 5.06 대 실측 3.47, 점수 2028 대 676 으로 즉시 잡았다. 소멸은 아래처럼
+		# **우물 안에 있을 때만** 일어나야 하고, 밖으로 밀린 것은 흡입이 끌어온다.
 		if rb.global_position.y < kill_y \
 				and flat_dist(rb.global_position, here) < radius:
 			_falling.remove_at(i)
@@ -1055,6 +1085,21 @@ func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 	if to_center.length_squared() < 1e-6:
 		return
 	rb.apply_central_force(to_center.normalized() * suction * scale * rb.mass)
+
+
+## 콜라이더의 **월드 공간 꼭대기**(강체 원점 기준 높이). 직립이면 `top_height` 와 같고
+## 누우면 낮아진다 — §23 의 삼킴 문턱이 회전을 알아야 하는 이유는 `_on_body_exited` 의
+## 주석에 적었다. 셰이프가 여럿이면 가장 높은 것을 쓴다(보수적 = 안전한 방향).
+func world_top(rb: Node3D) -> float:
+	var t := 0.0
+	for c in rb.find_children("", "CollisionShape3D", false, false):
+		var col := c as CollisionShape3D
+		if col.shape == null:
+			continue
+		var ab: AABB = (rb.global_transform * col.transform) \
+			* col.shape.get_debug_mesh().get_aabb()
+		t = maxf(t, ab.end.y - rb.global_position.y)
+	return t
 ```
 
 **깊이도 SSOT에서 파생시킨다.** rev.5는 `height = 12.0`을 `.tscn` 리터럴로 두었는데, 2단계에서 반경이 자라면(R=20이면 폭 41에 깊이 12) 현재 카메라 앙각에서 `cap_bottom` 바닥면이 그대로 보여 §4-B가 막으려던 "바닥이 보이면 착시가 깨진다"가 그대로 발생한다. `kill_depth`(§4-D-7)도 함께 무의미해진다.
@@ -1162,6 +1207,8 @@ var top_height := 0.0
 var _can_sleep_default := true
 ## 이 물체를 감지 범위에 두고 있는 구멍의 수(§23).
 var _rim_refs := 0
+## 인계된 뒤 멈춰 있던 연속 프레임 수. 정리를 맡은 쪽이 센다(§35).
+var still_frames := 0
 
 
 func _ready() -> void:
@@ -1267,6 +1314,12 @@ func hold_awake(on: bool) -> void:
 	can_sleep = _can_sleep_default and not on
 	if on:
 		sleeping = false
+
+
+## 이 물체를 잡고 있는 구멍이 있는가(§35). 인계 뒤 정리를 맡은 쪽(citizens·traffic)이
+## **구멍이 놓기도 전에 지우는 것**을 막는다.
+func held_by_hole() -> bool:
+	return _rim_refs > 0
 ```
 
 ### E. 입력 / 카메라 (1b)
@@ -2506,7 +2559,7 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
+const JUDGE_ORDER := ["--diag34", "--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
 	"--judge5", "--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2",
 	"--judge1b", "--judge"]
 
@@ -2591,6 +2644,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--diag34": await run_diag_34()
 		"--judge10": await run_judge_10()
 		"--judge9": await run_judge_9()
 		"--judge8": await run_judge_8()
@@ -6975,6 +7029,78 @@ func run_judge_10() -> void:
 		% [pf(v1), pf(v2), pf(v3), pf(v4), "PASS" if ok_all else "FAIL"])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok_all else "FAIL"))
 	get_tree().quit(0 if ok_all else 1)
+
+
+
+
+## 임시 진단 — 유저 결함 "닿으면 사라진다" 의 실제 경로를 시나리오별로 잰다.
+## **구멍을 순간이동시키면 안 된다** — 그러면 시민이 항상 개구부 안쪽에 놓여 림 구간이
+## 생기지 않는다(첫 진단이 그래서 빗나갔다). 밖에서 다가오게 한다.
+## 확인 뒤 삭제한다.
+func diag_run(cz: Node, hole: Node3D, label: String, approach: bool, stop_d: float) -> void:
+	cz.citizen_count = 60
+	cz.reset()
+	await get_tree().physics_frame
+	# 원점에서 가장 가까운 시민을 고른다.
+	var best := -1
+	var best_d := INF
+	for i in int(cz.citizen_total()):
+		var d: float = flat_dist(cz.citizen_pos(i), Vector3.ZERO)
+		if d < best_d:
+			best_d = d
+			best = i
+	var target: Vector3 = cz.citizen_pos(best)
+	var rb: RigidBody3D = cz.citizen_body(best)
+	hole.set_radius(SPEC_START_R)
+	# 시민 기준 -X 쪽에서 다가와 중심거리 stop_d 에서 멈춘다.
+	var stop_at := Vector3(target.x - stop_d, 0.0, target.z)
+	if approach:
+		hole.move_to(stop_at - Vector3(12.0, 0.0, 0.0))
+	else:
+		hole.move_to(stop_at)
+	_reg.flush()
+
+	var freed_at := -1
+	var fell_at := -1
+	var hand_at := -1
+	var max_tilt := 0.0
+	var score0: int = hole.score
+	var cur := hole.global_position
+	for f in 200:
+		# 접근 구간: 14 m/s 로 다가가 stop_at 에서 멈춘다(플레이어 속도).
+		if approach and cur.x < stop_at.x:
+			cur.x = minf(cur.x + 14.0 / 60.0, stop_at.x)
+			hole.move_to(cur)
+		await get_tree().physics_frame
+		if not is_instance_valid(rb):
+			freed_at = f
+			break
+		if hand_at < 0 and not rb.freeze:
+			hand_at = f
+		var up: Vector3 = rb.global_transform.basis.y
+		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
+		if fell_at < 0 and rb.falling:
+			fell_at = f
+	var got: int = hole.score - score0
+	var alive := is_instance_valid(rb)
+	print("DIAG %-28s 인계f=%-4d 낙하f=%-4d 소멸f=%-4d 점수=%-4d 최대tilt=%5.1f° 생존=%s%s"
+		% [label, hand_at, fell_at, freed_at, got, max_tilt, str(alive),
+		   ("  y=%.2f" % rb.global_position.y) if alive else ""])
+
+
+func run_diag_34() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	var hole := _main.get_node("Hole")
+	var cz: Node = _main.get_node_or_null("Citizens")
+	print("DIAG (점수>0 이어야 삼킨 것이다. 소멸f>=0 이고 점수=0 이면 지워진 것이다)")
+	await diag_run(cz, hole, "A 정지·중심거리 1.12", false, 1.12)
+	await diag_run(cz, hole, "I 정지·중심거리 1.58(림)", false, 1.58)
+	await diag_run(cz, hole, "K 접근후 정지·1.62(림)", true, 1.62)
+	await diag_run(cz, hole, "G 접근후 정지·0.0", true, 0.0)
+	print("JUDGE RESULT -> PASS")
+	get_tree().quit(0)
 ```
 
 ### 이 판정기의 유효 전제 (1b 확장 시 반드시 손봐야 할 곳)
@@ -10702,6 +10828,9 @@ var _people := []
 ## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 치운다(§27 의 교통과 같은 이유).
 var _orphans := []
 const ORPHAN_STILL := 0.35
+## 멈춘 채 이만큼 이어져야 치운다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
+## 1프레임 만에** 점수도 없이 사라진다 — 유저가 "닿으면 사라진다" 로 본 것이 그것이다.
+const ORPHAN_GRACE := 60
 var _tick := 0
 
 
@@ -10714,9 +10843,17 @@ func sweep_orphans() -> void:
 		if rb.falling:                                  # 구멍이 삼켰다 — 그쪽이 처리한다
 			_orphans.remove_at(n)
 			continue
+		# **구멍이 아직 잡고 있거나 이미 우물 안이면 손대지 않는다.**
+		if rb.held_by_hole() or rb.global_position.y < 0.0:
+			rb.still_frames = 0
+			continue
 		if rb.linear_velocity.length() < ORPHAN_STILL:
-			_orphans.remove_at(n)
-			rb.queue_free()
+			rb.still_frames += 1
+			if rb.still_frames >= ORPHAN_GRACE:
+				_orphans.remove_at(n)
+				rb.queue_free()
+		else:
+			rb.still_frames = 0
 
 
 func _ready() -> void:
@@ -11447,3 +11584,91 @@ zone 별: walk 631→630, block 1012·road 457 불변
 - 가로 시설물이 커브에서 0.34 멀어진다. 보도 배치의 **위쪽 절벽은 WC 1.46** 이고 채택값은 거기서 0.12 떨어져 있다 — 보도 프롭 에셋을 더 크게 바꾸면 이 자리가 먼저 터진다.
 - 팩에 **여성·아동 배역이 없다.** 배역을 되돌리는 것은 **상수 하나가 아니다** — `ZONE_WARDROBE` 와 판정기의 `SPEC_ZONE_WARDROBE`·`SPEC_CITIZEN_CAST`, 그리고 이 절이 유도한 채도 축(0.0316)의 재유도까지 따라온다.
 - 임포트 중 `main.tscn` 로딩 시점에 나오는 `array_len == 0` 에러 2건은 §34 이전부터 있던 것이다(해당 파일 미변경 확인). 범위 밖으로 둔다.
+
+## §35. 닿으면 사라지지 않는다 — 인계 뒤를 물리에 맡긴다 (**진행 중**, rev.33 유지)
+
+> **이 절은 아직 닫히지 않았다.** 유저가 보고한 증상은 고쳐졌고 실측으로 확인했지만,
+> 계획 감사가 72/100 으로 남긴 정리 항목과 **신규 판정(M16·M17)이 아직 없다.**
+> 다음 세션이 이어받는다. 상태·근거·남은 일은 아래에 전부 적었다.
+
+### 유저 보고
+
+> "구멍에 빠지는 게 아니라 닿으면 사라지네. hole.io 는 그래서 **닿으면 넘어지고, 넘어진
+> 채로 빠지게** 만들었음."
+
+### 원인 — 두 번 오진하고 세 번째에 실측으로 잡았다
+
+**첫 진단이 틀린 이유부터 적는다.** 진단이 구멍을 시민 **위로 순간이동**시켰다. 그러면
+시민이 항상 개구부 *안쪽*에 놓여(0.75R + 발상자 반폭 0.2467 = 1.372 < 1.5) **림에 서는
+구간이 원리적으로 안 생긴다.** 구멍이 밖에서 다가오면 Area 진입은 **반드시** 그 림 고리
+(중심거리 [1.50, 1.75])에서 일어난다. 잘못된 도구로 재고 "스윕은 안 걸린다" 고 결론냈다.
+
+구멍을 14 m/s 로 **접근시켜** 다시 재니(무수정 빌드):
+
+| 시나리오 | 인계f | 낙하f | 소멸f | 점수 | 최대 tilt |
+|---|---|---|---|---|---|
+| A 개구부 안(중심거리 1.12) | 0 | 42 | 48 | **8** | 0.0° |
+| **I 림 위(1.58)** | 0 | — | **1** | **0** | 0.4° |
+| **K 접근 후 림에 정지(1.62)** | 0 | — | **1** | **0** | 0.3° |
+
+**I·K 가 유저가 본 것이다.** 림에 **지지된** 시민은 수직 성분이 접촉으로 죽고 수평은
+마찰이 깎아 v ≈ 0.31 만 남는다 — `ORPHAN_STILL` 0.35 미만이라 인계 다음 프레임에
+`queue_free()` 된다. 빠지지도, 넘어지지도, **점수도 들어오지 않는다.**
+
+**왜 판정 38회를 통과했는가**: `citizens.gd` 는 인계마다 `spawn_one` 으로 무조건 한 명을
+보충하므로 인구가 늘 맞고, M8·M9·M10 은 `_people` 만 본다. **"인계된 시민이 실제로
+삼켜졌는가" 를 묻는 기준이 저장소에 하나도 없다.**
+
+### 고친 것 (현재 작업 트리 상태)
+
+1. **`swallowable.gd`** — `held_by_hole()`(`_rim_refs > 0`)과 `still_frames` 를 노출한다.
+2. **`citizens.gd`** — 스윕이 **구멍이 아직 잡고 있거나 우물 안이면 손대지 않는다** + 유예.
+3. **`hole.gd`** — 감지 Area 바닥을 낙하 문턱보다 `area_fall_margin`(1.2)만큼 깊게 잡는다.
+   옛 치수(−0.4R)는 R=1.5 에서 `fall_depth`(0.6)와 **정확히 같아 여유가 0** 이었고,
+   직립 물체만 우연히 맞아떨어졌다. 물체가 기울면 꼭대기가 낮아져 문턱에 닿기 전에
+   Area 를 벗어나 **영구 낙하 개체**가 됐다.
+4. **`hole.gd`** — 삼킴 문턱이 `world_top()`(월드 공간 콜라이더 꼭대기)을 쓴다. 직립이면
+   `top_height` 와 **정확히 같고**(BoxShape3D·회전 없는 CollisionShape3D 전제) 누우면 낮아진다.
+5. **`hole.gd`** — `_exit_tree()` 가 `_candidates` 도 되돌린다. 구멍은 서로 잡아먹으므로
+   판 중에 실제로 사라지고, 그때 후보가 지면 충돌 없이 남으면 아무 데도 못 딛는다.
+
+**넘어짐은 저절로 생긴다.** 림에 서 있다가 개구부 가장자리에서 지지를 잃으면 기울 수밖에
+없다 — 토크 임펄스도, 새 조율 상수도 필요 없었다.
+
+| 시나리오 | 무수정 | 현재 |
+|---|---|---|
+| A 개구부 안 | 낙하42 · 소멸48 · **8점** · 0.0° | **완전 무변** |
+| I 림 위 | **소멸1 · 0점** | 낙하63 · 소멸71 · **8점** · **44.1°** |
+| K 접근 후 림 | **소멸1 · 0점** | 낙하115 · 소멸128 · **8점** · **68.4°** |
+| G 접근 후 중심 | 인계 없음 · 0점 | 낙하86 · 소멸92 · **8점** · 9.3° |
+
+### 버린 두 가지 — 각각 실측이 반증했다
+
+- **토크 임펄스로 넘어뜨리기.** 계획 감사가 구현해 재니 **5개 시나리오 전부 점수 0** 이
+  됐다. 회전한 물체가 위 3.의 여유 0 때문에 Area 를 먼저 벗어나 삼킴이 통째로 죽는다.
+  회전은 **원인이 아니라 결과**여야 한다.
+- **`_on_body_exited` 에서 `y<0` 이면 조기 반환.** `exit_rim()` 을 부르는 자리가 그것
+  하나뿐이라 **`_rim_refs` 가 영구히 1 로 얼고**(감사 실측: 525프레임 고정) 스윕이 그
+  개체에 대해 영영 꺼진다. 지면 레이어도 안 돌아온다. 위 3.의 Area 확대가 근본 해다.
+- **`_falling` 에 `y < kill_y*2` 하한.** 아직 구멍 밖이던 낙하물을 **점수 없이** 지운다 —
+  judge2 C1 이 기대 성장 5.06 대 실측 3.47, 점수 2028 대 676 으로 즉시 잡았다.
+
+### 다음 세션이 할 일 (감사 72/100 의 잔여 지적)
+
+1. **`ORPHAN_GRACE`(60)가 실제로 도는 경로를 만들어 재고 값을 유도하라.** 감사 측정에서
+   여섯 시나리오 전부 `still_frames` 최댓값이 **0** 이었다(게이트가 먼저 막는다).
+   유도가 안 되면 **상수를 빼라** — 안 쓰이는 상수는 다음 사람을 속인다.
+2. **`traffic.gd:254` 에 같은 스윕 게이트를 적용하라.** 코드가 동일한데 아직 안 고쳤고,
+   차량 증거가 한 건도 없다.
+3. **판정 M16·M17 을 세워라.** 이 결함이 38회를 통과한 이유가 판정 부재다.
+   - M16 인계 결말: 시나리오별로 인계된 시민이 N프레임 안에 **삼켜지는가(점수 증가 > 0)**
+   - M17 넘어짐: I·K 의 최대 tilt ≥ 30°(무수정 기준점 0.3~0.4°). A 는 정중앙이라 묻지 않는다
+   - **시나리오가 규격의 일부다** — 정지는 **실측 중심거리 트리거**로 해야 한다. 사전 계산
+     오프셋은 진입 창이 0.043m 인데 겁먹은 시민이 0.078m/프레임으로 달아나 플랫폼마다
+     다르게 뜬다(감사 S2).
+   - 판정기는 **인계 전에 대상 참조를 잡아 두고** 추적한다(`_orphans` 는 1~2프레임에 빈다).
+4. `y < 0.0` 비교에 엡실론(접촉 관통이 음수를 만들 수 있다), `world_top` 의 **BoxShape3D
+   전제**와 K2·K4 의 "픽스처가 안 기운다" 전제를 규격에 명기.
+5. **진단 `--diag34` 는 일부러 남겼다**(`screenshot.gd` 끝, `JUDGE_ORDER` 첫 항목).
+   §35 를 닫을 때 **반드시 지운다**. 브라우저 쿼리로는 도달할 수 없다(`?judge=` 는
+   `--judge` 접두사만 만든다).

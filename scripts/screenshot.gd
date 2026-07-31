@@ -525,7 +525,7 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
+const JUDGE_ORDER := ["--diag34", "--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
 	"--judge5", "--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2",
 	"--judge1b", "--judge"]
 
@@ -610,6 +610,7 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
+		"--diag34": await run_diag_34()
 		"--judge10": await run_judge_10()
 		"--judge9": await run_judge_9()
 		"--judge8": await run_judge_8()
@@ -4994,3 +4995,75 @@ func run_judge_10() -> void:
 		% [pf(v1), pf(v2), pf(v3), pf(v4), "PASS" if ok_all else "FAIL"])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok_all else "FAIL"))
 	get_tree().quit(0 if ok_all else 1)
+
+
+
+
+## 임시 진단 — 유저 결함 "닿으면 사라진다" 의 실제 경로를 시나리오별로 잰다.
+## **구멍을 순간이동시키면 안 된다** — 그러면 시민이 항상 개구부 안쪽에 놓여 림 구간이
+## 생기지 않는다(첫 진단이 그래서 빗나갔다). 밖에서 다가오게 한다.
+## 확인 뒤 삭제한다.
+func diag_run(cz: Node, hole: Node3D, label: String, approach: bool, stop_d: float) -> void:
+	cz.citizen_count = 60
+	cz.reset()
+	await get_tree().physics_frame
+	# 원점에서 가장 가까운 시민을 고른다.
+	var best := -1
+	var best_d := INF
+	for i in int(cz.citizen_total()):
+		var d: float = flat_dist(cz.citizen_pos(i), Vector3.ZERO)
+		if d < best_d:
+			best_d = d
+			best = i
+	var target: Vector3 = cz.citizen_pos(best)
+	var rb: RigidBody3D = cz.citizen_body(best)
+	hole.set_radius(SPEC_START_R)
+	# 시민 기준 -X 쪽에서 다가와 중심거리 stop_d 에서 멈춘다.
+	var stop_at := Vector3(target.x - stop_d, 0.0, target.z)
+	if approach:
+		hole.move_to(stop_at - Vector3(12.0, 0.0, 0.0))
+	else:
+		hole.move_to(stop_at)
+	_reg.flush()
+
+	var freed_at := -1
+	var fell_at := -1
+	var hand_at := -1
+	var max_tilt := 0.0
+	var score0: int = hole.score
+	var cur := hole.global_position
+	for f in 200:
+		# 접근 구간: 14 m/s 로 다가가 stop_at 에서 멈춘다(플레이어 속도).
+		if approach and cur.x < stop_at.x:
+			cur.x = minf(cur.x + 14.0 / 60.0, stop_at.x)
+			hole.move_to(cur)
+		await get_tree().physics_frame
+		if not is_instance_valid(rb):
+			freed_at = f
+			break
+		if hand_at < 0 and not rb.freeze:
+			hand_at = f
+		var up: Vector3 = rb.global_transform.basis.y
+		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
+		if fell_at < 0 and rb.falling:
+			fell_at = f
+	var got: int = hole.score - score0
+	var alive := is_instance_valid(rb)
+	print("DIAG %-28s 인계f=%-4d 낙하f=%-4d 소멸f=%-4d 점수=%-4d 최대tilt=%5.1f° 생존=%s%s"
+		% [label, hand_at, fell_at, freed_at, got, max_tilt, str(alive),
+		   ("  y=%.2f" % rb.global_position.y) if alive else ""])
+
+
+func run_diag_34() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	var hole := _main.get_node("Hole")
+	var cz: Node = _main.get_node_or_null("Citizens")
+	print("DIAG (점수>0 이어야 삼킨 것이다. 소멸f>=0 이고 점수=0 이면 지워진 것이다)")
+	await diag_run(cz, hole, "A 정지·중심거리 1.12", false, 1.12)
+	await diag_run(cz, hole, "I 정지·중심거리 1.58(림)", false, 1.58)
+	await diag_run(cz, hole, "K 접근후 정지·1.62(림)", true, 1.62)
+	await diag_run(cz, hole, "G 접근후 정지·0.0", true, 0.0)
+	print("JUDGE RESULT -> PASS")
+	get_tree().quit(0)

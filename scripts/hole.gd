@@ -32,6 +32,11 @@ const CITY := preload("res://scripts/city.gd")
 ## 이 깊이보다 내려가면 "구멍에 빠졌다" 로 본다. 지면 아래로 확실히 내려간 값이어야
 ## 한다 — 0 으로 두면 림 위에서 덜컹이는 것도 낙하로 오인한다.
 @export var fall_depth := 0.6
+## 감지 Area 바닥이 낙하 문턱보다 이만큼 더 깊어야 한다(§35). 물체가 기울면 꼭대기가
+## 낮아져 문턱이 얕아지므로, 가장 크게 기운 경우에도 문턱을 넘기 전에 Area 를 벗어나지
+## 않을 만큼 여유가 있어야 한다. 시민 기준: 직립 문턱 −2.265 · 완전히 누운 문턱 −1.093,
+## 둘 다 바닥 −1.8 보다 얕다.
+@export var area_fall_margin := 1.2
 
 ## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
 ## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
@@ -88,10 +93,20 @@ func rebuild() -> void:
 
 	# 반경 R 짜리 구를 지면 높이에 두면 지면 위에 얹힌 박스(중심 y>0)를 놓치므로
 	# 세로로 긴 원기둥을 쓴다. 치수도 전부 SSOT 파생이다.
+	#
+	# §35: **아래쪽은 낙하 문턱보다 깊어야 한다.** 옛 치수(바닥 = −0.4R)는 R=1.5 에서
+	# `fall_depth`(0.6)와 **정확히 같아 여유가 0** 이었다 — 직립 물체가 "꼭대기가 Area
+	# 바닥에 닿는 그 프레임" 에 문턱을 넘는 우연으로만 성립했다. 물체가 기울면 꼭대기가
+	# 낮아져 문턱에 닿기 전에 Area 를 벗어나고, `_on_body_exited` 가 후보에서 지워
+	# `begin_fall` 에 영영 못 닿는다 → 아무도 인수하지 않는 **영구 낙하 개체**가 남는다
+	# (실측: 넘어진 시민이 y=−37 까지 떨어져도 삼켜지지 않았다).
+	# 큰 반경에서는 −0.4R 이 이미 더 깊으므로 둘 중 깊은 쪽을 쓴다.
 	var s: CylinderShape3D = area_shape.shape
+	var top_y := radius * 1.2
+	var bot_y := minf(-radius * 0.4, -(fall_depth + area_fall_margin))
 	s.radius = radius
-	s.height = radius * 1.6
-	area_shape.position.y = radius * 0.4
+	s.height = top_y - bot_y
+	area_shape.position.y = (top_y + bot_y) * 0.5
 
 	rim_shape.shape.set_faces(rim_faces())
 
@@ -192,7 +207,14 @@ func _exit_tree() -> void:
 	# 이 구멍이 사라질 때 우물 안에서 떨어지던 것들을 함께 정리한다.
 	# 그러지 않으면 레이어 4·마스크 0 인 채로 **아무와도 부딪히지 않고 영원히 낙하하는**
 	# 개체가 남는다 — 아무도 인수하지 않으므로 해제되지도, 점수가 되지도 않는다.
-	# (_candidates 쪽은 Area3D 가 사라질 때 body_exited 가 발화해 exit_rim 이 돌므로 안전하다.)
+	# **후보도 함께 되돌린다**(§35). 옛 주석은 "Area3D 가 사라질 때 body_exited 가 발화해
+	# exit_rim 이 돈다" 고 했지만, 그것에 기대면 신호 순서에 규격이 얹힌다 — 구멍은 서로
+	# 잡아먹으므로(bite) 판 중에 실제로 사라지고, 그때 후보가 지면 충돌 없이 남으면
+	# 아무 데도 못 딛는 개체가 된다. 여기서 명시적으로 돌려준다.
+	for rb in _candidates:
+		if is_instance_valid(rb) and rb.has_method("hold_awake"):
+			rb.hold_awake(false)
+			rb.exit_rim()
 	for rb in _falling:
 		if is_instance_valid(rb):
 			rb.queue_free()
@@ -258,7 +280,11 @@ func _physics_process(_dt: float) -> void:
 			continue
 		# **꼭대기까지** 지면 아래로 내려갔을 때만 낙하로 본다. 원점만 보면 키 큰
 		# 물체가 가지도 림에 닿기 전에 충돌을 잃고 그대로 빠진다(실측).
-		if rb.global_position.y + float(rb.top_height) < -fall_depth:
+		#
+		# §35: 꼭대기를 **월드 공간**에서 잰다. `top_height` 는 직립 기준 상수라, 넘어진
+		# 물체에 그것을 요구하면 실제 형상보다 한참 깊이 내려가야 하고 그 전에 감지 Area 를
+		# 벗어난다. 누우면 꼭대기가 낮아지는 것이 물리적으로 맞다.
+		if rb.global_position.y + world_top(rb) < -fall_depth:
 			rb.begin_fall()          # 확실히 구멍 안 → 서로에 대한 충돌만 끊는다
 			_candidates.remove_at(i)
 			_falling.append(rb)
@@ -274,6 +300,10 @@ func _physics_process(_dt: float) -> void:
 		# 소멸은 **우물 안에서만** 일어난다. 구멍이 떠나 버려 우물 밖에 있는 낙하물은
 		# 흡입으로 다시 끌어온 뒤에 사라진다 — 지면 아래 아무 데서나 없어지면
 		# "먹지도 않았는데 점수가 오른다" 가 된다.
+		# **깊이만으로 지우면 안 된다**(§35 에서 실증). 여기에 `y < kill_y*2` 같은 하한을
+		# 두면 아직 구멍 밖에 있던 낙하물이 **점수 없이** 사라진다 — judge2 C1 이 기대
+		# 성장 5.06 대 실측 3.47, 점수 2028 대 676 으로 즉시 잡았다. 소멸은 아래처럼
+		# **우물 안에 있을 때만** 일어나야 하고, 밖으로 밀린 것은 흡입이 끌어온다.
 		if rb.global_position.y < kill_y \
 				and flat_dist(rb.global_position, here) < radius:
 			_falling.remove_at(i)
@@ -310,3 +340,18 @@ func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 	if to_center.length_squared() < 1e-6:
 		return
 	rb.apply_central_force(to_center.normalized() * suction * scale * rb.mass)
+
+
+## 콜라이더의 **월드 공간 꼭대기**(강체 원점 기준 높이). 직립이면 `top_height` 와 같고
+## 누우면 낮아진다 — §23 의 삼킴 문턱이 회전을 알아야 하는 이유는 `_on_body_exited` 의
+## 주석에 적었다. 셰이프가 여럿이면 가장 높은 것을 쓴다(보수적 = 안전한 방향).
+func world_top(rb: Node3D) -> float:
+	var t := 0.0
+	for c in rb.find_children("", "CollisionShape3D", false, false):
+		var col := c as CollisionShape3D
+		if col.shape == null:
+			continue
+		var ab: AABB = (rb.global_transform * col.transform) \
+			* col.shape.get_debug_mesh().get_aabb()
+		t = maxf(t, ab.end.y - rb.global_position.y)
+	return t

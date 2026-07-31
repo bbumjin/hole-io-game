@@ -35,6 +35,8 @@ var top_height := 0.0
 var _can_sleep_default := true
 ## 이 물체를 감지 범위에 두고 있는 구멍의 수(§23).
 var _rim_refs := 0
+## 인계된 뒤 멈춰 있던 연속 프레임 수. 정리를 맡은 쪽이 센다(§35).
+var still_frames := 0
 
 
 func _ready() -> void:
@@ -140,3 +142,9 @@ func hold_awake(on: bool) -> void:
 	can_sleep = _can_sleep_default and not on
 	if on:
 		sleeping = false
+
+
+## 이 물체를 잡고 있는 구멍이 있는가(§35). 인계 뒤 정리를 맡은 쪽(citizens·traffic)이
+## **구멍이 놓기도 전에 지우는 것**을 막는다.
+func held_by_hole() -> bool:
+	return _rim_refs > 0

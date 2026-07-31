@@ -97,6 +97,9 @@ var _people := []
 ## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 치운다(§27 의 교통과 같은 이유).
 var _orphans := []
 const ORPHAN_STILL := 0.35
+## 멈춘 채 이만큼 이어져야 치운다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
+## 1프레임 만에** 점수도 없이 사라진다 — 유저가 "닿으면 사라진다" 로 본 것이 그것이다.
+const ORPHAN_GRACE := 60
 var _tick := 0
 
 
@@ -109,9 +112,17 @@ func sweep_orphans() -> void:
 		if rb.falling:                                  # 구멍이 삼켰다 — 그쪽이 처리한다
 			_orphans.remove_at(n)
 			continue
+		# **구멍이 아직 잡고 있거나 이미 우물 안이면 손대지 않는다.**
+		if rb.held_by_hole() or rb.global_position.y < 0.0:
+			rb.still_frames = 0
+			continue
 		if rb.linear_velocity.length() < ORPHAN_STILL:
-			_orphans.remove_at(n)
-			rb.queue_free()
+			rb.still_frames += 1
+			if rb.still_frames >= ORPHAN_GRACE:
+				_orphans.remove_at(n)
+				rb.queue_free()
+		else:
+			rb.still_frames = 0
 
 
 func _ready() -> void:
