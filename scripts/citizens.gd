@@ -99,7 +99,14 @@ var _orphans := []
 const ORPHAN_STILL := 0.35
 ## 멈춘 채 이만큼 이어져야 치운다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
 ## 1프레임 만에** 점수도 없이 사라진다 — 유저가 "닿으면 사라진다" 로 본 것이 그것이다.
+## §35 실측(`tools/probe_orphan.gd`): 스치기만 한 시민은 `still_frames` 가 정확히
+## `ORPHAN_GRACE − 1`(=59)까지 관측된 뒤 제거된다 — judge9 M16c 가 그 등식을 그대로 묻는다.
 const ORPHAN_GRACE := 60
+## 접촉 관통으로 y 가 살짝 음수가 되는 잡음을 "우물 안" 으로 오판하지 않게 하는 여유.
+## 림 위에 정지한 순간 접촉이 아주 조금 파고들 수 있다 — 그것을 낙하로 잘못 읽으면
+## `still_frames` 가 영원히 0 으로 묶인다(§35, 지금은 §0.5-A 실측 경로가 이 자리를
+## 밟지 않아 무증상이지만, 다음 물리 튜닝이 밟지 않도록 규격에 못박는다).
+const ORPHAN_Y_EPS := 0.02
 var _tick := 0
 
 
@@ -113,7 +120,7 @@ func sweep_orphans() -> void:
 			_orphans.remove_at(n)
 			continue
 		# **구멍이 아직 잡고 있거나 이미 우물 안이면 손대지 않는다.**
-		if rb.held_by_hole() or rb.global_position.y < 0.0:
+		if rb.held_by_hole() or rb.global_position.y < -ORPHAN_Y_EPS:
 			rb.still_frames = 0
 			continue
 		if rb.linear_velocity.length() < ORPHAN_STILL:

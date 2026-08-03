@@ -238,8 +238,17 @@ func _physics_process(dt: float) -> void:
 ## 영구히 남고**, 주행차는 매 프레임 순간이동하므로 스윕 없이 그것을 관통한다 —
 ## §27 이 주차 자리를 줄여 가며 없애려던 상황이 판 중반부터 스스로 되살아난다.
 ## 낙하하지 않았고 멈춰 섰으면 치운다.
+##
+## §35: **citizens.gd 와 글자 그대로 같은 게이트를 쓴다.** `tools/probe_orphan_car.gd`
+## 실측으로 이 파일에 정확히 같은 결함이 재현됐다 — 차가 인계된 뒤 낙하도 삼킴도 없이
+## 65~79프레임 뒤 속도가 `ORPHAN_STILL` 아래로 떨어지자마자 **유예 없이** 제거됐다
+## (citizens.gd 수정 전과 같은 모양. 관성 때문에 늦게 사라질 뿐 유예가 없는 것은 같다).
+## 공통 함수로 뽑지 않는다 — 두 파일은 독립된 스윕 리스트(`_cars`/`_people`)를 관리하고,
+## `ORPHAN_STILL` 상수도 이미 두 파일에 중복돼 있다(이 저장소의 기존 관례).
 var _orphans := []
 const ORPHAN_STILL := 0.35
+const ORPHAN_GRACE := 60
+const ORPHAN_Y_EPS := 0.02
 
 
 func sweep_orphans() -> void:
@@ -251,9 +260,17 @@ func sweep_orphans() -> void:
 		if rb.falling:                                  # 구멍이 삼켰다 — 그쪽이 처리한다
 			_orphans.remove_at(n)
 			continue
+		# **구멍이 아직 잡고 있거나 이미 우물 안이면 손대지 않는다.**
+		if rb.held_by_hole() or rb.global_position.y < -ORPHAN_Y_EPS:
+			rb.still_frames = 0
+			continue
 		if rb.linear_velocity.length() < ORPHAN_STILL:
-			_orphans.remove_at(n)
-			rb.queue_free()
+			rb.still_frames += 1
+			if rb.still_frames >= ORPHAN_GRACE:
+				_orphans.remove_at(n)
+				rb.queue_free()
+		else:
+			rb.still_frames = 0
 
 
 ## 구멍에 잡힌 차를 교통에서 빼고 물리에 넘긴다.

@@ -573,7 +573,7 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--diag34", "--judge11", "--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
+const JUDGE_ORDER := ["--judge11", "--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
 	"--judge5", "--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2",
 	"--judge1b", "--judge"]
 
@@ -658,7 +658,6 @@ func _ready() -> void:
 	_main.arena = flag == "--judge4" or flag == "--judge5"
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
-		"--diag34": await run_diag_34()
 		"--judge11": await run_judge_11()
 		"--judge10": await run_judge_10()
 		"--judge9": await run_judge_9()
@@ -3482,6 +3481,23 @@ const SPEC_CITIZEN_PIX_MIN := 2000
 const HEAD_MEASURED_MIN := 8
 ## M12g: 반경 16 구멍을 보도 옆에 두면 겁먹는 반경이 56m 라 이 정도는 도망친다(M10 과 같은 자리).
 const SPRINT_SEEN_MIN := 3
+
+## M16~M18(§35). 트리거 값은 무수정 빌드 실측(PLAN.md §35: I=1.58, K=1.62, A=1.12)에서
+## 유도했다 — 림 트리거는 그 사이, 중심 트리거는 개구부 안으로 확실히 들어가는 값이다.
+const M16_RIM_D := 1.60
+const M16_CENTER_D := 0.30
+const M16_MAX_APPROACH_F := 400   # trigger_d 도달 상한 — 못 넘기면 전제 위반(FAIL)
+const M16_OBSERVE_F := 200        # 정지 뒤 관찰 프레임(핸드오프 실측 낙하 최대 128 에 여유)
+## `tools/probe_orphan.gd` 실측 1.55~1.85 구간의 중앙값. 그 도구가 R=1.5 에서 낸 값이라
+## SPEC_START_R 을 벗어나면 다시 유도해야 한다.
+const M16_GRAZE_LATERAL := 1.65
+const M16_GRAZE_SPAN := 20.0
+const M16_GRAZE_MAX_F := 400      # 실측 제거f 최대 202(옵셋 1.75) 에 여유
+## `tools/probe_orphan_car.gd` 실측(옵셋 1.0)의 중앙값.
+const M18_GRAZE_LATERAL := 1.0
+const M18_GRAZE_APPROACH := 15.0
+const M18_GRAZE_MAX_F := 400      # 실측 제거f 최대 146(옵셋 1.00) 에 여유
+const M17_TILT_MIN := 30.0        # 핸드오프 규격 — 무수정 기준점 0.3~0.4°
 ## E7c: 보도 프롭 중심선(road_half 기준).
 const SPEC_WALK_CENTER := 1.34
 const WALK_CENTER_TOL := 0.05
@@ -3688,6 +3704,150 @@ func citizens_take(cz: Node, frames: int) -> String:
 		out += "%.3f,%.3f,%.4f;" % [p.x, p.z,
 			0.0 if leg == null else leg.quaternion.x]
 	return out
+
+
+## 원점에 가장 가까운 시민의 인덱스. M16 세 시나리오가 매번 리셋 직후 대상을 다시
+## 고른다 — `citizen_body(i)` 가 돌려주는 참조를 그대로 들고 있으면 되므로(§25 의
+## `instance_from_id` 필요 없이) 시민 쪽은 이 헬퍼 하나로 충분하다.
+func nearest_citizen(cz: Node) -> int:
+	var best := -1
+	var best_d := INF
+	for i in int(cz.citizen_total()):
+		var d: float = flat_dist(cz.citizen_pos(i), Vector3.ZERO)
+		if d < best_d:
+			best_d = d
+			best = i
+	return best
+
+
+# --- §35 M16~M18: 인계 결말·넘어짐 -------------------------------------------
+#
+# §35 의 결함이 판정 38회를 통과한 이유는 "인계된 개체가 실제로 삼켜지는가" 를 묻는
+# 기준이 하나도 없었기 때문이다(M8·M9·M10 은 개체수만 본다). 시나리오 정지는 **사전
+# 계산 좌표가 아니라 실측 중심거리**로 한다 — 겁먹은 시민은 프레임마다 최대 0.078m
+# 달아나므로(fear_k·flee_mult), 미리 계산한 도착점으로 기계적으로 몰면 도착 시점의
+# 실제 중심거리가 플랫폼·타이밍마다 갈린다(계획 감사가 S2 로 잡은 것과 같은 함정).
+# 대상 참조는 **인계 전에** 붙잡는다 — 시민은 `citizen_body(i)` 를 그대로 들고 있으면
+# 되고, 차는 `_cars`→`_orphans` 전환에서 인덱스가 바뀌므로 `car_id`+`instance_from_id`
+# 로 잡는다(§35 자신이 남긴 함정 — `_orphans` 는 1~2프레임에 인덱스/존재가 바뀐다).
+
+## 구멍을 대상 쪽으로 매 프레임 다시 조준해 몬다 — "도착 좌표" 를 미리 정하지 않는다.
+## `trigger_d` 를 넘을 때까지 최대 `max_frames`. 못 넘기면 `reached=-1`(전제 위반 —
+## 도망이 트리거보다 빨라 접촉 자체가 안 됐다는 뜻이므로, 공허한 통과로 읽지 않는다).
+func m16_drive_to(hole: Node3D, target: Node3D, trigger_d: float, max_frames: int,
+		speed := 14.0) -> Dictionary:
+	var reached := -1
+	for f in max_frames:
+		if not is_instance_valid(target):
+			break
+		var d := flat_dist(hole.global_position, target.global_position)
+		if d <= trigger_d:
+			reached = f
+			break
+		var dir: Vector3 = target.global_position - hole.global_position
+		dir.y = 0.0
+		if dir.length() > 0.01:
+			hole.move_to(hole.global_position + dir.normalized() * speed / 60.0)
+		await get_tree().physics_frame
+	return {"reached": reached}
+
+
+## 정지(또는 관찰) 상태에서 결말을 잰다 — 낙하했는가(score 로 확인, **개체 고유**의
+## `swallowed` 신호가 아니라 총점을 쓰는 이유는 이 시나리오가 대상 하나만 활성 상태로
+## 격리해 놓기 때문이다) · `still_frames` 시계열의 마지막 관측값 · 최대 tilt.
+func m16_observe(hole: Node3D, target: Node3D, frames: int, score0: int) -> Dictionary:
+	var removed_at := -1
+	var max_still := 0
+	var max_tilt := 0.0
+	for f in frames:
+		await get_tree().physics_frame
+		if not is_instance_valid(target):
+			removed_at = f
+			break
+		max_still = maxi(max_still, int(target.still_frames))
+		var up: Vector3 = target.global_transform.basis.y
+		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
+	return {"scored": hole.score > score0, "removed_at": removed_at,
+		"max_still": max_still, "max_tilt": max_tilt}
+
+
+## M16c/M18 공용: **정지하지 않고** 대상 옆을 lateral 만큼 벗어난 직선으로 지나간다
+## (`tools/probe_orphan.gd` 의 실측 그대로 — 옵셋 1.55~1.85 에서 접촉은 있으나 낙하는
+## 없는 "고아" 가 재현된다). 대상이 정지해 있다는 전제이므로 통과 라인은 호출 시점의
+## 대상 z 로 고정한다(시민 전용 — 움직이는 차는 `m18_graze_car` 를 따로 쓴다).
+func m16_graze(hole: Node3D, target: Node3D, lateral: float, span: float,
+		max_frames: int, speed := 14.0) -> Dictionary:
+	var t0: Vector3 = target.global_position
+	var start := Vector3(t0.x - span, 0.0, t0.z + lateral)
+	var stop_at := Vector3(t0.x + span, 0.0, t0.z + lateral)
+	hole.move_to(start)
+	_reg.flush()
+	var held := false
+	var removed_at := -1
+	var max_still := 0
+	var max_tilt := 0.0
+	var cur := start
+	var score0: int = hole.score
+	for f in max_frames:
+		if cur.x < stop_at.x:
+			cur.x = minf(cur.x + speed / 60.0, stop_at.x)
+			hole.move_to(cur)
+		await get_tree().physics_frame
+		if not is_instance_valid(target):
+			removed_at = f
+			break
+		if target.held_by_hole():
+			held = true
+		max_still = maxi(max_still, int(target.still_frames))
+		var up: Vector3 = target.global_transform.basis.y
+		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
+	return {"held": held, "scored": hole.score > score0, "removed_at": removed_at,
+		"max_still": max_still, "max_tilt": max_tilt}
+
+
+## M18 전용: 차는 정지해 있지 않으므로 접근 직전 실측 속도로 진행 방향을 추정해
+## 그 차선을 가로지르는 직선을 만든다(`tools/probe_orphan_car.gd` 의 실측 그대로).
+func m18_graze_car(hole: Node3D, rb: RigidBody3D, lateral: float, approach: float,
+		max_frames: int, speed := 14.0) -> Dictionary:
+	var p0: Vector3 = rb.global_position
+	await get_tree().physics_frame
+	var p1: Vector3 = rb.global_position
+	var v := (p1 - p0) * 60.0
+	var car_speed: float = Vector2(v.x, v.z).length()
+	if car_speed < 0.5:
+		return {"reached": false}
+	var dir := Vector3(v.x, 0.0, v.z).normalized()
+	var perp := Vector3(-dir.z, 0.0, dir.x)
+	var t_gate := approach / speed
+	var gate_dir: float = p1.dot(dir) + car_speed * t_gate + lateral
+	var gate_cross: float = p1.dot(perp)
+	var start: Vector3 = dir * gate_dir + perp * (gate_cross - approach)
+	var stop_at: Vector3 = dir * gate_dir + perp * (gate_cross + approach)
+	hole.move_to(start)
+	_reg.flush()
+	var held := false
+	var removed_at := -1
+	var max_still := 0
+	var cur := start
+	var travel: Vector3 = stop_at - start
+	var step: Vector3 = travel.normalized() * (speed / 60.0)
+	var total_len: float = travel.length()
+	var traveled := 0.0
+	var score0: int = hole.score
+	for f in max_frames:
+		if traveled < total_len:
+			cur += step
+			traveled += step.length()
+			hole.move_to(cur)
+		await get_tree().physics_frame
+		if not is_instance_valid(rb):
+			removed_at = f
+			break
+		if rb.held_by_hole():
+			held = true
+		max_still = maxi(max_still, int(rb.still_frames))
+	return {"reached": true, "held": held, "scored": hole.score > score0,
+		"removed_at": removed_at, "max_still": max_still}
 
 
 ## M1~M5. 교통이 규격대로 흐르는가.
@@ -3952,6 +4112,14 @@ func run_judge_9() -> void:
 	var m13 := cz != null
 	var m14 := cz != null
 	var m15 := cz != null
+	var m16 := cz != null
+	var m17 := cz != null
+	# **`cz` 와 무관하게 기본값이 FAIL 쪽이다.** M18 은 traffic 만 필요하므로 Citizens 가
+	# 삭제된 빌드에서도 돌아야 하고(그래서 `if cz != null:` 블록 밖에 둔다), 전제 위반
+	# (차가 없다·속도 미검출) 분기가 값을 안 바꾸면 **기본값이 그대로 새어 나가 공허하게
+	# 통과한다** — 코드 감사가 `var m18 := true` 로 이 실수를 실제로 잡았다(주입 재현:
+	# `best_car=-1` 을 강제해도 M18=P 로 찍혔다). M16a/M16b 처럼 `false` 로 시작한다.
+	var m18 := false
 	if cz != null:
 		probe_setup()
 
@@ -4219,12 +4387,144 @@ func run_judge_9() -> void:
 			% [walk_seen, rep.size(), sprint_seen, SPRINT_SEEN_MIN, pf(m12g)])
 		m12 = m12 and m12g
 
+		# --- M16·M17(§35): 인계 결말·넘어짐 -----------------------------------
+		# **조용한 판을 다시 세운다** — M12g 가 반경 16 구멍을 시민 근처에 남겼다.
+		# M10→M11 전환과 같은 패턴: `cz.reset()` 을 조건 없이 부른다(킨매틱 재배치라
+		# 별도 정착 대기가 필요 없다 — 계획 감사가 "안정화 대기" 라는 프레임 수 미지정
+		# 문구를 잡았다. 검증된 패턴을 그대로 쓴다).
+		hole.set_radius(SPEC_START_R)
+		hole.move_to(Vector3(-176.0, 0.0, -176.0))
+		cz.citizen_count = CITIZEN_N
+		cz.reset()
+		_reg.flush()
+
+		# M16a: 림 위에서 정지 — 핸드오프 표의 I(1.58)·K(1.62) 재현.
+		# `nearest_citizen` 이 -1(인구 0)을 돌려줄 일은 없다(`CITIZEN_N` 이 항상 양수라
+		# `cz.reset()` 뒤 인구가 비지 않는다) — 그래도 M18 과 같은 방어를 갖춰 둔다.
+		var best_a := nearest_citizen(cz)
+		var m16a := false
+		var tilt_a := 0.0
+		if best_a < 0:
+			print("JUDGE 9 M16a 전제 위반: 시민이 없다")
+		else:
+			var target_a: RigidBody3D = cz.citizen_body(best_a)
+			hole.move_to(Vector3(target_a.global_position.x - 15.0, 0.0,
+				target_a.global_position.z))
+			_reg.flush()
+			var score_a: int = hole.score
+			var app_a := await m16_drive_to(hole, target_a, M16_RIM_D, M16_MAX_APPROACH_F)
+			if int(app_a["reached"]) < 0:
+				print("JUDGE 9 M16a 전제 위반: 중심거리 %.2f 에 %d프레임 안에 못 닿았다"
+					% [M16_RIM_D, M16_MAX_APPROACH_F])
+			else:
+				var obs_a := await m16_observe(hole, target_a, M16_OBSERVE_F, score_a)
+				m16a = bool(obs_a["scored"]) or (int(obs_a["removed_at"]) >= 0 \
+					and int(obs_a["max_still"]) == int(cz.ORPHAN_GRACE) - 1)
+				tilt_a = float(obs_a["max_tilt"])
+				print(("JUDGE 9 M16a 림정지 도달f=%d 낙하=%s 제거f=%d still최대=%d(=%d?) " +
+					"최대tilt=%.1f° %s")
+					% [int(app_a["reached"]), pf(bool(obs_a["scored"])),
+					   int(obs_a["removed_at"]), int(obs_a["max_still"]),
+					   int(cz.ORPHAN_GRACE) - 1, tilt_a, pf(m16a)])
+
+		# M16b: 개구부 정중앙 — 핸드오프 표의 A(1.12)·G 재현. tilt 는 안 묻는다
+		# (핸드오프: "A 는 정중앙이라 묻지 않는다").
+		hole.set_radius(SPEC_START_R)
+		hole.move_to(Vector3(-176.0, 0.0, -176.0))
+		cz.reset()
+		_reg.flush()
+		var best_b := nearest_citizen(cz)
+		var m16b := false
+		if best_b < 0:
+			print("JUDGE 9 M16b 전제 위반: 시민이 없다")
+		else:
+			var target_b: RigidBody3D = cz.citizen_body(best_b)
+			hole.move_to(Vector3(target_b.global_position.x - 15.0, 0.0,
+				target_b.global_position.z))
+			_reg.flush()
+			var score_b: int = hole.score
+			var app_b := await m16_drive_to(hole, target_b, M16_CENTER_D, M16_MAX_APPROACH_F)
+			if int(app_b["reached"]) < 0:
+				print("JUDGE 9 M16b 전제 위반: 중심거리 %.2f 에 %d프레임 안에 못 닿았다"
+					% [M16_CENTER_D, M16_MAX_APPROACH_F])
+			else:
+				var obs_b := await m16_observe(hole, target_b, M16_OBSERVE_F, score_b)
+				m16b = bool(obs_b["scored"])
+				print("JUDGE 9 M16b 정중앙 도달f=%d 낙하=%s" % [int(app_b["reached"]), pf(m16b)])
+
+		# M16c: 스침 — 정지 없이 지나간다(§35 §0.5-A 의 발견을 판정으로 승격).
+		# 통과식은 상한이 아니라 **등식**이다: `removed_at ≤ GRACE+여유` 는
+		# `sweep_orphans()` 구조상 GRACE 값과 무관하게 항상 참이라 위약이다
+		# (계획 감사가 실행으로 잡았다) — 마지막으로 관측되는 `still_frames` 가
+		# 정확히 `ORPHAN_GRACE − 1` 인지를 묻는다(§0.5-A 의 실측이 이미 이 등식이다:
+		# 옵셋 네 종 전부 제거f−시작f = 59 = GRACE−1).
+		hole.set_radius(SPEC_START_R)
+		hole.move_to(Vector3(-176.0, 0.0, -176.0))
+		cz.reset()
+		_reg.flush()
+		var best_c := nearest_citizen(cz)
+		var m16c := false
+		# M17 이 재사용하므로 `best_c<0` 이어도 안전한 기본값을 채워 둔다.
+		var g := {"held": false, "scored": false, "removed_at": -1, "max_still": 0, "max_tilt": 0.0}
+		if best_c < 0:
+			print("JUDGE 9 M16c 전제 위반: 시민이 없다")
+		else:
+			var target_c: RigidBody3D = cz.citizen_body(best_c)
+			g = await m16_graze(hole, target_c, M16_GRAZE_LATERAL, M16_GRAZE_SPAN,
+				M16_GRAZE_MAX_F)
+			m16c = bool(g["held"]) and (bool(g["scored"]) \
+				or (int(g["removed_at"]) >= 0 and int(g["max_still"]) == int(cz.ORPHAN_GRACE) - 1))
+			print(("JUDGE 9 M16c 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d(=%d?) " +
+				"최대tilt=%.1f° %s")
+				% [pf(bool(g["held"])), pf(bool(g["scored"])), int(g["removed_at"]),
+				   int(g["max_still"]), int(cz.ORPHAN_GRACE) - 1, float(g["max_tilt"]), pf(m16c)])
+
+		m16 = m16a and m16b and m16c
+		# M17: 넘어짐 — M16a·M16c 에서 이미 잰 tilt 를 재사용한다(공짜 표본).
+		m17 = tilt_a >= M17_TILT_MIN and float(g["max_tilt"]) >= M17_TILT_MIN
+		print("JUDGE 9 M17 넘어짐: 림정지 tilt=%.1f° 스침 tilt=%.1f° (>= %.1f°) %s"
+			% [tilt_a, float(g["max_tilt"]), M17_TILT_MIN, pf(m17)])
+
+	# --- M18(§35, 신규): 차도 같은 계약을 지키는가 -----------------------------
+	# **`if cz != null:` 블록 밖에 둔다** — traffic 만 필요하므로 Citizens 가 통째로
+	# 삭제된 빌드에서도 이 시나리오가 실제로 돌아야 한다(코드 감사가 잡았다: 안에 있으면
+	# 그 빌드에서 `m18` 이 기본값 그대로 새어 나가 스윕 테스트 자체가 안 도는데도 통과한다).
+	# 핸드오프는 traffic.gd 에 "같은 게이트를 적용하라" 고만 했지 판정을 못박지 않았다.
+	# 그러나 이 저장소의 §35 원인 분석 자체가 "판정 없는 수정은 재발한다" 고 적어 두었다
+	# — M8~M10 이 이미 "차 총량 보존" 만 보고 "그 차가 어떻게 됐는가" 는 안 묻는 것과
+	# 정확히 같은 커버리지 구멍이다.
+	hole.set_radius(SPEC_START_R)
+	hole.move_to(Vector3(-176.0, 0.0, -176.0))
+	_reg.flush()
+	var best_car := -1
+	var best_car_d := INF
+	for i in int(tr.car_total()):
+		var d: float = flat_dist(tr.car_pos(i), Vector3.ZERO)
+		if d < best_car_d:
+			best_car_d = d
+			best_car = i
+	if best_car < 0:
+		print("JUDGE 9 M18 전제 위반: 차가 없다")
+	else:
+		var car_rb: RigidBody3D = instance_from_id(int(tr.car_id(best_car))) as RigidBody3D
+		var gc := await m18_graze_car(hole, car_rb, M18_GRAZE_LATERAL,
+			M18_GRAZE_APPROACH, M18_GRAZE_MAX_F)
+		if not bool(gc.get("reached", true)):
+			print("JUDGE 9 M18 전제 위반: 차 속도를 못 쟀다(재시도 필요)")
+		else:
+			m18 = bool(gc["held"]) and (bool(gc["scored"]) \
+				or (int(gc["removed_at"]) >= 0 \
+					and int(gc["max_still"]) == int(tr.ORPHAN_GRACE) - 1))
+			print(("JUDGE 9 M18 차량 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d(=%d?) %s")
+				% [pf(bool(gc["held"])), pf(bool(gc["scored"])), int(gc["removed_at"]),
+				   int(gc["max_still"]), int(tr.ORPHAN_GRACE) - 1, pf(m18)])
+
 	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s M8=%s M9=%s"
 		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7), pf(m8), pf(m9)])
-	print("JUDGE 9 M11=%s M12=%s M13=%s M14=%s M15=%s"
-		% [pf(m11), pf(m12), pf(m13), pf(m14), pf(m15)])
+	print("JUDGE 9 M11=%s M12=%s M13=%s M14=%s M15=%s M16=%s M17=%s M18=%s"
+		% [pf(m11), pf(m12), pf(m13), pf(m14), pf(m15), pf(m16), pf(m17), pf(m18)])
 	var ok := m1 and m2 and m3 and m4 and m5 and m6 and m7 and m8 and m9 \
-		and m11 and m12 and m13 and m14 and m15
+		and m11 and m12 and m13 and m14 and m15 and m16 and m17 and m18
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -5809,71 +6109,3 @@ func occ_hysteresis(hole: Node3D, city: Node3D, r: float) -> bool:
 	return ok
 
 
-## 임시 진단 — 유저 결함 "닿으면 사라진다" 의 실제 경로를 시나리오별로 잰다.
-## **구멍을 순간이동시키면 안 된다** — 그러면 시민이 항상 개구부 안쪽에 놓여 림 구간이
-## 생기지 않는다(첫 진단이 그래서 빗나갔다). 밖에서 다가오게 한다.
-## 확인 뒤 삭제한다.
-func diag_run(cz: Node, hole: Node3D, label: String, approach: bool, stop_d: float) -> void:
-	cz.citizen_count = 60
-	cz.reset()
-	await get_tree().physics_frame
-	# 원점에서 가장 가까운 시민을 고른다.
-	var best := -1
-	var best_d := INF
-	for i in int(cz.citizen_total()):
-		var d: float = flat_dist(cz.citizen_pos(i), Vector3.ZERO)
-		if d < best_d:
-			best_d = d
-			best = i
-	var target: Vector3 = cz.citizen_pos(best)
-	var rb: RigidBody3D = cz.citizen_body(best)
-	hole.set_radius(SPEC_START_R)
-	# 시민 기준 -X 쪽에서 다가와 중심거리 stop_d 에서 멈춘다.
-	var stop_at := Vector3(target.x - stop_d, 0.0, target.z)
-	if approach:
-		hole.move_to(stop_at - Vector3(12.0, 0.0, 0.0))
-	else:
-		hole.move_to(stop_at)
-	_reg.flush()
-
-	var freed_at := -1
-	var fell_at := -1
-	var hand_at := -1
-	var max_tilt := 0.0
-	var score0: int = hole.score
-	var cur := hole.global_position
-	for f in 200:
-		# 접근 구간: 14 m/s 로 다가가 stop_at 에서 멈춘다(플레이어 속도).
-		if approach and cur.x < stop_at.x:
-			cur.x = minf(cur.x + 14.0 / 60.0, stop_at.x)
-			hole.move_to(cur)
-		await get_tree().physics_frame
-		if not is_instance_valid(rb):
-			freed_at = f
-			break
-		if hand_at < 0 and not rb.freeze:
-			hand_at = f
-		var up: Vector3 = rb.global_transform.basis.y
-		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
-		if fell_at < 0 and rb.falling:
-			fell_at = f
-	var got: int = hole.score - score0
-	var alive := is_instance_valid(rb)
-	print("DIAG %-28s 인계f=%-4d 낙하f=%-4d 소멸f=%-4d 점수=%-4d 최대tilt=%5.1f° 생존=%s%s"
-		% [label, hand_at, fell_at, freed_at, got, max_tilt, str(alive),
-		   ("  y=%.2f" % rb.global_position.y) if alive else ""])
-
-
-func run_diag_34() -> void:
-	if not setup():
-		get_tree().quit(1)
-		return
-	var hole := _main.get_node("Hole")
-	var cz: Node = _main.get_node_or_null("Citizens")
-	print("DIAG (점수>0 이어야 삼킨 것이다. 소멸f>=0 이고 점수=0 이면 지워진 것이다)")
-	await diag_run(cz, hole, "A 정지·중심거리 1.12", false, 1.12)
-	await diag_run(cz, hole, "I 정지·중심거리 1.58(림)", false, 1.58)
-	await diag_run(cz, hole, "K 접근후 정지·1.62(림)", true, 1.62)
-	await diag_run(cz, hole, "G 접근후 정지·0.0", true, 0.0)
-	print("JUDGE RESULT -> PASS")
-	get_tree().quit(0)
