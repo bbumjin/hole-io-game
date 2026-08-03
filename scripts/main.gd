@@ -111,6 +111,13 @@ func _ready() -> void:
 	process_physics_priority = 100
 	registry.register(hole)        # 플레이어가 항상 0번이다(판정기가 [0] 을 쓴다)
 	hole.swallowed.connect(_on_swallowed)
+	# §37: 카메라가 가림 투명화를 돌리려면 도시를 알아야 한다. **`follow` 전에 물린다** —
+	# 아래 첫 `follow(snap)` 이 이미 가림을 확정하므로, 늦게 물리면 첫 프레임이 가려진 채 뜬다.
+	# 없으면 `update()` 가 즉시 반환해 **기능 전체가 에러 없이 죽는다** — 이 저장소가 가장
+	# 경계하는 결함 모양이라 침묵시키지 않는다.
+	cam.occluders.city = get_node_or_null("City")
+	if cam.occluders.city == null:
+		push_error("§37: City 노드가 없다 — 가림 투명화가 통째로 꺼진다")
 	if arena:
 		spawn_ai()
 	cam.follow(hole, hole.radius, true)

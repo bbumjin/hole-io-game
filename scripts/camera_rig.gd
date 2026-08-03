@@ -26,6 +26,10 @@ extends Camera3D
 ## 부르므로 0 인 채로 비스냅 경로에 들어가는 일은 없다.
 var _k := 0.0
 
+## §37: 카메라를 가리는 프롭을 비운다. main 이 `_ready` 에서 도시를 물린다.
+const OCCLUDERS := preload("res://scripts/occluders.gd")
+var occluders := OCCLUDERS.new()
+
 
 func follow(target: Node3D, radius: float, snap: bool, dt := 0.0) -> void:
 	var k_target: float = maxf(radius / base_radius, min_height / base_offset.y)
@@ -39,3 +43,9 @@ func follow(target: Node3D, radius: float, snap: bool, dt := 0.0) -> void:
 		var want := target.global_position + base_offset * _k
 		global_position = global_position.lerp(want, 1.0 - exp(-smooth * dt))
 	global_basis = Basis.looking_at(-base_offset)
+	# §37: **여기가 유일한 호출 자리다.** main 3곳과 판정 13곳이 전부 `follow` 로 오므로
+	# 여기 걸면 판정 스크린샷에도 자동으로 반영된다 — 판정 모드에서는 `main._process` 가
+	# 일찍 반환해 `follow` 말고는 도는 것이 없다. `judge_flag()` 와 같은 원칙이다.
+	# **실제 카메라 위치(`self`)를 넘긴다** — 이상 오프셋을 쓰면 횡이동 중 정상상태 지연
+	# 2.33m(= v/smooth = 14/6) 만큼 원뿔이 어긋나 가림을 놓친다.
+	occluders.update(self, target.global_position, radius, snap, dt)

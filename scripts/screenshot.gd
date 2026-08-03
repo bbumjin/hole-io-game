@@ -318,6 +318,12 @@ const PERF_SPOTS := {
 }
 const PERF_FRAMES := 300
 const FRAME_BUDGET_MS := 16.67                     # 60fps
+## §37 [dynamic-cam]: 도심을 가로지르는 주행. 플레이어 속도 14 m/s 를 그대로 쓴다.
+const PERF_CAM_SPEED := 14.0
+const PERF_CAM_DT := 1.0 / 60.0
+## 구간 전제. 미끄러짐으로 주행이 막히면 유령 집합이 고정된 채 통과하는 것을 막는다.
+const PERF_CAM_MOVE_MIN := 0.9                     # 기대 이동거리의 이 비율 이상
+const PERF_CAM_CHURN_MIN := 3                      # 유령 집합이 바뀐 프레임 수 하한(실측 7 의 절반)
 const OVERLAP_EPS := 0.02                          # E3: SAT 수치 여유
 # D5: 구멍을 옮겨 재판정할 규격 지점 (오브젝트가 없는 -x/+z 쪽)
 # 앞의 셋에서 `road`·`block` 은 실측상 **인덱스 0 대로(z=0)** 를 표본한다(로그의 k·등급
@@ -567,7 +573,7 @@ func spec_merge(k: int, j: int, along_k: bool) -> Vector2i:
 ## 화이트리스트를 거쳐야만 분기로 들어간다 — 임의의 문자열이 판정 이름 자리에
 ## 앉지 않게 한다(§24). 접두사가 겹치므로(`--judge` 가 `--judge3b` 의 앞부분)
 ## 긴 것부터 본다.
-const JUDGE_ORDER := ["--diag34", "--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
+const JUDGE_ORDER := ["--diag34", "--judge11", "--judge10", "--judge9", "--judge8", "--judge7", "--judge6",
 	"--judge5", "--judge4", "--judge3c", "--judge3b", "--judge3", "--judge2",
 	"--judge1b", "--judge"]
 
@@ -653,6 +659,7 @@ func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS    # 정적 판정 중 트리를 멈춰도 자신은 돈다
 	match flag:
 		"--diag34": await run_diag_34()
+		"--judge11": await run_judge_11()
 		"--judge10": await run_judge_10()
 		"--judge9": await run_judge_9()
 		"--judge8": await run_judge_8()
@@ -2633,6 +2640,10 @@ func run_judge_3c() -> void:
 	var props: int = _main.get_node("City").get_child_count()
 	var f1 := true
 	var f2 := true
+	## §37 [dynamic-cam] 의 구간 전제. **F1/F2 와 섞지 않는다** — 섞으면 구간 줄은
+	## `전제=F … F1=P` 를, 요약 줄은 `F1=F` 를 찍어 한 실행에서 F1 이 P 이자 F 가 된다
+	## (코드 감사가 잡았다). 원인을 안 섞겠다는 목적이 바로 그 자리에서 깨졌다.
+	var f_pre := true
 	for key in PERF_SPOTS:
 		_main.set_hole_position(PERF_SPOTS[key])
 		_reg.flush()
@@ -2703,8 +2714,10 @@ func run_judge_3c() -> void:
 		#
 		# **구멍을 키우지 않는다.** `set_radius(9.0)` 로 하면 반경 9 짜리 구멍이 측정하는
 		# 300프레임 내내 주변을 삼켜 씬이 매 프레임 달라지고 회차마다 값이 흔들린다.
-		# `follow` 의 radius 인자는 **오프셋 배율일 뿐 구멍 크기와 무관**하므로(camera_rig)
-		# 구멍은 1.5 로 두고 "성장 후 화면" 만 얻는다.
+		# `follow` 의 radius 인자는 **카메라 오프셋 배율**이므로(camera_rig) 구멍은 1.5 로
+		# 두고 "성장 후 화면" 만 얻는다. **§37 이후로는 그 인자가 가림 원판 크기도 정한다** —
+		# 즉 이 구간은 반경 1.5 구멍을 9m 원판으로 가림 판정한다(프레이밍 계측이 목적이라
+		# 그대로 둔다).
 		#
 		# 위의 [dynamic] 지점은 **그대로 둔다** — §17 이래의 like-for-like 비교선이다.
 		# 여기는 더한 지점이지 옮긴 지점이 아니다.
@@ -2728,8 +2741,63 @@ func run_judge_3c() -> void:
 			% [int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
 			   avgf, 1000.0 / maxf(avgf, 0.001), worstf, pf(s1f), pf(s2f)])
 
-	var ok := f1 and f2
-	print("JUDGE 3c F1=%s F2=%s -> %s" % [pf(f1), pf(f2), ("PASS" if ok else "FAIL")])
+		# --- [dynamic-cam] §37: 카메라가 움직일 때의 가림 투명화 비용 ---------
+		# **위의 지점들은 §37 의 비싼 경로를 안 탄다.** 전부 카메라를 스냅해 고정하므로
+		# 유령 집합이 첫 프레임에 정해지고, 그 뒤로는 `_paint` 의 `!= m2` 가 갱신을
+		# 건너뛴다. §37 이 실제로 비싼 자리는 **유령 집합이 매 프레임 바뀔 때의
+		# `StandardMaterial3D.duplicate()` × 서피스 최대 7** 이고 그것을 아무도 안 쟀다.
+		#
+		# 셋을 못 박는다. ① 이 구간만 **물리를 끈다** — 주행하는 구멍이 300프레임 내내
+		# 프롭을 삼키면 worst 가 삼킴·queue_free 스파이크를 타고 **§37 과 무관한 이유로
+		# 빨개진다.** ② **구간 시작에 스냅**한다 — 바로 위 [dynamic-far] 가 `_k=1.8` 을
+		# 남기므로 이어서 비-snap 으로 반경 1.5 를 따라가면 카메라가 물러났다 다가오며
+		# 유령 집합이 그 이유로 요동친다. ③ **정말 주행했는가를 전제로 단언한다** —
+		# `set_hole_position` 이 §25 미끄러짐으로 막히면 카메라가 서고, 유령 집합이 고정된
+		# 채 위 지점과 같은 것을 재고도 "churn 을 측정했다" 로 기록된다.
+		hole.set_physics_process(false)
+		var start: Vector3 = PERF_SPOTS["dense"]
+		_main.set_hole_position(start)
+		_reg.flush()
+		_cam.follow(hole, hole.radius, true)
+		for _i in WARMUP:
+			await get_tree().process_frame
+		var occ: RefCounted = _cam.occluders
+		var ghosts: int = occ.last_ghosted
+		var churn := 0
+		var pos := start
+		var t0c := Time.get_ticks_usec()
+		var prevc := t0c
+		var worstc := 0.0
+		for _i in PERF_FRAMES:
+			await get_tree().process_frame
+			pos.x += PERF_CAM_SPEED * PERF_CAM_DT
+			_main.set_hole_position(pos)
+			_cam.follow(hole, hole.radius, false, PERF_CAM_DT)
+			if occ.last_ghosted != ghosts:
+				churn += 1
+				ghosts = occ.last_ghosted
+			var nowc := Time.get_ticks_usec()
+			worstc = maxf(worstc, float(nowc - prevc) / 1000.0)
+			prevc = nowc
+		var avgc := float(Time.get_ticks_usec() - t0c) / 1000.0 / float(PERF_FRAMES)
+		var moved: float = hole.global_position.distance_to(start)
+		var want_move: float = PERF_CAM_SPEED * PERF_CAM_DT * float(PERF_FRAMES)
+		# 전제 위반은 F1/F2 가 아니라 **구간 전제**로 잡는다 — 원인을 섞지 않는다.
+		var drove: bool = moved >= want_move * PERF_CAM_MOVE_MIN and churn >= PERF_CAM_CHURN_MIN
+		var s1c := avgc <= FRAME_BUDGET_MS
+		var s2c := worstc <= FRAME_BUDGET_MS * 2.0
+		f1 = f1 and s1c
+		f2 = f2 and s2c
+		f_pre = f_pre and drove
+		print("JUDGE 3c [dynamic-cam] 주행=%.1f/%.1f m 유령변화=%d회 전제=%s "
+			% [moved, want_move, churn, pf(drove)]
+			+ "draws=%d avg=%.2fms (%.0f fps) worst=%.2fms F1=%s F2=%s"
+			% [int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			   avgc, 1000.0 / maxf(avgc, 0.001), worstc, pf(s1c), pf(s2c)])
+
+	var ok := f1 and f2 and f_pre
+	print("JUDGE 3c F1=%s F2=%s 구간전제=%s -> %s"
+		% [pf(f1), pf(f2), pf(f_pre), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -5173,6 +5241,572 @@ func run_judge_10() -> void:
 	get_tree().quit(0 if ok_all else 1)
 
 
+
+
+# --- §37 O1~O6: 가림 투명화 (judge11) ---------------------------------------
+#
+# 왜 픽셀인가: §37 의 결함 모드는 **"에러 없이 안 사라짐"** 이다. 알파를 코드에서 읽으면
+# 렌더러가 그 알파를 실제로 쓰는지는 못 묻는다 — `GeometryInstance3D.transparency` 는
+# Compatibility 에서 값이 남은 채 **그리기에서 무시된다**(탐침 실측: 배경혼합 0.000).
+#
+# 술어는 **순빨강까지의 거리** `d = ‖(r,g,b) − (1,0,0)‖` 다. `r − max(g,b)` 류의 단일 성분
+# 술어는 두 렌더러에서 0.377 대 0.160 으로 갈린다 — Forward+ 는 선형 공간에서 합성한 뒤
+# sRGB 로 인코딩하고(α=0.4 에서 배경혼합 0.796) Compatibility 는 감마 직접이다(0.600).
+# 문턱 하나가 한쪽에서만 사는 것이 바로 §22·§24 가 생긴 이유다.
+
+## 규격 유령 알파·평활 계수. **구현에서 읽지 않는다**(SPEC_CAM_* 와 같은 규약).
+const SPEC_GHOST_ALPHA := 0.20
+const SPEC_FADE_RATE := 12.0
+
+const OCC_S := 0.35                  # 픽스처를 시선 위 어디에 두는가 (구멍 0 ~ 카메라 1)
+const OCC_TALL := 1.6                # (a) 높이 = 그 지점 시선 높이 × 이것
+const OCC_TALL_HIGH := 1.2           # (c)(d) 높이 = 카메라 높이 × 이것
+const OCC_PAD := 2.0                 # 픽스처 반폭 = r + 이것
+const OCC_DT := 1.0 / 60.0
+## O4 의 세 반경: 시작 반경 · probe_occlude 의 표본값 · min_height clamp 를 확실히 벗어난 값.
+const OCC_RADII := [1.5, 6.73, 20.0]
+const OCC_FIX_COLOR := Color(1, 0, 0)
+
+## O1 통과식. 순빨강까지의 거리로 잰다.
+## 대조군은 0 에 가깝고 유령은 F+ ≈0.53 / Compat ≈0.75 다(실측으로 확정했다).
+const OCC_PURE_MAX := 0.20           # 대조군: 이보다 가까우면 순빨강으로 친다
+const OCC_PURE_RATIO := 0.90         # 대조군: 원판의 이 비율이 순빨강이어야 한다
+const OCC_GHOST_MIN := 0.35          # 유령: 이보다 멀어야 한다 (정상상태보다 엄격히 작다)
+const OCC_SEP_MIN := 0.30            # 유령 − 대조군 분리 하한
+## 여유 — 문턱이 두 측정값 **사이에 넉넉히** 놓였는가. 사후 조정을 막는 최종 방벽이다.
+##
+## 처음에는 `여유 >= max(0.15, 분리의 30%)` 라는 상대 규칙을 썼는데 **분리가 좋아질수록
+## 조여지는 뒤집힌 규칙**이었다(실측이 잡았다): Compatibility 는 분리가 0.649 라 요구가
+## 0.195 로 오르는데 대조군 쪽 여유는 `OCC_PURE_MAX` 가 천장이라 0.20 에서 못 늘어 —
+## 렌더러가 더 잘 갈라 줄수록 판정이 아슬아슬해진다. 규모 보증은 `OCC_SEP_MIN` 이 따로
+## 지므로, 여유는 **양쪽 절대 하한**만 본다.
+const OCC_MARGIN_ABS := 0.15
+
+const OCC_SAMPLE_MIN := 500          # 원판 표본 픽셀 하한 (계산상 R=1.5 에서 ≈1.7k)
+const OCC_PIXEL_TOL := 1             # O2①: 결정론이므로 참값은 0 이다
+const OCC_FIX_PIXEL_MIN := 2000      # O2①: 픽스처가 화면 밖이면 양쪽 0 으로 공허히 통과한다
+## O2②③ 은 **도시가 실제로 둘러싼 지점**에서 잰다. 원점 광장(반경 26 빈 터)에서는
+## R=20 의 시선 원뿔이 픽스처 근면에서 지상 49m 를 지나 도시 최대 높이 19.22m 를
+## **원리적으로 못 만나** 유령이 0 이다 — 상·하한을 그 자리에서 물으면 하한이 위약이 된다.
+## 실측(R=20): (-16,16)=3 · (-48,-48)=3 · (16,-16)=3 · **(-32,16)=5** · (-80,-80)=2.
+## 가장 큰 지점을 고르고 상·하한을 그 수에서 유도한다(E9·E7a 의 "실측의 절반" 관례).
+const OCC_MELT_SPOT := Vector3(-32, 0, 16)
+const OCC_MELT_MAX := 10             # 실측 5 의 2배
+const OCC_MELT_MIN := 2              # 실측 5 의 절반 — 상한의 거울
+## R=1.5 는 카메라가 14m 라 13m 이상 건물이 **조기반려를 건너뛰고 정확 경로를 탄다** —
+## 게임이 실제로 도는 길이다. R=20(카메라 88m)만 재면 그 분기를 한 번도 안 묻는다.
+## 실측 2 (후보 67, 두 렌더러·웹에서 같다). 상한은 2배.
+## **하한은 실측과 같은 2 다** — 1 로 두면 `COVER_ON` 을 10배로 올려도 R=1.5 유령이 1 로
+## 남아 통과해 **어떤 주입도 단독으로 못 잡는다**(코드 감사가 실증했다). 여유가 0 이지만
+## 이 지점은 결정론적이고, 배치가 바뀌면 어차피 `RESTART_PROPS` 부터 다시 유도해야 한다.
+const OCC_MELT_MAX_R15 := 4
+const OCC_MELT_MIN_R15 := 2
+
+const OCC_FADE_FRAMES := 41          # O5 상한: ceil(ln(0.8/0.004)/0.2)=27 에 여유 1.5배
+## O5 하한. **상한만 물으면 평활을 없앤 빌드(즉시 전환)가 통과한다** — 실측 26 의 절반이다.
+const OCC_FADE_MIN := 13
+## O5 정상상태 알파 허용 오차. **하한만 물으면 알파를 0 근처로 떨어뜨려 건물이 통째로
+## 사라지는 빌드가 통과한다.** 유령 알파는 규격값 자체를 지켜야 하는 유저 가시 상수다.
+const OCC_ALPHA_TOL := 0.01
+## "유령에 도달했다" 를 재는 **시간 술어**의 허용 오차. **값 술어(`OCC_ALPHA_TOL`)와 상수를
+## 공유하면 안 된다** — 한 번 공유했더니 도달 프레임이 26 → 21 로 움직여 `OCC_FADE_MIN`
+## 의 유도문("실측 26 의 절반")이 조용히 거짓이 됐다(코드 감사가 잡았다).
+## 서로 다른 질문은 서로 다른 상수를 쓴다.
+const OCC_REACH_TOL := 1e-3
+const OCC_BISECT_N := 16             # O6: 분해능 B/2^16
+const OCC_HYST_RES_MAX := 0.001      # O6: 분해능 적정성 (측정과 무관한 설계 목표)
+const OCC_HYST_MIN := 0.005          # O6: 히스테리시스 존재 (분해능의 16배, 실측 간극 66.53mm 의 1/13)
+
+var _occ_reset_bad := 0              # O6: 리셋 전제가 어긋난 반복 수
+var _occ_reset_note := ""
+
+
+## 픽스처. `city.rebuild_occluders()` 와 `occluders._mesh_of()` 가 둘 다
+## "자식 중 첫 MeshInstance3D" 를, `_paint()` 가 `mesh.surface_get_material(i) as
+## StandardMaterial3D` 를 요구하므로 이 구조·이 자리여야 한다. `material_override` 에
+## 두면 `src == null` 로 **조용히 안 칠해진다**.
+##
+## cull_off: (d) 전용. `CULL_BACK` 기본값이면 **카메라가 볼록 상자 내부일 때 여섯 면이
+## 전부 뒷면이라 통째로 컬링돼 화면에 아무것도 안 그려진다** — 대조군이 순빨강이 아니게
+## 되어 정상 빌드가 탈락한다. `duplicate()` 가 cull_mode 를 복사하므로 유령 사본도 같다.
+func occ_make_fixture(city: Node3D, center: Vector3, size: Vector3, cull_off: bool) -> Node3D:
+	var n := Node3D.new()
+	var mi := MeshInstance3D.new()
+	var bm := BoxMesh.new()
+	bm.size = size
+	var m := StandardMaterial3D.new()
+	m.albedo_color = OCC_FIX_COLOR
+	m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	if cull_off:
+		m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	bm.material = m
+	mi.mesh = bm
+	n.add_child(mi)
+	city.add_child(n)
+	n.global_position = center
+	return n
+
+
+## 픽스처를 지우고 색인을 되돌린다. **순서가 중요하다** — `queue_free()` 는 deferred 라
+## 한 프레임 기다리기 전에는 `is_instance_valid` 가 참이고, 먼저 재구축하면 도로 색인된다.
+func occ_drop_fixture(city: Node3D, fix: Node3D) -> void:
+	if is_instance_valid(fix):
+		fix.queue_free()
+	await get_tree().process_frame
+	city.rebuild_occluders()
+
+
+## 규격 카메라 자리. `camera_rig` 를 읽지 않고 SPEC 상수로만 낸다(V3 와 같은 규약).
+func occ_cam_pos(p: Vector3, r: float) -> Vector3:
+	return p + SPEC_CAM_OFFSET * cam_spec_k(r)
+
+
+## 시선축에 수직인 xz 단위벡터. 픽스처를 옆으로 미는 방향이다.
+func occ_perp(p: Vector3, r: float) -> Vector3:
+	var c := occ_cam_pos(p, r)
+	var axis := Vector2(c.x - p.x, c.z - p.z).normalized()
+	return Vector3(-axis.y, 0.0, axis.x)
+
+
+## (a)(c)(d) 배치의 중심과 크기. lateral 은 시선축 수직 이동량이다.
+func occ_place_of(p: Vector3, r: float, kind: String, lateral: float) -> Array:
+	var c := occ_cam_pos(p, r)
+	var w: float = r + OCC_PAD
+	var s: float = 1.0 if kind == "d" else OCC_S
+	var h: float = c.y * OCC_S * OCC_TALL if kind == "a" else c.y * OCC_TALL_HIGH
+	var mid: Vector3 = p + (c - p) * s
+	var ctr := Vector3(mid.x, h * 0.5, mid.z) + occ_perp(p, r) * lateral
+	return [ctr, Vector3(w * 2.0, h, w * 2.0)]
+
+
+## 씬에서 읽는 유령 판독. **`occluders._state`·`last_ghosted` 를 읽지 않는다** —
+## 구현체를 믿으면 기준이 위약이 된다. override 가 없으면 불투명(1.0)이다.
+func occ_alpha_of(n: Node3D) -> float:
+	if not is_instance_valid(n):
+		return 1.0
+	var mi := occ_mesh_of(n)
+	if mi == null:
+		return 1.0
+	for i in mi.get_surface_override_material_count():
+		var m := mi.get_surface_override_material(i) as StandardMaterial3D
+		if m != null:
+			return m.albedo_color.a
+	return 1.0
+
+
+func occ_mesh_of(n: Node3D) -> MeshInstance3D:
+	for c in n.get_children():
+		var mi := c as MeshInstance3D
+		if mi != null and mi.mesh != null:
+			return mi
+	return null
+
+
+## override 가 **하나도 없는가**. O5 의 복원 계약은 "알파 1.0" 이 아니라 "불투명 경로 복귀" 다.
+func occ_override_absent(n: Node3D) -> bool:
+	var mi := occ_mesh_of(n)
+	if mi == null:
+		return true
+	for i in mi.get_surface_override_material_count():
+		if mi.get_surface_override_material(i) != null:
+			return false
+	return true
+
+
+func occ_city_ghosts(city: Node3D) -> int:
+	var n := 0
+	for c in city.get_children():
+		var nd := c as Node3D
+		if nd != null and occ_alpha_of(nd) < 1.0:
+			n += 1
+	return n
+
+
+## 원판이 화면 안에 온전히 드는가. **`_clamped` 는 여기서 안 선다** — 그것은 `px()` 만
+## 세우는데 judge11 은 `ring_poly` 를 쓰므로 `_clamped` 를 전제로 삼으면 **항상 참인 죽은
+## 항**이 된다(코드 감사가 잡았다). `occ_disc_stats` 의 bbox 는 말없이 clampi 하므로,
+## 원판이 화면 밖으로 나가면 보이는 부분만 표본하고도 통과한다. 그래서 직접 묻는다.
+##
+## **현재 프레이밍에서는 어떤 R 로도 발화하지 않는다** — 투영 원판 반경은 `r/k` 에 비례하고
+## `k = max(r/5, 14/22)` 라 `r/k <= 5` 가 모든 r 에서 성립한다(실측: R=6.73 과 R=20 의
+## 원판 표본이 7896 px 로 같다). 프레이밍 규격·FOV·뷰포트가 바뀔 때를 위한 **회귀 감지기**다.
+func occ_on_screen(poly: PackedVector2Array, img: Image) -> bool:
+	for p in poly:
+		if p.x < 0.0 or p.y < 0.0 or p.x > float(img.get_width() - 1) \
+				or p.y > float(img.get_height() - 1):
+			return false
+	return true
+
+
+## 원판 표본 통계: [순빨강거리 중앙값, 표본 수, 순빨강 비율].
+func occ_disc_stats(img: Image, poly: PackedVector2Array) -> Array:
+	var lo := poly[0]
+	var hi := poly[0]
+	for p in poly:
+		lo = lo.min(p)
+		hi = hi.max(p)
+	var x0 := clampi(int(floor(lo.x)), 0, img.get_width() - 1)
+	var x1 := clampi(int(ceil(hi.x)), 0, img.get_width() - 1)
+	var y0 := clampi(int(floor(lo.y)), 0, img.get_height() - 1)
+	var y1 := clampi(int(ceil(hi.y)), 0, img.get_height() - 1)
+	var ds := PackedFloat32Array()
+	var pure := 0
+	for y in range(y0, y1 + 1):
+		for x in range(x0, x1 + 1):
+			if not in_poly(Vector2(x, y), poly):
+				continue
+			var q := img.get_pixel(x, y)
+			var d := Vector3(q.r - 1.0, q.g, q.b).length()
+			ds.append(d)
+			if d <= OCC_PURE_MAX:
+				pure += 1
+	if ds.is_empty():
+		return [0.0, 0, 0.0]
+	ds.sort()
+	return [ds[ds.size() / 2], ds.size(), float(pure) / float(ds.size())]
+
+
+## 화면 전체의 순빨강 픽셀 수. O2① 이 "픽스처가 안 지워졌는가" 를 묻는 데 쓴다.
+func occ_fix_pixels(img: Image) -> int:
+	var n := 0
+	for y in img.get_height():
+		for x in img.get_width():
+			var q := img.get_pixel(x, y)
+			if Vector3(q.r - 1.0, q.g, q.b).length() <= OCC_PURE_MAX:
+				n += 1
+	return n
+
+
+## 픽스처를 옮기고 색인을 맞춘다. **버킷·중심은 재구축 시점 스냅샷**이라(city.gd)
+## 안 부르면 픽스처가 옛 버킷에 남아 덮임과 무관하게 후보에서 빠진다.
+func occ_move(fix: Node3D, city: Node3D, p: Vector3, r: float, kind: String,
+		lateral: float) -> void:
+	var pl: Array = occ_place_of(p, r, kind, lateral)
+	fix.global_position = pl[0]
+	city.rebuild_occluders()
+
+
+## O6 술어. 픽스처를 reset 자리에 두어 **prev 를 원하는 값으로 세운 뒤** x 로 옮겨 읽는다.
+## 히스테리시스는 prev 하나에만 의존하므로(occluders 의 상태기계) 경로를 다시 세우면
+## 원하는 문턱을 정확히 태울 수 있다:
+##   want_reset=false → prev=false → 문턱 COVER_ON  (켜지는 경계)
+##   want_reset=true  → prev=true  → 문턱 COVER_OFF (꺼지는 경계)
+## 리셋 관측이 어긋나면 이분법이 **조용히 엉뚱한 값으로 수렴**하므로 매 반복 단언한다.
+func occ_probe(fix: Node3D, city: Node3D, p: Vector3, r: float,
+		reset_lat: float, want_reset: bool, x: float) -> bool:
+	occ_move(fix, city, p, r, "a", reset_lat)
+	_cam.follow(_reg.holes()[0], r, true)
+	if occ_is_ghost(fix) != want_reset:
+		_occ_reset_bad += 1
+		if _occ_reset_note == "":
+			_occ_reset_note = "x=%.4f 에서 리셋 기대=%s" % [x, str(want_reset)]
+	occ_move(fix, city, p, r, "a", x)
+	_cam.follow(_reg.holes()[0], r, true)
+	return occ_is_ghost(fix)
+
+
+func occ_is_ghost(n: Node3D) -> bool:
+	return occ_alpha_of(n) < 1.0
+
+
+## 경계를 이분법으로 찾는다. P(lo)=참, P(hi)=거짓 을 전제로 받는다.
+func occ_bisect(fix: Node3D, city: Node3D, p: Vector3, r: float,
+		reset_lat: float, want_reset: bool, hi0: float) -> float:
+	var lo := 0.0
+	var hi := hi0
+	for _i in OCC_BISECT_N:
+		var mid := (lo + hi) * 0.5
+		if occ_probe(fix, city, p, r, reset_lat, want_reset, mid):
+			lo = mid
+		else:
+			hi = mid
+	return (lo + hi) * 0.5
+
+
+## §37 O1~O6. 카메라와 구멍 사이에 든 프롭이 실제로 비치는가.
+##
+## 판정 전제: 원점 광장 착지 · 물리와 트리 정지(두 장 사이에 흡입이 진행되면 "오직
+## 투명화만 다른 두 프레임" 이 무너진다) · **원판 온스크린 검사**(`_clamped` 는 `px()` 만
+## 세우는데 여기서는 안 쓴다) · 표본 하한 · 단계마다
+## 자기 픽스처를 지우고 City 자식 수를 기준선과 대조.
+func run_judge_11() -> void:
+	if not setup():
+		get_tree().quit(1)
+		return
+	await get_tree().process_frame
+	var hole: Node3D = _reg.holes()[0]
+	var city: Node3D = _main.get_node("City")
+	hole.set_physics_process(false)
+	get_tree().paused = true
+
+	hole.move_to(Vector3.ZERO)
+	var landed: bool = hole.global_position.distance_to(Vector3.ZERO) < CAM_POS_TOL
+	var props0: int = city.get_child_count()
+	print("JUDGE 11 전제: 원점 안착 %s (오차 %.6f) · City 자식 %d"
+		% [pf(landed), hole.global_position.distance_to(Vector3.ZERO), props0])
+	if not landed:
+		print("JUDGE RESULT -> FAIL")
+		get_tree().quit(1)
+		return
+
+	# --- O1·O4: 세 반경에서 가시성 -------------------------------------------
+	var o1 := true
+	var o4 := true
+	for rv in OCC_RADII:
+		var r := float(rv)
+		var ok: bool = await occ_visibility(hole, city, r, "a", "O1 R=%.2f" % r)
+		if r == float(OCC_RADII[0]):
+			o1 = ok
+		o4 = o4 and ok
+	# --- O3: 정확 경로(c)와 카메라를 삼킨 상자(d) -----------------------------
+	var o3c: bool = await occ_visibility(hole, city, 1.5, "c", "O3(c)")
+	var o3d: bool = await occ_visibility(hole, city, 1.5, "d", "O3(d)")
+	var o3: bool = o3c and o3d
+
+	# --- O2①: (b) 배치의 색인 전/후 대조 -------------------------------------
+	var o2a: bool = await occ_selectivity(hole, city, 1.5)
+	# --- O2②③: 도시 용해 상한과 하한 (픽스처 없는 상태에서) -------------------
+	# **두 반경에서 잰다.** R=20 은 카메라가 88m 라 도시 최대 높이 19.22 를 못 넘어 후보가
+	# 전부 값싼 조기반려 경로를 탄다. **게임 기본 반경 1.5 는 카메라가 14m** 라 13m 이상
+	# 건물이 조기반려를 건너뛰고 정확 경로를 탄다 — 그쪽이 실제로 도는 길인데 R=20 만
+	# 재면 도시 규모의 상·하한이 그 경로를 한 번도 안 묻는다(코드 감사가 잡았다).
+	var o2b: bool = occ_melt(hole, city, 20.0, OCC_MELT_MIN, OCC_MELT_MAX)
+	var o2c: bool = occ_melt(hole, city, 1.5, OCC_MELT_MIN_R15, OCC_MELT_MAX_R15)
+	var o2: bool = o2a and o2b and o2c
+
+	# --- O5: 비-snap 평활 -----------------------------------------------------
+	var o5: bool = await occ_fade(hole, city, 1.5)
+	# --- O6: 히스테리시스 -----------------------------------------------------
+	var o6: bool = await occ_hysteresis(hole, city, 1.5)
+
+	var props1: int = city.get_child_count()
+	var leak: bool = props1 == props0
+	print("JUDGE 11 픽스처 누수 검사: City 자식 %d (기준 %d) %s" % [props1, props0, pf(leak)])
+
+	var ok_all: bool = o1 and o2 and o3 and o4 and o5 and o6 and leak
+	print("JUDGE 11 O1=%s O2=%s O3=%s O4=%s O5=%s O6=%s -> %s"
+		% [pf(o1), pf(o2), pf(o3), pf(o4), pf(o5), pf(o6),
+		   "PASS" if ok_all else "FAIL"])
+	print("JUDGE RESULT -> %s" % ("PASS" if ok_all else "FAIL"))
+	get_tree().quit(0 if ok_all else 1)
+
+
+## O1 통과식 한 벌. **통제는 색인 유무다** — 픽스처를 세우고 `rebuild_occluders()` 를
+## 부르기 전 한 장(색인에 없으니 정상 구현도 투명화하지 않는다), 부른 뒤 한 장.
+## 둘 다 snap 이라 평활이 배제되고 **오직 색인만 다르다.** 구현 노브를 만지지 않는다.
+func occ_visibility(hole: Node3D, city: Node3D, r: float, kind: String,
+		tag: String) -> bool:
+	hole.set_radius(r)
+	hole.move_to(Vector3.ZERO)
+	_reg.flush()
+	var p: Vector3 = hole.global_position
+	var pl: Array = occ_place_of(p, r, kind, 0.0)
+	var fix := occ_make_fixture(city, pl[0], pl[1], kind == "d")
+
+	_cam.follow(hole, r, true)
+	var poly := ring_poly(p, r)
+	var base_img := await capture("j11_%s_ctl" % tag.replace(" ", "_").replace("=", ""))
+	var on_screen: bool = occ_on_screen(poly, base_img)
+	var ctl: Array = occ_disc_stats(base_img, poly)
+
+	city.rebuild_occluders()
+	_cam.follow(hole, r, true)
+	var ghost_img := await capture("j11_%s_ghost" % tag.replace(" ", "_").replace("=", ""))
+	var gh: Array = occ_disc_stats(ghost_img, poly)
+
+	var n: int = int(ctl[1])
+	var sep: float = float(gh[0]) - float(ctl[0])
+	var m_ctl: float = OCC_PURE_MAX - float(ctl[0])
+	var m_gh: float = float(gh[0]) - OCC_GHOST_MIN
+	var ok: bool = on_screen and n >= OCC_SAMPLE_MIN \
+		and float(ctl[0]) <= OCC_PURE_MAX and float(ctl[2]) >= OCC_PURE_RATIO \
+		and float(gh[0]) >= OCC_GHOST_MIN and sep >= OCC_SEP_MIN \
+		and m_ctl >= OCC_MARGIN_ABS and m_gh >= OCC_MARGIN_ABS
+	print("JUDGE 11 %s 표본=%d(>=%d) 대조군 d=%.4f(<=%.2f) 순빨강비율=%.4f(>=%.2f) "
+		% [tag, n, OCC_SAMPLE_MIN, float(ctl[0]), OCC_PURE_MAX, float(ctl[2]), OCC_PURE_RATIO]
+		+ "유령 d=%.4f(>=%.2f) 분리=%.4f(>=%.2f) 여유 대조군=%.4f 유령=%.4f(>=%.2f) 원판온스크린=%s %s"
+		% [float(gh[0]), OCC_GHOST_MIN, sep, OCC_SEP_MIN, m_ctl, m_gh, OCC_MARGIN_ABS,
+		   pf(on_screen), pf(ok)])
+	await occ_drop_fixture(city, fix)
+	return ok
+
+
+## O2①. (b) 배치에서 색인 전/후 픽셀 수가 **완전히 같아야** 한다.
+## 근거: msaa_3d=2 뿐이고 TAA·시간적 재투영이 없으며, 트리가 멈춰 있고, 두 장은
+## 색인만 다르고 픽스처는 양쪽 다 불투명이며, R=1.5 의 반폭 3.5 < 도시 최대 10.79 라
+## `occ_max_ext` 도 안 변한다 → **두 프레임은 결정론적으로 동일하다.**
+## 0 이 안 나오면 문턱을 올릴 사건이 아니라 조사할 사건이다.
+func occ_selectivity(hole: Node3D, city: Node3D, r: float) -> bool:
+	hole.set_radius(r)
+	hole.move_to(Vector3.ZERO)
+	_reg.flush()
+	var p: Vector3 = hole.global_position
+	var lat: float = 4.0 * r + 4.0
+	var pl: Array = occ_place_of(p, r, "a", lat)
+	var fix := occ_make_fixture(city, pl[0], pl[1], false)
+
+	_cam.follow(hole, r, true)
+	var before := occ_fix_pixels(await capture("j11_O2a_before"))
+	city.rebuild_occluders()
+	_cam.follow(hole, r, true)
+	var after := occ_fix_pixels(await capture("j11_O2a_after"))
+	var absent := occ_override_absent(fix)
+	var ok: bool = before >= OCC_FIX_PIXEL_MIN and absi(after - before) <= OCC_PIXEL_TOL \
+		and absent
+	print("JUDGE 11 O2① 비가림 픽스처 픽셀 전=%d 후=%d 차=%d(<=%d, 하한 %d) override부재=%s %s"
+		% [before, after, absi(after - before), OCC_PIXEL_TOL, OCC_FIX_PIXEL_MIN,
+		   pf(absent), pf(ok)])
+	await occ_drop_fixture(city, fix)
+	return ok
+
+
+## O2②③. 도시 용해의 상한과 **하한**. 픽스처를 지운 뒤에 잰다 — 반폭 22 가 도시 최대
+## 10.79 를 넘어 `occ_max_ext` 와 후보 pad 를 오염시킨다.
+##
+## **하한이 없으면 `COVER_ON` 을 0.9 로 올린 빌드가 판정 여섯을 전부 통과한다**:
+## (a) 픽스처의 덮임은 설계상 1.00 이라 0.9 를 넘어 그대로 유령이 되고, O1·O3·O4·O5 는
+## 픽스처만 보며, O6 는 두 경계가 여전히 갈리고, O2② 는 상한이라 유령 수가 0 이어도
+## 통과한다 — 실제 건물이 하나도 투명해지지 않는 빌드가 초록이 된다.
+func occ_melt(hole: Node3D, city: Node3D, r: float, lo: int, hi: int) -> bool:
+	hole.set_radius(r)
+	hole.move_to(OCC_MELT_SPOT)
+	_reg.flush()
+	# 전제: 지점에 실제로 안착했다. move_to 는 통행 불가에서 축별로 미끄러지므로(§25)
+	# 배치가 바뀌어 지점이 막히면 엉뚱한 자리에서 재고도 조용히 통과한다.
+	var landed: bool = hole.global_position.distance_to(OCC_MELT_SPOT) < CAM_POS_TOL
+	city.rebuild_occluders()
+	_cam.follow(hole, r, true)
+	var g := occ_city_ghosts(city)
+	var ok: bool = landed and g <= hi and g >= lo
+	print("JUDGE 11 O2②③ R=%.1f @%s 안착=%s 도시 유령=%d (하한 %d <= n <= 상한 %d) "
+		% [r, str(OCC_MELT_SPOT), pf(landed), g, lo, hi]
+		+ "최대반extent=%.2f 후보=%d %s"
+		% [city.occ_max_ext,
+		   city.occluder_candidates(_cam.global_position, hole.global_position, r).size(),
+		   pf(ok)])
+	return ok
+
+
+## O5. 게임은 `_ready`/restart 말고 **전부 비-snap** 인데 O1~O4·O6 는 전부 스냅이다.
+## `FADE_RATE`·`<0.004` 클램프·`a>=1.0` 에서만 도는 `_clear()` 가 그러면 커버리지 밖이다.
+##
+## 판정기가 자기 상수로 프레임 수를 유도한다: 잔차 배율 exp(-12/60)=0.818731,
+## Δ=|1-0.2|=0.8, 0.8·e^(-0.2n) < 0.004 → n >= 27 (n=26 은 0.004413 로 미달) → 여유 1.5배.
+## **override 부재는 알파 1.0 으로 읽는다** — 페이드인 첫 프레임 직전과 페이드아웃
+## 마지막 프레임에 override 가 없어서, 판독 실패로 두면 단조가 양끝에서 깨진다.
+func occ_fade(hole: Node3D, city: Node3D, r: float) -> bool:
+	hole.set_radius(r)
+	hole.move_to(Vector3.ZERO)
+	_reg.flush()
+	var p: Vector3 = hole.global_position
+	var lat: float = 4.0 * r + 4.0
+	var pl: Array = occ_place_of(p, r, "a", lat)
+	var fix := occ_make_fixture(city, pl[0], pl[1], false)
+	city.rebuild_occluders()
+	# 전제: 카메라를 먼저 스냅한다. 비-snap 은 위치와 _k 를 함께 평활하므로, 앞 단계가
+	# 다른 반경으로 스냅해 뒀으면 41프레임 내내 카메라가 날아가 덮임이 변한다.
+	_cam.follow(hole, r, true)
+	var pre_off: bool = not occ_is_ghost(fix)
+
+	# 페이드인
+	occ_move(fix, city, p, r, "a", 0.0)
+	var prev := 1.0
+	var mono_in := true
+	var reached := -1
+	for f in OCC_FADE_FRAMES:
+		_cam.follow(hole, r, false, OCC_DT)
+		var a := occ_alpha_of(fix)
+		if a > prev + 1e-4:
+			mono_in = false
+		prev = a
+		if reached < 0 and a <= SPEC_GHOST_ALPHA + OCC_REACH_TOL:
+			reached = f
+	# **정상상태 알파를 양쪽으로 묶는다.** 하한만 물으면 `GHOST_ALPHA` 를 0.02 로 떨어뜨려
+	# **건물이 통째로 사라지는** 빌드가 통과한다(코드 감사가 주입으로 실증했다).
+	# 구현이 "0 이 아닌 이유: 도시의 형태가 남아야 방향감이 산다" 고 적은 계약이 곧 이것이다.
+	var steady: float = occ_alpha_of(fix)
+	var steady_ok: bool = absf(steady - SPEC_GHOST_ALPHA) <= OCC_ALPHA_TOL
+
+	# 페이드아웃 — 복원 계약은 "알파 1.0" 이 아니라 **override 부재**다.
+	occ_move(fix, city, p, r, "a", lat)
+	prev = occ_alpha_of(fix)
+	var mono_out := true
+	var cleared := -1
+	for f in OCC_FADE_FRAMES:
+		_cam.follow(hole, r, false, OCC_DT)
+		var a := occ_alpha_of(fix)
+		if a < prev - 1e-4:
+			mono_out = false
+		prev = a
+		if cleared < 0 and occ_override_absent(fix):
+			cleared = f
+
+	# **프레임 수도 양쪽으로 묶는다.** 상한만 물으면 `FADE_RATE` 를 크게 키워 **평활을 없앤**
+	# 빌드가 통과한다 — O5 가 막으려던 팝이 바로 그것이다(코드 감사가 주입으로 실증했다).
+	# 하한은 규격 실측 26 의 절반이다(E9·E7a 의 관례).
+	var span_ok: bool = reached >= OCC_FADE_MIN and reached < OCC_FADE_FRAMES \
+		and cleared >= OCC_FADE_MIN and cleared < OCC_FADE_FRAMES
+	var ok: bool = pre_off and mono_in and mono_out and span_ok and steady_ok
+	print("JUDGE 11 O5 비-snap 전제(꺼짐)=%s 페이드인 도달f=%d 단조=%s / "
+		% [pf(pre_off), reached, pf(mono_in)]
+		+ "페이드아웃 override걷힘f=%d 단조=%s (창 %d<=f<%d)=%s 정상상태알파=%.4f(%.2f±%.2f)=%s %s"
+		% [cleared, pf(mono_out), OCC_FADE_MIN, OCC_FADE_FRAMES, pf(span_ok),
+		   steady, SPEC_GHOST_ALPHA, OCC_ALPHA_TOL, pf(steady_ok), pf(ok)])
+	await occ_drop_fixture(city, fix)
+	return ok
+
+
+## O6. `COVER_ON`/`COVER_OFF` 의 존재 이유는 깜빡임 방지인데 어떤 기준도 그것을 안 묻는다 —
+## 두 문턱을 같게 되돌려도 나머지 다섯은 전부 초록이다.
+##
+## **균일 스윕은 정상 빌드를 탈락시킨다**: 두 경계 사이 간극은 전이폭의 **2.4%** 다.
+## 해석 모델로 창을 좁히려던 시도는 두 번 틀렸다(그림자 헐의 경계는 상단면 투영이 아니라
+## far 수직 모서리의 그림자다). 그래서 **모델을 버리고 이분법으로 관측**한다 —
+## 덮임 모델·원분절·32각 근사(DISC_SEGMENTS)를 전부 우회하므로 그 오류 클래스에 면역이다.
+##
+## 전제: 픽스처를 **하나 만들어 끝까지 옮긴다.** 매번 새로 만들면 `_state` 의 instance_id
+## 키가 바뀌어 히스테리시스 이력이 지워진다. 모든 스텝은 snap — 비-snap 이면 꺼진 뒤
+## override 가 null 이 되기까지 27프레임 지연돼 경계가 밀리고, COVER_OFF=COVER_ON 주입이
+## 지연 때문에 갈라져 보여 **안 잡힌다**.
+func occ_hysteresis(hole: Node3D, city: Node3D, r: float) -> bool:
+	hole.set_radius(r)
+	hole.move_to(Vector3.ZERO)
+	_reg.flush()
+	var p: Vector3 = hole.global_position
+	var w: float = r + OCC_PAD
+	var span: float = 4.0 * (w + r)
+	var pl: Array = occ_place_of(p, r, "a", 0.0)
+	var fix := occ_make_fixture(city, pl[0], pl[1], false)
+	_occ_reset_bad = 0
+	_occ_reset_note = ""
+
+	# 초기 괄호 전제: 0 에서 켜지고 span 에서 꺼진다.
+	occ_move(fix, city, p, r, "a", 0.0)
+	_cam.follow(hole, r, true)
+	var br_on: bool = occ_is_ghost(fix)
+	occ_move(fix, city, p, r, "a", span)
+	_cam.follow(hole, r, true)
+	var br_off: bool = not occ_is_ghost(fix)
+
+	var x_on := occ_bisect(fix, city, p, r, span, false, span)
+	var x_off := occ_bisect(fix, city, p, r, 0.0, true, span)
+	var gap: float = x_off - x_on
+	var res: float = span / pow(2.0, float(OCC_BISECT_N))
+
+	# 두 질문을 분리한다. 하나로 묶으면 COVER_OFF=COVER_ON 주입에서 "분해능 부족" 이
+	# 먼저 발화해 FAIL 은 나되 **원인을 반대로 보고**한다.
+	var res_ok: bool = res <= OCC_HYST_RES_MAX
+	var hyst_ok: bool = gap >= OCC_HYST_MIN
+	var ok: bool = br_on and br_off and _occ_reset_bad == 0 and res_ok and hyst_ok
+	print("JUDGE 11 O6 괄호전제 on(0)=%s off(%.2f)=%s 리셋위반=%d%s"
+		% [pf(br_on), span, pf(br_off), _occ_reset_bad,
+		   (" (" + _occ_reset_note + ")") if _occ_reset_note != "" else ""])
+	print("JUDGE 11 O6 켜짐경계=%.5f 꺼짐경계=%.5f 간극=%.5f(>=%.4f) "
+		% [x_on, x_off, gap, OCC_HYST_MIN]
+		+ "분해능=%.6f(<=%.4f) 분해능적정=%s 히스테리시스=%s %s"
+		% [res, OCC_HYST_RES_MAX, pf(res_ok), pf(hyst_ok), pf(ok)])
+	await occ_drop_fixture(city, fix)
+	return ok
 
 
 ## 임시 진단 — 유저 결함 "닿으면 사라진다" 의 실제 경로를 시나리오별로 잰다.

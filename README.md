@@ -38,7 +38,7 @@ PLAN.md                설계 근거 · 실측 · 뒤집힌 결정 전부
 
 ## 검증
 
-이 프로젝트는 **눈으로 확인하지 않는다.** 판정 9종을 창 모드 실행에서 돌려 픽셀과 상태를 잰다.
+이 프로젝트는 **눈으로 확인하지 않는다.** 판정 14종을 창 모드 실행에서 돌려 픽셀과 상태를 잰다.
 
 ```powershell
 $GODOT = "...\Godot_v4.7.1-stable_win64_console.exe"
@@ -51,6 +51,11 @@ $GODOT = "...\Godot_v4.7.1-stable_win64_console.exe"
 & $GODOT --path . -- --judge4     # 4a  AI 경쟁 · 포식 (G1~G7)
 & $GODOT --path . -- --judge5     # 4b  게임 루프 · 픽스처 격리 · 한글 HUD (T1~T8)
 & $GODOT --path . -- --judge6     # §23 물리 통과 — 통과·거절·수관 걸림 (K1~K6)
+& $GODOT --path . -- --judge7     # §27 교통 (Z1~Z8)
+& $GODOT --path . -- --judge8     # §26 게임 UI (U1~U4)
+& $GODOT --path . -- --judge9     # §28·§34 시민과 모델 (M1~M15)
+& $GODOT --path . -- --judge10    # §29 카메라 — 회전 상수·성장 후퇴·스냅·계단 응답 (V1~V4)
+& $GODOT --path . -- --judge11    # §37 가림 투명화 (O1~O6)
 ```
 
 전부 `JUDGE RESULT -> PASS` / exit 0 이어야 한다.

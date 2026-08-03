@@ -880,6 +880,101 @@ func mesh_of(path: String) -> Mesh:
 func build(items: Array) -> void:
 	for i in items.size():
 		add_child(make_prop(items[i], i))
+	rebuild_occluders()
+
+
+# --- §37 가림 후보 색인 -------------------------------------------------------
+## 카메라와 구멍 사이에 든 프롭을 찾으려면 매 프레임 무언가를 훑어야 하는데, 2112개를
+## 전수로 필터하면 **프레임당 0.123 ms** 다(계획 감사 실측 — 예산의 0.7% 지만 현재 F1
+## 평균 1.52 ms 의 8% 이고 wasm 은 2~5배 느리다). 도시가 이미 32m 격자이므로 그 격자로
+## 버킷팅해 수십 개로 줄인다.
+##
+## **압축하지 않는다.** 버킷이 인덱스를 들기 때문에 소멸 프롭을 제자리 압축하면 모든
+## 버킷이 어긋난다. 소멸한 자리는 묘비(`null`)로 남기고 질의에서 건너뛴다 — 프롭은 라운드
+## 중 줄기만 하므로 묘비는 삼킨 수로 유계이고, `build()`/`rebuild_occluders()` 가 전면
+## 재구축한다.
+##
+## **중심·반extent 를 배열로 들지 않는다.** 질의는 노드에서 그 프레임의 AABB 를 다시 읽으므로
+## (`occluders._coverage`) 캐시가 필요 없고, 들고 있으면 흡입 중 움직이는 프롭에 대해
+## **색인과 실제가 어긋난 두 벌**이 생긴다. 버킷 키를 만드는 데만 쓰고 버린다.
+var _occ_node: Array[Node3D] = []
+var _occ_bucket := {}                     # Vector2i -> PackedInt32Array
+## 질의 pad 와 탐침용. `occ_max_h` 는 `tools/probe_occlude.gd` 가 읽는다.
+var occ_max_ext := 0.0
+var occ_max_h := 0.0
+
+
+## 판정이 픽스처를 세운 뒤에도 부른다 — 그러지 않으면 **정상 구현이 픽스처를 절대
+## 투명화하지 않아 판정이 자기 자신을 탈락시킨다**(계획 감사가 잡았다).
+func rebuild_occluders() -> void:
+	_occ_node.clear()
+	_occ_bucket.clear()
+	occ_max_ext = 0.0
+	occ_max_h = 0.0
+	for c in get_children():
+		var n := c as Node3D
+		if n == null:
+			continue
+		var mi: MeshInstance3D = null
+		for g in n.get_children():
+			var m := g as MeshInstance3D
+			if m != null and m.mesh != null:
+				mi = m
+				break
+		if mi == null:
+			continue
+		var wab: AABB = mi.global_transform * mi.mesh.get_aabb()
+		var half := Vector3(wab.size.x * 0.5, wab.size.y, wab.size.z * 0.5)
+		var idx := _occ_node.size()
+		_occ_node.append(n)
+		occ_max_ext = maxf(occ_max_ext, maxf(half.x, half.z))
+		occ_max_h = maxf(occ_max_h, half.y)
+		var key := Vector2i(floori((wab.position.x + half.x) / PITCH),
+			floori((wab.position.z + half.z) / PITCH))
+		# **`PackedInt32Array` 는 값 타입이다** — `_occ_bucket[key].append(i)` 는 사전이
+		# 돌려준 **임시 사본**에 붙어 조용히 사라진다(실측: 버킷 132개가 전부 0개였고,
+		# 후보가 0 이라 기능이 통째로 죽어 있었다). 꺼내서 붙이고 다시 넣는다.
+		var arr: PackedInt32Array = _occ_bucket.get(key, PackedInt32Array())
+		arr.append(idx)
+		_occ_bucket[key] = arr
+
+
+## 카메라와 구멍 원판 사이에 들 수 있는 프롭들.
+##
+## 유도: 그림자 점은 `Q = C + (P−C)·t`, `t ≥ 1` 이므로 `Q ∈ 원판` 이면
+## **`P.xz ∈ hull(C.xz, 원판)`** 이다. 다만 그것이 보장하는 것은 프롭의 **어떤 점**이지
+## **중심**이 아니므로, 껍질의 AABB 를 **네 방향 모두** `occ_max_ext` 만큼 부풀린다.
+## 원판만 부풀리면 z 상한이 정확히 `C.z` 가 되어 **카메라가 건물 footprint 안에 든 도심
+## 배치**를 놓친다 — 화면이 통째로 막히는 바로 그 배치다(계획 감사 반례).
+func occluder_candidates(cam_p: Vector3, hole_p: Vector3, r: float) -> Array:
+	var out := []
+	if _occ_node.is_empty():
+		return out
+	var pad := occ_max_ext
+	var lo := Vector2(minf(cam_p.x, hole_p.x - r), minf(cam_p.z, hole_p.z - r)) \
+		- Vector2(pad, pad)
+	var hi := Vector2(maxf(cam_p.x, hole_p.x + r), maxf(cam_p.z, hole_p.z + r)) \
+		+ Vector2(pad, pad)
+	var k0 := Vector2i(floori(lo.x / PITCH), floori(lo.y / PITCH))
+	var k1 := Vector2i(floori(hi.x / PITCH), floori(hi.y / PITCH))
+	for kx in range(k0.x, k1.x + 1):
+		for kz in range(k0.y, k1.y + 1):
+			var key := Vector2i(kx, kz)
+			if not _occ_bucket.has(key):
+				continue
+			for i in (_occ_bucket[key] as PackedInt32Array):
+				var n: Node3D = _occ_node[i]
+				if n == null or not is_instance_valid(n):
+					_occ_node[i] = null          # 묘비
+					continue
+				# 지면 아래로 내려간 것만 뺀다. `freeze == false` 나 `held_by_hole()` 로
+				# 거르면 **구멍이 커질수록 기능이 꺼진다** — 감지 Area 반경이 곧 구멍
+				# 반경이라 이웃 블록 전체가 제외되고, 그 블록이 곧 가장 크게 가리는
+				# 것들이다(계획 감사 실측: R=6.73 에서 15개 중 12개, 덮임 100% 포함).
+				if n.get("falling") == true:
+					continue
+				out.append(n)
+	return out
 
 
 ## §31 난간 조각. 에셋이 아니라 절차 생성이다(팩에 난간이 없다 — §28 의 시민과 같은

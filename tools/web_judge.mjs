@@ -38,7 +38,7 @@ const EXPECT = [...new Set(
 // 거르는 것은 오타로 "영원히 오지 않는 판정" 을 기다리는 사고를 막기 위해서다.
 const KNOWN = ['--judge', '--judge1b', '--judge2', '--judge3', '--judge3b',
 	'--judge3c', '--judge4', '--judge5', '--judge6', '--judge7', '--judge8', '--judge9',
-	'--judge10'];
+	'--judge10', '--judge11'];
 for (const f of EXPECT) {
 	if (!KNOWN.includes(f)) {
 		console.error(`[web_judge] 모르는 판정 이름: ${f}`);
