@@ -1,5 +1,39 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 · 가림 투명화 · 인계 뒤를 물리에 맡긴다 (rev.36)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 · 가림 투명화 · 인계 뒤를 물리에 맡긴다 · 재시작 로딩 피드백 (rev.37)
 
+> **rev.37 = 다시하기·홈으로가 멈춘 것처럼 보인다 — 재시작 전 로딩 피드백(§38, 임시
+> 완화).** 유저 결함 보고: 안드로이드 크롬에서 두 버튼을 누르면 "일순간 화면이
+> 정지하며, 잠시 후 작동함". 원인은 `main.gd:restart()` 가 도시 프롭 2112개를
+> 통째로 부수고 다시 짓는 **무거운 동기 호출**이라는 것 — 데스크톱에서는 안 보일
+> 정도로 빠르지만(그래도 실측 몇 초씩 걸린다 — 근본 해결 대상), 단일 스레드 WASM인
+> 약한 모바일 CPU에서는 그 프레임이 그대로 정지로 보인다. **버튼 입력 자체는
+> 정상 수신됐다** — 네이티브 엔진에 마우스·터치 이벤트를 직접 주입해 확인했고,
+> 배포된 웹 빌드에도 진짜 `TouchEvent` 를 캔버스에 디스패치해 확인했다.
+>
+> 근본 해결(무엇을 다시 지을지 최소화)은 다음 세션으로 미루고, 이번엔 **탭이
+> 눌렸다는 것을 무거운 호출 전에 먼저 그려 보여준다**: `pressed` 신호 처리 중
+> `disabled = true` 를 세우면 그 프레임(아직 렌더 전)에 이미 반영되므로,
+> `_main.restart()` 호출을 두 `await get_tree().process_frame` 뒤로 미루면
+> 그 프레임이 먼저 그려져 화면에 나간 뒤에야 정지가 시작된다. 두 버튼을 함께
+> 잠근다(하나만 잠그면 전환 중 다른 버튼으로 겹쳐 부를 수 있다). `make_button()`
+> 에 `disabled` 스타일(반투명)과 `font_disabled_color` 를 추가했다 — 새 한글
+> 문구는 하나도 안 넣었다(이 저장소가 반복해서 밟은, 폰트 서브셋에 없는 글자가
+> 에러 없이 사라지는 함정을 피했다).
+>
+> **프레임 순서 주장은 추론이 아니라 실측했다**: `restart()` 맨 앞에 임시로
+> `OS.delay_msec(2000)` 을 넣어 정지를 과장하고(검증 뒤 제거), 실제 클릭을 넣어
+> 타임스탬프를 쟀다 — `disabled` 는 클릭 후 11~21ms 만에 이미 참이었고(정지는
+> 수 초 뒤), 그 시점에 실제로 캡처한 화면에 "다시 하기" 가 반투명하게 그려져
+> 있었다. 계획 감사 1판 78/100(PLAN.md 동기화 누락·"실측 아닌 추론" 지적) →
+> 반영 후 2판 85/100. 코드 감사 86/100 — 유일한 실지적은 데스크톱 `KEY_R`
+> 단축키가 이 잠금 창을 모르고 끼어들면 `restart()` 가 겹쳐 불릴 수 있다는 것
+> (모바일엔 키보드가 없어 도달 불가하지만 이 diff 가 새로 연 창이라 그 자리에서
+> 바로 닫았다 — `ui.restarting()` 을 추가해 `main.gd` 의 KEY_R 분기가 재사용).
+> 세 겹 검증(Forward+ 14 · Compatibility 14 · 브라우저 13) 전부 PASS.
+>
+> **다음 세션 근본 과제**: `restart()` 자체를 가볍게 만들기 — 데스크톱에서도 인공
+> 정지 없이 재기 만으로 수 초가 걸리는 것이 이번 실측에서 드러났다. 후보는
+> "도시 전체 재건" 대신 "플레이 중 실제로 먹힌 프롭만 복구"로 바꾸는 것.
+>
 > **rev.36 = 닿으면 사라지지 않는다, 마무리(§35).** 정지 접근 여섯 시나리오는 전부
 > `still_frames` 최댓값이 0 이었다 — 낙하하거나 구멍이 계속 붙잡고 있어 게이트가 먼저
 > 막는다. **정지하지 않고 스치면 다르다**: 넘어져 낙하 없이 지면에 눕고, `still_frames`
@@ -1691,7 +1725,10 @@ func _process(dt: float) -> void:
 		time_left = maxf(time_left - dt, 0.0)
 		if time_left <= 0.0:
 			end_game("time")
-	if Input.is_key_pressed(KEY_R) and state == State.OVER:
+	# `ui` 가 다시하기/홈으로 버튼으로 이미 restart() 를 진행 중이면(로딩 피드백
+	# 두 프레임 창) 겹쳐 부르지 않는다 — 겹치면 도시가 두 번 다시 지어진다.
+	if Input.is_key_pressed(KEY_R) and state == State.OVER \
+			and not (ui != null and ui.restarting()):
 		restart()
 		return
 	if not player_alive():
@@ -11291,14 +11328,18 @@ func make_button(nm: String, t: String, anchor: Vector2, sz: Vector2, size: int)
 	b.text = t
 	b.add_theme_font_override("font", FONT)
 	b.add_theme_font_size_override("font_size", size)
-	for st in ["normal", "hover", "pressed"]:
+	var st_color := {
+		"normal": Color(0.16, 0.44, 0.86), "hover": Color(0.24, 0.55, 0.95),
+		"pressed": Color(0.12, 0.34, 0.68), "disabled": Color(0.16, 0.44, 0.86, 0.4),
+	}
+	for st in st_color:
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(0.16, 0.44, 0.86) if st == "normal" \
-			else (Color(0.24, 0.55, 0.95) if st == "hover" else Color(0.12, 0.34, 0.68))
+		sb.bg_color = st_color[st]
 		sb.set_corner_radius_all(10)
 		sb.content_margin_top = 8.0
 		sb.content_margin_bottom = 8.0
 		b.add_theme_stylebox_override(st, sb)
+	b.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.55))
 	b.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	b.anchor_left = anchor.x
 	b.anchor_right = anchor.x
@@ -11323,12 +11364,40 @@ func _on_start() -> void:
 	_main.begin_round()
 
 
-func _on_again() -> void:
+## `restart()` 는 도시 프롭 2112개를 통째로 부수고 다시 짓는 무거운 동기 호출이다
+## (main.gd:restart). 데스크톱에서는 안 보일 정도로 빠르지만, 약한 모바일 CPU
+## (단일 스레드 WASM)에서는 그 프레임이 그대로 수 초짜리 정지로 보인다 — 버튼을
+## 눌러도 화면이 그대로라 "안 눌리는 버튼" 처럼 보인다(유저 결함 보고, 안드로이드
+## 크롬). 무거운 호출 전에 최소 한 프레임을 실제로 그려 넣어 "눌렸다" 를 먼저
+## 보여준다. `pressed` 신호 처리 중에 `disabled = true` 를 세우면 **그 프레임**
+## (아직 렌더 전)에 이미 비활성 스타일이 반영되므로, 무거운 호출을 다음 프레임
+## 이후로 미루면 그 프레임이 먼저 그려져 화면에 나간 뒤에야 정지가 시작된다.
+## 두 프레임을 미루는 것은 여유분이다(모바일 브라우저의 합성 지연 대비).
+## 둘 다 잠근다 — 하나만 잠그면 전환 중 다른 버튼을 눌러 restart() 가 겹쳐 불린다.
+func _restart_with_feedback() -> void:
+	_again_btn.disabled = true
+	_home_btn.disabled = true
+	await get_tree().process_frame
+	await get_tree().process_frame
 	_main.restart()
+	_again_btn.disabled = false
+	_home_btn.disabled = false
+
+
+## `restart()` 가 이미 진행 중인가. 버튼 자신의 잠금 상태를 그대로 노출한다 —
+## 데스크톱 `KEY_R` 단축키(main.gd)가 이 창을 모르고 끼어들면 `restart()` 가
+## 겹쳐 불린다(코드 감사가 잡음). 별도 플래그를 새로 두지 않고 이미 있는
+## 잠금을 재사용한다.
+func restarting() -> bool:
+	return _again_btn.disabled
+
+
+func _on_again() -> void:
+	await _restart_with_feedback()
 
 
 func _on_home() -> void:
-	_main.restart()
+	await _restart_with_feedback()
 	_main.state = _main.State.HOME
 	_main.set_ai(false)
 	_main.set_holes_physics(false)     # 시작 화면에서 세계가 계속 먹지 않게
@@ -13771,3 +13840,149 @@ func _clear(mi: MeshInstance3D) -> void:
 		if mi.get_surface_override_material(i) != null:
 			mi.set_surface_override_material(i, null)
 ```
+
+---
+
+## §38. 다시하기·홈으로가 멈춘 것처럼 보인다 — 재시작 전 로딩 피드백 (임시 완화, 구현·검증 완료, rev.37)
+
+### 유저 보고
+
+> "모바일에서 다시하기, 홈으로 버튼이 작동을 안 해." → 추가 확인: "클릭하면
+> 일순간 화면이 정지하며, 잠시 후 작동함." 테스트 기기: 안드로이드 크롬.
+
+### 오진 두 번 — 마침내 성능 문제라는 것을 알았다
+
+처음엔 "터치가 안 먹힌다" 로 읽었다. 네이티브 엔진에 `InputEventMouseButton`·
+`InputEventScreenTouch` 를 직접 주입해 `_again_btn`/`_home_btn` 을 눌러보니
+**둘 다 정상**(`state` 가 정확히 전환됨). 배포된 웹 빌드에도 진짜 `TouchEvent` 를
+캔버스에 디스패치해 `시작` 버튼을 눌러보니 그것도 정상 — 터치 파이프라인 자체는
+살아 있었다. 라이브 라운드를 자동화 브라우저로 끝까지 돌려 재현을 여러 차례
+시도했으나(자동화 탭이 백그라운드 처리로 게임 시계가 불규칙해져 실패) 결론을
+못 냈다.
+
+유저가 준 두 번째 증상("멈췄다가 잠시 후 작동")이 방향을 바꿨다. 이건 입력 결함이
+아니라 **지연** 이다. `main.gd:restart()` 를 읽으니 원인이 바로 보였다:
+
+```gdscript
+var city := get_node_or_null("City")
+if city != null:
+	for c in city.get_children():
+		c.free()
+	city.build(city.plan(city.city_seed))
+```
+
+도시 프롭 **2112개**를 메인 스레드에서 통째로 부수고 다시 짓는다. 데스크톱
+GPU/CPU 에서는 체감이 안 될 정도로 빠를 거라 짐작했지만, 실측(아래)해 보니
+데스크톱에서도 몇 초씩 걸렸다 — WASM 웹 빌드는 **단일 스레드**(콘솔 로그로
+확인: "Emscripten 4.0.20, single-threaded")라 이 프레임이 그대로 정지로 보이고,
+약한 모바일 CPU 에서는 더 심하다. 화면이 멈춰 보이는 이유는 무거운 동기 호출이
+끝날 때까지 **다음 프레임이 아예 안 그려지기** 때문이다 — 버튼은 눌렸지만
+그것을 보여줄 기회가 없었다.
+
+### 이번 세션의 범위 — 유저와 합의
+
+근본 해결(도시를 통째로 다시 짓지 않고 최소한만 복구)은 구현 범위가 크고
+`city.gd`/`main.gd` 양쪽을 건드려야 해서 **다음 세션으로 미룬다.** 이번 세션은
+"눌렀다" 는 것을 무거운 호출 전에 먼저 화면에 그려 보여주는 **UX 완화**만 한다.
+
+### 고친 것 — `scripts/ui.gd`
+
+```gdscript
+func _restart_with_feedback() -> void:
+	_again_btn.disabled = true
+	_home_btn.disabled = true
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_main.restart()
+	_again_btn.disabled = false
+	_home_btn.disabled = false
+```
+
+`pressed` 신호 처리 중 `disabled = true` 를 세우면 **그 프레임**(아직 렌더 전)에
+이미 비활성 스타일이 반영된다. 무거운 `_main.restart()` 호출을 두 프레임 뒤로
+미루면, 그 사이 disabled 상태로 완성된 프레임이 먼저 화면에 나간 뒤에야 정지가
+시작된다. 두 프레임은 모바일 브라우저의 합성 지연에 대비한 여유분이다. 두 버튼을
+**함께** 잠근다 — 하나만 잠그면 전환 중 다른 버튼을 눌러 `restart()` 가 겹쳐
+불린다. `make_button()` 에 `"disabled"` 스타일(반투명, `Color(0.16,0.44,0.86,0.4)`)과
+`font_disabled_color` 를 추가해 잠금이 시각적으로도 드러나게 했다. **새 한글
+문구는 하나도 넣지 않았다** — 이 저장소는 폰트 서브셋에 없는 글자가 에러 없이
+사라지는 함정을 §12g/U4 에서 이미 겪었다([[asset-contract-vs-code-use]] 와 같은
+부류: "코드가 그 문구를 쓰는가" 와 "그 글자가 실제로 그려지는가" 는 다른 질문).
+
+### 프레임 순서 주장은 추론이 아니라 실측했다
+
+이 저장소는 "손으로 유도한 기하는 못 믿는다" 는 교훈을 여러 번 얻었다
+([[hand-derived-geometry-is-unreliable]]) — 엔진 프레임 타이밍도 같은 함정이다.
+`restart()` 맨 앞에 임시로 `OS.delay_msec(2000)` 을 넣어 정지를 과장하고(검증
+후 제거), 창을 띄운(비-headless) 실제 실행에서 `InputEventMouseButton` 으로
+"다시 하기" 를 진짜로 눌러 `Time.get_ticks_msec()` 타임스탬프를 쟀다:
+
+```
+클릭+2프레임 후(t=21ms, restart() 호출 직전): again.disabled=true home.disabled=true
+정지 종료 후(t=11641ms): state=1(PLAYING) again.disabled=false home.disabled=false
+```
+
+`disabled` 는 클릭 11~21ms 만에 이미 참이었다 — 정지(2000ms 인공 + 실제 도시
+재건 시간, 실행마다 4.6~11.6초로 편차)가 시작되기 한참 전이다. 그 시점
+(`restart()` 호출 직전)에 `get_viewport().get_texture().get_image()` 로 실제
+화면을 캡처하니 "다시 하기" 가 반투명하게 그려져 있고 "홈으로" 는 정상 색이었다
+— 코드만 읽고 넘겨짚지 않고 실제로 그렇게 그려졌음을 확인했다. (단일 스레드
+블로킹 동안은 프레임 경계 자체가 없어 "정지 도중" 캡처는 원리적으로
+불가능하다는 것도 이번에 알았다 — 정지 **직전**의 마지막 완성 프레임을 잡는
+것이 맞는 지점이었다.)
+
+이 실측은 데스크톱 windowed 렌더러로 했다(WASM/브라우저 합성이 아니다 — §24 가
+이미 "브라우저에서 실제로 도는 것은 데스크톱이 대신 증명 못 한다" 고 적어 둔
+한계 그대로다). 다만 검증 대상(두 `await process_frame` 이 무거운 호출보다 먼저
+프레임을 흘려보내는가)은 Godot 의 `MainLoop::iteration` 구조가 플랫폼에 상관없이
+갖는 불변식이라, 데스크톱 실측으로도 그 프레임-순서 성질 자체는 유효하게
+증명된다 — 다만 실제 안드로이드 크롬에서 "그 정도 여유로 체감상 자연스러운가"
+는 사람이 눈으로 봐야 하는 별개의 질문으로 남는다(휴먼 검수 대기).
+
+### 겹치는 재시작 — 코드 감사가 잡은 유일한 지적
+
+코드 감사가 `main.gd` 의 데스크톱 `KEY_R` 단축키를 잡았다:
+
+```gdscript
+if Input.is_key_pressed(KEY_R) and state == State.OVER:
+	restart()
+	return
+```
+
+이 diff 이전에는 버튼 클릭이 `restart()` 를 즉시(무-yield) 불러 `state` 가
+원자적으로 바뀌었다. 이제 두 프레임 창이 **의도적으로** 생겼으므로, 그 창
+안에서 `R` 을 누르면(모바일엔 키보드가 없어 도달 불가하지만 데스크톱에서는
+가능) `KEY_R` 분기가 `.disabled` 를 모르고 `restart()` 를 한 번 더 부른다.
+`ui.gd` 에 `restarting() -> bool: return _again_btn.disabled` 를 추가하고
+`main.gd` 의 `KEY_R` 조건에 `and not (ui != null and ui.restarting())` 를
+더해 닫았다. 별도 플래그를 새로 두지 않고 이미 있는 잠금을 재사용했다.
+
+### 감사 로그
+
+- **계획 감사 1판 78/100**(기준 미달) — PLAN.md 의 `scripts/ui.gd` 전문 동기화
+  단계 누락(major), 프레임 순서 주장이 실측이 아니라 추론이라는 지적(moderate).
+  둘 다 반영해 **2판 85/100 합격**.
+- **코드 감사 86/100 합격** — 유일한 지적이 위 KEY_R 겹침 문제. 반영 후
+  전체 3중 재검증(Forward+ 14 · Compatibility 14 · 브라우저 13) 다시 PASS.
+
+### 검증
+
+데스크톱 Forward+ 14종 · Compatibility 14종(`--rendering-driver opengl3`) ·
+브라우저 13종(`node tools/web_judge.mjs` + 실제 Chrome) **전부 PASS**(두 번 —
+1차 수정 뒤, KEY_R 수정 뒤 각각). `--judge8`(U1~U4, 버튼·상태전이 판정)도 별도
+확인. 이 fix 경로(`_on_again`/`_on_home`/`_restart_with_feedback`)를 실제로
+누르는 판정은 저장소에 없다 — U1 은 `_main.restart()` 를 직접 부르고 U3 은
+`_start_btn` 만 누른다. **새 자동 판정은 추가하지 않았다**(범위 밖으로 합의).
+
+### 유저 검수 대기 · 남은 한계
+
+- **§38**: 안드로이드 실기기에서 다시하기/홈으로를 눌러 정지가 실제로
+  사라졌는지·두 프레임 여유가 체감상 자연스러운지 확인 필요(자동화로는
+  "터치 파이프라인이 살아있다" 까지만 증명했다).
+- **근본 해결이 다음 세션 최우선이다.** 이번 실측이 드러낸 것: 인공 지연 없이도
+  `restart()` 의 실제 도시 재건이 데스크톱에서 수 초 걸릴 수 있다(정확한 수치는
+  다음 세션에서 인공 지연 없이 재측정할 것). 후보 방향: "도시 전체를 부수고
+  다시 짓기" 대신 **플레이 중 실제로 삼켜진 프롭만 추적해 복구**하는 델타
+  방식으로 바꾸면 대부분의 2112개가 그대로 남아 재건 비용이 급감한다.
+
+관련: [[hand-derived-geometry-is-unreliable]], [[screenshot-is-not-measurement]], [[asset-contract-vs-code-use]], [[audit-cadence]]

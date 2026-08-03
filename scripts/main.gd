@@ -221,7 +221,10 @@ func _process(dt: float) -> void:
 		time_left = maxf(time_left - dt, 0.0)
 		if time_left <= 0.0:
 			end_game("time")
-	if Input.is_key_pressed(KEY_R) and state == State.OVER:
+	# `ui` 가 다시하기/홈으로 버튼으로 이미 restart() 를 진행 중이면(로딩 피드백
+	# 두 프레임 창) 겹쳐 부르지 않는다 — 겹치면 도시가 두 번 다시 지어진다.
+	if Input.is_key_pressed(KEY_R) and state == State.OVER \
+			and not (ui != null and ui.restarting()):
 		restart()
 		return
 	if not player_alive():

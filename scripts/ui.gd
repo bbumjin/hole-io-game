@@ -187,14 +187,18 @@ func make_button(nm: String, t: String, anchor: Vector2, sz: Vector2, size: int)
 	b.text = t
 	b.add_theme_font_override("font", FONT)
 	b.add_theme_font_size_override("font_size", size)
-	for st in ["normal", "hover", "pressed"]:
+	var st_color := {
+		"normal": Color(0.16, 0.44, 0.86), "hover": Color(0.24, 0.55, 0.95),
+		"pressed": Color(0.12, 0.34, 0.68), "disabled": Color(0.16, 0.44, 0.86, 0.4),
+	}
+	for st in st_color:
 		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(0.16, 0.44, 0.86) if st == "normal" \
-			else (Color(0.24, 0.55, 0.95) if st == "hover" else Color(0.12, 0.34, 0.68))
+		sb.bg_color = st_color[st]
 		sb.set_corner_radius_all(10)
 		sb.content_margin_top = 8.0
 		sb.content_margin_bottom = 8.0
 		b.add_theme_stylebox_override(st, sb)
+	b.add_theme_color_override("font_disabled_color", Color(1, 1, 1, 0.55))
 	b.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	b.anchor_left = anchor.x
 	b.anchor_right = anchor.x
@@ -219,12 +223,40 @@ func _on_start() -> void:
 	_main.begin_round()
 
 
-func _on_again() -> void:
+## `restart()` 는 도시 프롭 2112개를 통째로 부수고 다시 짓는 무거운 동기 호출이다
+## (main.gd:restart). 데스크톱에서는 안 보일 정도로 빠르지만, 약한 모바일 CPU
+## (단일 스레드 WASM)에서는 그 프레임이 그대로 수 초짜리 정지로 보인다 — 버튼을
+## 눌러도 화면이 그대로라 "안 눌리는 버튼" 처럼 보인다(유저 결함 보고, 안드로이드
+## 크롬). 무거운 호출 전에 최소 한 프레임을 실제로 그려 넣어 "눌렸다" 를 먼저
+## 보여준다. `pressed` 신호 처리 중에 `disabled = true` 를 세우면 **그 프레임**
+## (아직 렌더 전)에 이미 비활성 스타일이 반영되므로, 무거운 호출을 다음 프레임
+## 이후로 미루면 그 프레임이 먼저 그려져 화면에 나간 뒤에야 정지가 시작된다.
+## 두 프레임을 미루는 것은 여유분이다(모바일 브라우저의 합성 지연 대비).
+## 둘 다 잠근다 — 하나만 잠그면 전환 중 다른 버튼을 눌러 restart() 가 겹쳐 불린다.
+func _restart_with_feedback() -> void:
+	_again_btn.disabled = true
+	_home_btn.disabled = true
+	await get_tree().process_frame
+	await get_tree().process_frame
 	_main.restart()
+	_again_btn.disabled = false
+	_home_btn.disabled = false
+
+
+## `restart()` 가 이미 진행 중인가. 버튼 자신의 잠금 상태를 그대로 노출한다 —
+## 데스크톱 `KEY_R` 단축키(main.gd)가 이 창을 모르고 끼어들면 `restart()` 가
+## 겹쳐 불린다(코드 감사가 잡음). 별도 플래그를 새로 두지 않고 이미 있는
+## 잠금을 재사용한다.
+func restarting() -> bool:
+	return _again_btn.disabled
+
+
+func _on_again() -> void:
+	await _restart_with_feedback()
 
 
 func _on_home() -> void:
-	_main.restart()
+	await _restart_with_feedback()
 	_main.state = _main.State.HOME
 	_main.set_ai(false)
 	_main.set_holes_physics(false)     # 시작 화면에서 세계가 계속 먹지 않게
