@@ -94,13 +94,25 @@ static func model_path(letter: String) -> String:
 var _rng := RandomNumberGenerator.new()
 ## 각 원소: { rb, mesh, axis, line, u, lo, hi, s, dir, speed, phase }
 var _people := []
-## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 치운다(§27 의 교통과 같은 이유).
+## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 다시 얼려 둔다(§27 의 교통과 같은 이유).
 var _orphans := []
 const ORPHAN_STILL := 0.35
-## 멈춘 채 이만큼 이어져야 치운다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
+## 멈춘 채 이만큼 이어져야 정리한다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
 ## 1프레임 만에** 점수도 없이 사라진다 — 유저가 "닿으면 사라진다" 로 본 것이 그것이다.
 ## §35 실측(`tools/probe_orphan.gd`): 스치기만 한 시민은 `still_frames` 가 정확히
-## `ORPHAN_GRACE − 1`(=59)까지 관측된 뒤 제거된다 — judge9 M16c 가 그 등식을 그대로 묻는다.
+## `ORPHAN_GRACE − 1`(=59)까지 관측된 뒤 정리된다 — judge9 M16c 가 그 등식을 그대로 묻는다.
+##
+## **§0.6: 정리 = 삭제가 아니라 재동결이다.** `queue_free()` 였을 때는 "구멍이 삼키지
+## 않고 지나간 쓰러진 행인이 방치되면 1초 만에 화면에서 사라진다" 는 신고를 그대로
+## 낳았다 — 유예는 사라짐 자체를 막지 못하고 늦출 뿐이었다. 이제는 `start_frozen`
+## 프롭과 같은 방식으로 그 자리에서 얼린다: 시각적으로 영구히 남고(쓰러진 자세 그대로),
+## 물리 비용은 정적 바디 수준으로 돌아가며, 나중에 어떤 구멍이든 다시 다가오면
+## `hold_awake(true)` 가 얼음을 풀어 평소처럼 다시 흡입 대상이 된다.
+##
+## **재동결된 시민이 두 번째로 스치기만 하면** — 그 뒤로 다시 얼지도, `_orphans` 로
+## 되돌아오지도 않는다(`hold_awake` 는 "한 번 풀리면 되돌리지 않는다"). 그 시점부터는
+## 이 저장소가 처음부터 그래 온 일반 도시 프롭(한 번 스치면 그걸로 감시가 끝나는)과
+## 정확히 같은 처지가 된다 — 새 회귀가 아니라 기존 계약을 그대로 물려받는 것이다.
 const ORPHAN_GRACE := 60
 ## 접촉 관통으로 y 가 살짝 음수가 되는 잡음을 "우물 안" 으로 오판하지 않게 하는 여유.
 ## 림 위에 정지한 순간 접촉이 아주 조금 파고들 수 있다 — 그것을 낙하로 잘못 읽으면
@@ -127,7 +139,8 @@ func sweep_orphans() -> void:
 			rb.still_frames += 1
 			if rb.still_frames >= ORPHAN_GRACE:
 				_orphans.remove_at(n)
-				rb.queue_free()
+				rb.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+				rb.freeze = true
 		else:
 			rb.still_frames = 0
 

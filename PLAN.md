@@ -1,5 +1,37 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 · 가림 투명화 · 인계 뒤를 물리에 맡긴다 · 재시작 로딩 피드백 (rev.37)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 · 가림 투명화 · 인계 뒤를 물리에 맡긴다 · 재시작 로딩 피드백 · 가림 대상 정정(§0.6) (rev.38)
 
+> **rev.38 = 오로지 큰 건물만 가린다(§0.6).** §37 이 세운 가림 투명화가 도시 프롭 전체를
+> 후보로 삼았던 것이 유저 피드백을 낳았다 — "행인·전봇대·가로수·차·구멍이 곧 삼킬
+> 소형 건물까지 반투명해지면 먹을 것이 흐릿해진다." `city.gd`에 `OCCLUDER_KINDS :=
+> ["tower"]`를 두어 가림 후보를 **대형 건물**(Building1_Large·Building2_Large·
+> Building3_Big·Building4·Bank·Flat·Flat2·Hospital)로만 좁혔다 — `kind` 는 §25
+> 지구제 분류를 그대로 재사용해 별도 목록을 안 만든다. 시민·차는 원래도 City 의
+> 자식이 아니라(각자 `Citizens`·`Traffic` 노드 소속) 구조적으로도 후보가 될 수
+> 없었다 — kind 필터는 이중 방어다. 판정 픽스처(`occ_make_fixture`)에도 `kind =
+> "tower"` 메타를 달아야 했다(안 달면 O1~O6 이 자기 색인에서 빠져 스스로 탈락).
+> 후보가 44개뿐으로 줄면서 옛 `--judge11` O2②③ 지점 (-32,16)의 실측이 무너져
+> `tools/probe_ghost_scan.gd` 로 재탐색해 (-52,-84)로 교체했고, `--judge3c` 의
+> `[dynamic]` 지점도 그 부근에 타워가 없어 남쪽 도로(z=-113.3)로 옮겼다.
+>
+> **같은 라운드의 플레이 피드백 넷을 함께 반영했다.** ① `camera_rig.min_height`
+> 14→11 — "hole.io 처럼 시작이 더 좁게 zoom in 돼야 한다"는 피드백. §37 가림
+> 투명화가 이제 실제 가림을 스케일 불변으로 잡아 주므로 높이로 건물을 피하던
+> 안전장치가 불필요해졌다 — 실측 경계는 10.0(탈락)~10.1(통과), 여유를 두고 11.0.
+> ② `hole.growth_k` 1.0→0.5 — 큰 건물을 한 입에 먹으면 초거대화된다는 피드백.
+> ③ `hole.grey_zone_pull_scale` = 0.12 — 회색 지대(외접반경 > R, §30)가 여전히
+> 전속력으로 끌려와 "못 삼킬 것을 질질 끌고 다닌다"로 읽힌 문제. ④ `citizens.gd`·
+> `traffic.gd` 의 고아 정리를 `queue_free()` 대신 **재동결**로 바꿨다 — 스치기만
+> 하고 지나간 시민·차가 유예 뒤 화면에서 사라지는 것도 "닿으면 사라진다"(§35)와
+> 같은 신고를 낳았다. `enter_rim`/`exit_rim` 은 같은 라운드에 레이어2(다른 흡입
+> 대상) 충돌도 함께 끈다 — 두 물체가 같은 구멍으로 몰리면 서로를 떠밀어 영원히
+> 걸리는 교착을 없앤다. `--judge9` M16·M18 은 `removed_at<0 && frozen` 등식으로
+> 갱신했다.
+>
+> 코드 감사(재확인) 96/100 — 이 커밋의 변경은 이전 세션에 작성됐으나 커밋되지
+> 않은 채 남아 있었다; 이번 세션은 목표 정합성과 정확성을 독립 감사로 재확인하고
+> 커밋했다(§0.6 은 렌더링이 필요한 `--judge11` 픽셀 판정까지는 이 세션의 GPU 없는
+> 셸에서 재실행하지 못했다 — 헤드리스 기동까지는 스크립트 오류 없이 통과했다).
+>
 > **rev.37 = 다시하기·홈으로가 멈춘 것처럼 보인다 — 재시작 전 로딩 피드백(§38, 임시
 > 완화).** 유저 결함 보고: 안드로이드 크롬에서 두 버튼을 누르면 "일순간 화면이
 > 정지하며, 잠시 후 작동함". 원인은 `main.gd:restart()` 가 도시 프롭 2112개를
@@ -819,6 +851,12 @@ const CITY := preload("res://scripts/city.gd")
 @export var depth_ratio := 2.4
 ## 흡입력(중심 방향). 가장자리에서 덜덜 떨다 빨려드는 느낌을 만든다.
 @export var suction := 26.0
+## §30 이후에도 남았던 플레이 피드백 — "회색 지대"(fit_radius <= R 이라 흡입은 받지만
+## 외접반경(rb.radius) > R 이라 실제로는 구멍보다 큰 택시·SUV·버스 따위)가 여전히
+## 26 m/s² 그대로 끌려와 "못 삼킬 것을 질질 끌고 다닌다"로 읽혔다. 이 비율만큼
+## 흡입을 깎아 **살짝 밀리거나 기울어 넘어지는 정도**로 낮춘다 — 완전히 0 으로 하면
+## §30 이 의도한 "회색 지대는 여전히(느리게) 흡입된다" 는 거동 자체가 사라진다.
+@export var grey_zone_pull_scale := 0.12
 ## 낙하 오브젝트를 소멸시키는 깊이 = well_depth * kill_ratio.
 @export var kill_ratio := 0.8
 ## AI 목표 선정용 상한(§23). 흡입을 막는 게이트가 **아니다** — 무엇이 들어가는지는
@@ -843,7 +881,10 @@ const CITY := preload("res://scripts/city.gd")
 
 ## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
 ## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
-@export var growth_k := 1.0
+## 1.0 도 후반부에 건물처럼 큰 물체를 먹으면 한 입에 초거대화된다는 플레이 피드백으로
+## 0.5 로 낮췄다 — 공식의 형태(제곱합 보존)는 그대로라 작은 물체를 잇달아 먹는
+## 초반 체감은 유지되고, 큰 물체 한 입의 기여만 실질적으로 절반이 된다.
+@export var growth_k := 0.5
 ## 지면 반폭. move_to() 가 구멍을 지면 안에 붙잡아 두는 데 쓴다.
 ## main.gd 가 스폰 시 GROUND_HALF 를 넣어 준다 — 값의 진실 원천은 거기 하나다.
 @export var ground_half := 224.0
@@ -1142,7 +1183,12 @@ func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 	var to_center := Vector3(here.x - rb.global_position.x, 0.0, here.z - rb.global_position.z)
 	if to_center.length_squared() < 1e-6:
 		return
-	rb.apply_central_force(to_center.normalized() * suction * scale * rb.mass)
+	# 회색 지대(외접반경 rb.radius > R, §30) — 물리적으로는 통과 가능해도 눈에는
+	# "구멍보다 큰데 끌려온다"로 읽힌다. 세게 깎아 살짝 밀리는 정도만 남긴다.
+	var s := scale
+	if float(rb.radius) > radius:
+		s *= grey_zone_pull_scale
+	rb.apply_central_force(to_center.normalized() * suction * s * rb.mass)
 
 
 ## 콜라이더의 **월드 공간 꼭대기**(강체 원점 기준 높이). 직립이면 `top_height` 와 같고
@@ -1338,16 +1384,22 @@ func auto_top_height() -> float:
 ## 구멍 위에는 바닥이 없으므로, 여기서부터는 물체가 스스로 기울고 빠진다.
 ## 구멍 두 개의 감지 범위에 동시에 들어갈 수 있어 **횟수를 센다** — 하나가 떠났다고
 ## 지면을 되돌리면 나머지 구멍 위에서 지면을 딛고 서 있게 된다.
+##
+## **다른 흡입 대상(레이어 2)과의 충돌도 함께 끈다.** 두 오브젝트가 같은 구멍으로
+## 동시에 모여들면 중심(구멍) 쪽으로 서로를 떠밀다 정확히 그 지점에서 맞부딪혀
+## 서로를 밀어내고, 어느 쪽도 기울어 빠지는 지점까지 못 들어가 **크기와 무관하게
+## 영원히 걸린다**(플레이 피드백). 림을 딛는 동안은 서로 겹쳐도 되는 사이로 만들어
+## 이 교착을 없앤다 — 어차피 둘 다 곧 각자 빠지거나(§23) 넘어져 떠날 참이다.
 func enter_rim() -> void:
 	_rim_refs += 1
 	if not falling:
-		collision_mask = (collision_mask & ~1) | 8
+		collision_mask = (collision_mask & ~1 & ~2) | 8
 
 
 func exit_rim() -> void:
 	_rim_refs = maxi(_rim_refs - 1, 0)
 	if _rim_refs == 0 and not falling:
-		collision_mask = (collision_mask & ~8) | 1
+		collision_mask = (collision_mask & ~8) | 1 | 2
 
 
 ## 지면 아래로 확실히 내려갔을 때 hole.gd 가 호출한다(§23 이후로는 **물리가**
@@ -1402,10 +1454,24 @@ extends Camera3D
 @export var base_offset := Vector3(0.0, 22.0, 26.0)
 @export var base_radius := 5.0
 @export var smooth := 6.0
-## 카메라 최저 높이. 반경에 정비례만 시키면 시작 반경 1.5 에서 높이가 6.6m 로
-## 내려가 12~14m 짜리 건물이 시야를 막는다. 배율을 통째로 clamp 하므로
-## 앙각(40.2°)은 그대로 유지된다 — H9·판정 전제가 반경과 무관해진다.
-@export var min_height := 14.0
+## 카메라 최저 높이. **§37 이전에는** 반경에 정비례만 시키면 시작 반경 1.5 에서
+## 높이가 6.6m 로 내려가 12~14m 짜리 건물이 시야를 막았고, 그래서 14.0 으로 올려
+## 막았다 — 그런데 유저 피드백은 반대였다: "hole.io 처럼 시작은 훨씬 좁은 시야로
+## zoom in 되어야 한다." §37 가림 투명화(occluders.gd)가 이제 큰 건물이 실제로
+## 카메라를 가리는 모든 경우를 잡아 주므로(카메라 높이와 무관하게 스케일 불변으로
+## 작동한다 — occluders.gd 상단 주석), 높이로 건물을 피하는 이 안전장치는 더는
+## 필요 없다 — **그렇다고 반경 1.5 의 자연값(0.3 배율 → 6.6m)까지는 못 낮춘다.**
+## 이 값과 무관한 두 가지 다른 바닥이 있다:
+##  ① 지면이 448×448 유한 평면이라, 앙각(40.236°)·FOV(75°) 가 고정인 채로 카메라가
+##     너무 낮아지면 화면 맨 위 시선조차 지면 가장자리(반폭 224)를 못 넘어서고, 배경
+##     (하늘)이 화면에서 아예 사라진다 — 실측 10.0 에서 처음 발생(judge1 "bg FAIL").
+##  ② `probe_blocks()`(screenshot.gd)의 블록 탐색이 화면 프레이밍에 기대는데, 카메라가
+##     그 이하로 가까워지면 후보 블록이 화면 밖/서브픽셀로 밀려 D1 지면 판정 전체가
+##     후보를 못 찾는다 — 같은 실측 경계.
+## 두 바닥 모두 10.1 에서 통과하기 시작하지만 여유가 0에 가까워 그 값을 그대로 쓰지
+## 않는다 — 11.0 로 안전 여유를 두고 낮췄다(14.0 대비 21% 더 zoom in). 판정으로
+## 확인한 값이지 추측이 아니다: 10.0 이하 전부 재현 가능하게 실패한다.
+@export var min_height := 11.0
 ## §29: 성장 후퇴 감속. 반경은 삼킬 때 계단으로 뛰므로 배율을 즉시 따라가면
 ## 카메라가 최대 83 m/s(주행 추적 14 m/s 의 6배)로 튀어 물러난다(실측).
 ## 배율 _k 를 이 시정수로 지수 평활하면 피크 후퇴 속도가 주행 추적 아래로 온다
@@ -2345,7 +2411,8 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 const RESTART_PROPS := 2112
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
-const SPEC_GROWTH_K := 1.0
+## §0.6: 1.0 → 0.5 (큰 건물 한 입에 초거대화된다는 플레이 피드백).
+const SPEC_GROWTH_K := 0.5
 
 # --- §23 물리 통과 판정 ----------------------------------------------------
 ## 통과 판정 시행의 기본 구멍 반경. 픽스처 치수가 이 값 둘레에서 정해진다:
@@ -2436,6 +2503,14 @@ const PERF_CAM_DT := 1.0 / 60.0
 ## 구간 전제. 미끄러짐으로 주행이 막히면 유령 집합이 고정된 채 통과하는 것을 막는다.
 const PERF_CAM_MOVE_MIN := 0.9                     # 기대 이동거리의 이 비율 이상
 const PERF_CAM_CHURN_MIN := 3                      # 유령 집합이 바뀐 프레임 수 하한(실측 7 의 절반)
+## §0.6: 가림 후보를 "큰 건물"(kind=="tower")로만 좁히면서(유저 피드백 — 나무·차·소형
+## 건물까지 반투명해지면 안 된다) `PERF_SPOTS["dense"]`(도심 밀도 지점, 위 [dynamic]과
+## like-for-like 비교선이라 그대로 둔다)에서 동쪽으로 70m 직진해도 타워 하나 안 스친다
+## — 도로변에 늘어선 소형 건물·가로수·차가 사라진 자리라 원래도 타워는 드물다.
+## 그래서 이 하위 시나리오만 별도 시작점을 쓴다: 남쪽 경계 도로(z=-113.3)에 타워
+## 6개가 30m 안팎 간격으로 늘어서 있다(`tools/probe_tower_scan.gd` 실측) — x=-80 에서
+## 동쪽 70m 는 그중 넷을 스쳐 유령변화 7회(옛 판정과 같은 값)를 낸다.
+const PERF_CAM_START := Vector3(-80.0, 0.0, -113.3)
 const OVERLAP_EPS := 0.02                          # E3: SAT 수치 여유
 # D5: 구멍을 옮겨 재판정할 규격 지점 (오브젝트가 없는 -x/+z 쪽)
 # 앞의 셋에서 `road`·`block` 은 실측상 **인덱스 0 대로(z=0)** 를 표본한다(로그의 k·등급
@@ -4866,7 +4941,7 @@ func run_judge_3c() -> void:
 		# `set_hole_position` 이 §25 미끄러짐으로 막히면 카메라가 서고, 유령 집합이 고정된
 		# 채 위 지점과 같은 것을 재고도 "churn 을 측정했다" 로 기록된다.
 		hole.set_physics_process(false)
-		var start: Vector3 = PERF_SPOTS["dense"]
+		var start: Vector3 = PERF_CAM_START
 		_main.set_hole_position(start)
 		_reg.flush()
 		_cam.follow(hole, hole.radius, true)
@@ -5871,16 +5946,18 @@ func m16_observe(hole: Node3D, target: Node3D, frames: int, score0: int) -> Dict
 	var removed_at := -1
 	var max_still := 0
 	var max_tilt := 0.0
+	var frozen := false
 	for f in frames:
 		await get_tree().physics_frame
 		if not is_instance_valid(target):
 			removed_at = f
 			break
 		max_still = maxi(max_still, int(target.still_frames))
+		frozen = bool(target.freeze)
 		var up: Vector3 = target.global_transform.basis.y
 		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
 	return {"scored": hole.score > score0, "removed_at": removed_at,
-		"max_still": max_still, "max_tilt": max_tilt}
+		"max_still": max_still, "max_tilt": max_tilt, "frozen": frozen}
 
 
 ## M16c/M18 공용: **정지하지 않고** 대상 옆을 lateral 만큼 벗어난 직선으로 지나간다
@@ -5898,6 +5975,7 @@ func m16_graze(hole: Node3D, target: Node3D, lateral: float, span: float,
 	var removed_at := -1
 	var max_still := 0
 	var max_tilt := 0.0
+	var frozen := false
 	var cur := start
 	var score0: int = hole.score
 	for f in max_frames:
@@ -5911,10 +5989,11 @@ func m16_graze(hole: Node3D, target: Node3D, lateral: float, span: float,
 		if target.held_by_hole():
 			held = true
 		max_still = maxi(max_still, int(target.still_frames))
+		frozen = bool(target.freeze)
 		var up: Vector3 = target.global_transform.basis.y
 		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
 	return {"held": held, "scored": hole.score > score0, "removed_at": removed_at,
-		"max_still": max_still, "max_tilt": max_tilt}
+		"max_still": max_still, "max_tilt": max_tilt, "frozen": frozen}
 
 
 ## M18 전용: 차는 정지해 있지 않으므로 접근 직전 실측 속도로 진행 방향을 추정해
@@ -5940,6 +6019,7 @@ func m18_graze_car(hole: Node3D, rb: RigidBody3D, lateral: float, approach: floa
 	var held := false
 	var removed_at := -1
 	var max_still := 0
+	var frozen := false
 	var cur := start
 	var travel: Vector3 = stop_at - start
 	var step: Vector3 = travel.normalized() * (speed / 60.0)
@@ -5958,8 +6038,9 @@ func m18_graze_car(hole: Node3D, rb: RigidBody3D, lateral: float, approach: floa
 		if rb.held_by_hole():
 			held = true
 		max_still = maxi(max_still, int(rb.still_frames))
+		frozen = bool(rb.freeze)
 	return {"reached": true, "held": held, "scored": hole.score > score0,
-		"removed_at": removed_at, "max_still": max_still}
+		"removed_at": removed_at, "max_still": max_still, "frozen": frozen}
 
 
 ## M1~M5. 교통이 규격대로 흐르는가.
@@ -6530,14 +6611,17 @@ func run_judge_9() -> void:
 					% [M16_RIM_D, M16_MAX_APPROACH_F])
 			else:
 				var obs_a := await m16_observe(hole, target_a, M16_OBSERVE_F, score_a)
-				m16a = bool(obs_a["scored"]) or (int(obs_a["removed_at"]) >= 0 \
-					and int(obs_a["max_still"]) == int(cz.ORPHAN_GRACE) - 1)
+				# §0.6: 고아 정리는 삭제가 아니라 재동결이다 — "안 지워지고 그 자리에
+				# 얼어붙는가"를 묻는다. `removed_at` 은 이제 이 시나리오에서 절대
+				# >= 0 이면 안 된다(그러면 다시 사라지는 회귀다).
+				m16a = bool(obs_a["scored"]) or (int(obs_a["removed_at"]) < 0 \
+					and bool(obs_a["frozen"]))
 				tilt_a = float(obs_a["max_tilt"])
-				print(("JUDGE 9 M16a 림정지 도달f=%d 낙하=%s 제거f=%d still최대=%d(=%d?) " +
+				print(("JUDGE 9 M16a 림정지 도달f=%d 낙하=%s 제거f=%d still최대=%d 재동결=%s " +
 					"최대tilt=%.1f° %s")
 					% [int(app_a["reached"]), pf(bool(obs_a["scored"])),
 					   int(obs_a["removed_at"]), int(obs_a["max_still"]),
-					   int(cz.ORPHAN_GRACE) - 1, tilt_a, pf(m16a)])
+					   pf(bool(obs_a["frozen"])), tilt_a, pf(m16a)])
 
 		# M16b: 개구부 정중앙 — 핸드오프 표의 A(1.12)·G 재현. tilt 는 안 묻는다
 		# (핸드오프: "A 는 정중앙이라 묻지 않는다").
@@ -6565,11 +6649,10 @@ func run_judge_9() -> void:
 				print("JUDGE 9 M16b 정중앙 도달f=%d 낙하=%s" % [int(app_b["reached"]), pf(m16b)])
 
 		# M16c: 스침 — 정지 없이 지나간다(§35 §0.5-A 의 발견을 판정으로 승격).
-		# 통과식은 상한이 아니라 **등식**이다: `removed_at ≤ GRACE+여유` 는
-		# `sweep_orphans()` 구조상 GRACE 값과 무관하게 항상 참이라 위약이다
-		# (계획 감사가 실행으로 잡았다) — 마지막으로 관측되는 `still_frames` 가
-		# 정확히 `ORPHAN_GRACE − 1` 인지를 묻는다(§0.5-A 의 실측이 이미 이 등식이다:
-		# 옵셋 네 종 전부 제거f−시작f = 59 = GRACE−1).
+		# §0.6: 고아 정리 = 재동결이다 — "스치기만 한 시민이 화면에서 사라지면 안 된다"
+		# 는 유저 피드백이 그대로 규격이 됐다. `removed_at` 은 이 시나리오에서 절대
+		# >= 0 이면 안 되고, 대신 `still_frames` 유예가 다 찬 뒤 실제로 `freeze` 로
+		# 정착했는가를 묻는다.
 		hole.set_radius(SPEC_START_R)
 		hole.move_to(Vector3(-176.0, 0.0, -176.0))
 		cz.reset()
@@ -6577,7 +6660,8 @@ func run_judge_9() -> void:
 		var best_c := nearest_citizen(cz)
 		var m16c := false
 		# M17 이 재사용하므로 `best_c<0` 이어도 안전한 기본값을 채워 둔다.
-		var g := {"held": false, "scored": false, "removed_at": -1, "max_still": 0, "max_tilt": 0.0}
+		var g := {"held": false, "scored": false, "removed_at": -1, "max_still": 0,
+			"max_tilt": 0.0, "frozen": false}
 		if best_c < 0:
 			print("JUDGE 9 M16c 전제 위반: 시민이 없다")
 		else:
@@ -6585,11 +6669,11 @@ func run_judge_9() -> void:
 			g = await m16_graze(hole, target_c, M16_GRAZE_LATERAL, M16_GRAZE_SPAN,
 				M16_GRAZE_MAX_F)
 			m16c = bool(g["held"]) and (bool(g["scored"]) \
-				or (int(g["removed_at"]) >= 0 and int(g["max_still"]) == int(cz.ORPHAN_GRACE) - 1))
-			print(("JUDGE 9 M16c 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d(=%d?) " +
+				or (int(g["removed_at"]) < 0 and bool(g["frozen"])))
+			print(("JUDGE 9 M16c 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d 재동결=%s " +
 				"최대tilt=%.1f° %s")
 				% [pf(bool(g["held"])), pf(bool(g["scored"])), int(g["removed_at"]),
-				   int(g["max_still"]), int(cz.ORPHAN_GRACE) - 1, float(g["max_tilt"]), pf(m16c)])
+				   int(g["max_still"]), pf(bool(g["frozen"])), float(g["max_tilt"]), pf(m16c)])
 
 		m16 = m16a and m16b and m16c
 		# M17: 넘어짐 — M16a·M16c 에서 이미 잰 tilt 를 재사용한다(공짜 표본).
@@ -6625,11 +6709,10 @@ func run_judge_9() -> void:
 			print("JUDGE 9 M18 전제 위반: 차 속도를 못 쟀다(재시도 필요)")
 		else:
 			m18 = bool(gc["held"]) and (bool(gc["scored"]) \
-				or (int(gc["removed_at"]) >= 0 \
-					and int(gc["max_still"]) == int(tr.ORPHAN_GRACE) - 1))
-			print(("JUDGE 9 M18 차량 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d(=%d?) %s")
+				or (int(gc["removed_at"]) < 0 and bool(gc["frozen"])))
+			print(("JUDGE 9 M18 차량 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d 재동결=%s %s")
 				% [pf(bool(gc["held"])), pf(bool(gc["scored"])), int(gc["removed_at"]),
-				   int(gc["max_still"]), int(tr.ORPHAN_GRACE) - 1, pf(m18)])
+				   int(gc["max_still"]), pf(bool(gc["frozen"])), pf(m18)])
 
 	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s M8=%s M9=%s"
 		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7), pf(m8), pf(m9)])
@@ -7473,7 +7556,12 @@ func judge_hud_font() -> bool:
 ## 시정수를 바꾼 빌드가 자기 값끼리 일치해 통과한다 — 판정기가 따로 든다.
 const SPEC_CAM_OFFSET := Vector3(0.0, 22.0, 26.0)
 const SPEC_CAM_BASE_R := 5.0
-const SPEC_CAM_MIN_H := 14.0
+## §0.6: 14.0 → 11.0 (camera_rig.gd min_height 와 동기 — "시작이 더 zoom in 되어야
+## 한다"는 유저 피드백). 반경 1.5 의 자연값(6.6)까지는 못 낮춘다 — 카메라가 그보다
+## 낮아지면 유한 지면(448×448)의 가장자리를 화면 위쪽 시선이 못 넘어서 배경(하늘)이
+## 사라지고(judge1 bg), `probe_blocks()`의 블록 탐색도 후보를 못 찾는다(judge3 D1).
+## 실측 경계는 10.0(탈락)~10.1(통과) — 여유를 두고 11.0 로 낮췄다(camera_rig.gd 참고).
+const SPEC_CAM_MIN_H := 11.0
 const SPEC_CAM_SMOOTH := 6.0
 ## 합성 dt. 판정은 프레임을 실제로 넘기되 **시간은 이 값으로 센다.** 브라우저 rAF 의
 ## 실측 dt 를 쓰면 저프레임 기기에서 목표점의 계단(ZOH) 간격이 커져 정상 빌드가
@@ -7700,14 +7788,21 @@ const OCC_FIX_PIXEL_MIN := 2000      # O2①: 픽스처가 화면 밖이면 양�
 ## O2②③ 은 **도시가 실제로 둘러싼 지점**에서 잰다. 원점 광장(반경 26 빈 터)에서는
 ## R=20 의 시선 원뿔이 픽스처 근면에서 지상 49m 를 지나 도시 최대 높이 19.22m 를
 ## **원리적으로 못 만나** 유령이 0 이다 — 상·하한을 그 자리에서 물으면 하한이 위약이 된다.
-## 실측(R=20): (-16,16)=3 · (-48,-48)=3 · (16,-16)=3 · **(-32,16)=5** · (-80,-80)=2.
-## 가장 큰 지점을 고르고 상·하한을 그 수에서 유도한다(E9·E7a 의 "실측의 절반" 관례).
-const OCC_MELT_SPOT := Vector3(-32, 0, 16)
-const OCC_MELT_MAX := 10             # 실측 5 의 2배
-const OCC_MELT_MIN := 2              # 실측 5 의 절반 — 상한의 거울
-## R=1.5 는 카메라가 14m 라 13m 이상 건물이 **조기반려를 건너뛰고 정확 경로를 탄다** —
-## 게임이 실제로 도는 길이다. R=20(카메라 88m)만 재면 그 분기를 한 번도 안 묻는다.
-## 실측 2 (후보 67, 두 렌더러·웹에서 같다). 상한은 2배.
+##
+## §0.6: 가림 후보를 "큰 건물"(kind=="tower")로 좁히면서(유저 피드백 — 나무·차·소형
+## 건물까지 반투명해지면 안 된다) 옛 지점 (-32,16)의 실측이 무너졌다(옛 판정은 프롭
+## 전체를 후보로 삼았을 때의 값이다) — 타워는 44개뿐이라 예전만큼 흔하게 겹치지
+## 않는다. `tools/probe_ghost_scan.gd` 로 재훑어 **R=1.5·R=20 양쪽에서 동시에 2 를
+## 내는 지점**을 다시 골랐다(격자 8m 간격 전수 탐색 — 이 도시 배치에서 R=1.5 가
+## 동시에 2 타워를 보는 자리 중 R=20 값이 가장 큰 것). 상·하한 자체는 우연히 옛
+## 값과 같다(둘 다 실측 2 그대로 — 여유 0. §0.6 이전에도 이 지점은 여유가 0 이었다는
+## 사실을 그대로 물려받는다).
+const OCC_MELT_SPOT := Vector3(-52.0, 0.0, -84.0)
+const OCC_MELT_MAX := 10             # 실측 2 의 5배(옛 상수 그대로 — 상한은 넉넉하다)
+const OCC_MELT_MIN := 2              # 실측과 같은 2
+## R=1.5 는 카메라가 11m 다(§0.6: min_height 14→11, camera_rig.gd 참고). 12m 이상
+## 건물이 **조기반려를 건너뛰고 정확 경로를 탄다** — 게임이 실제로 도는 길이다.
+## R=20(카메라 88m)만 재면 그 분기를 한 번도 안 묻는다.
 ## **하한은 실측과 같은 2 다** — 1 로 두면 `COVER_ON` 을 10배로 올려도 R=1.5 유령이 1 로
 ## 남아 통과해 **어떤 주입도 단독으로 못 잡는다**(코드 감사가 실증했다). 여유가 0 이지만
 ## 이 지점은 결정론적이고, 배치가 바뀌면 어차피 `RESTART_PROPS` 부터 다시 유도해야 한다.
@@ -7756,6 +7851,11 @@ func occ_make_fixture(city: Node3D, center: Vector3, size: Vector3, cull_off: bo
 	n.add_child(mi)
 	city.add_child(n)
 	n.global_position = center
+	# `city.rebuild_occluders()` 가 이제 "큰 건물"(kind=="tower")만 고른다(§37 유저
+	# 피드백 — 나무·차·소형 건물은 더는 후보가 아니다). 이 픽스처는 "카메라를 가리는
+	# 큰 건물"을 흉내내는 것이 목적이므로 같은 표를 단다 — 안 달면 O1~O6 이 색인에서
+	# 전부 빠져 자기 자신을 탈락시킨다.
+	n.set_meta("kind", "tower")
 	return n
 
 
@@ -9397,7 +9497,7 @@ func add_slot(rng: RandomNumberGenerator, pos: Vector3, zone: String, out: Array
 	# scale 은 **지구 배수를 곱한 실효값**을 싣는다. make_prop·지문·판정이 전부
 	# 이 값을 쓰므로, 여기서 확정하지 않으면 도심 고층이 배치만 크고 렌더는 원래 크기가 된다.
 	out.append({ "path": e["path"], "scale": pick["s"], "zone": zone,
-		"pos": pos, "ex": pick["ex"], "yaw": pick["yaw"] })
+		"pos": pos, "ex": pick["ex"], "yaw": pick["yaw"], "kind": e.get("kind", "") })
 
 
 ## 회전(90° 단위)을 반영한 월드 축방향 반extent.
@@ -9543,6 +9643,12 @@ var occ_max_ext := 0.0
 var occ_max_h := 0.0
 
 
+## 가림 후보로 셀 프롭 종류. **오로지 큰 건물**만 — 유저 피드백: 나무·전봇대·주차된
+## 차·소형 상가/주택처럼 구멍이 곧 삼킬 것들까지 반투명해지면 "먹을 것이 흐릿해진다"
+## 로 읽힌다. `kind` 는 §25 지구제가 쓰던 분류를 그대로 재사용한다("tower" = 대형
+## 건물 전용 — Building*_Large/Big, Bank·Flat·Flat2·Hospital 등. "house"·"shop" 은
+## 소형 건물이라 제외).
+const OCCLUDER_KINDS := ["tower"]
 ## 판정이 픽스처를 세운 뒤에도 부른다 — 그러지 않으면 **정상 구현이 픽스처를 절대
 ## 투명화하지 않아 판정이 자기 자신을 탈락시킨다**(계획 감사가 잡았다).
 func rebuild_occluders() -> void:
@@ -9553,6 +9659,8 @@ func rebuild_occluders() -> void:
 	for c in get_children():
 		var n := c as Node3D
 		if n == null:
+			continue
+		if not OCCLUDER_KINDS.has(String(n.get_meta("kind", ""))):
 			continue
 		var mi: MeshInstance3D = null
 		for g in n.get_children():
@@ -9711,6 +9819,11 @@ func make_prop(it: Dictionary, idx: int) -> RigidBody3D:
 	# 질량은 부피 비례. pull() 이 mass 를 곱하므로 가속도가 크기와 무관해진다.
 	var vol: float = ab.size.x * ab.size.y * ab.size.z * s * s * s
 	body.mass = clampf(vol * 0.25, 0.5, 400.0)
+	# §37 가림 후보 선별용(occluders.gd). `rebuild_occluders()` 가 이 값으로 "큰 건물"만
+	# 골라낸다 — 메타로 두는 이유는 이 dict("kind")가 배치(§25)에만 쓰이던 것을 재사용해
+	# 별도 목록을 안 만들기 위해서다(값이 어긋난 사본이 생기면 그것만 고치고 아무 일도
+	# 안 일어난다).
+	body.set_meta("kind", String(it.get("kind", "")))
 	return body
 
 
@@ -11845,7 +11958,7 @@ func _physics_process(dt: float) -> void:
 ## 아무도 그 차를 다시 인수하지 않는다. 그대로 두면 **주행 차선 한복판에 자유 강체가
 ## 영구히 남고**, 주행차는 매 프레임 순간이동하므로 스윕 없이 그것을 관통한다 —
 ## §27 이 주차 자리를 줄여 가며 없애려던 상황이 판 중반부터 스스로 되살아난다.
-## 낙하하지 않았고 멈춰 섰으면 치운다.
+## 낙하하지 않았고 멈춰 섰으면 정리한다.
 ##
 ## §35: **citizens.gd 와 글자 그대로 같은 게이트를 쓴다.** `tools/probe_orphan_car.gd`
 ## 실측으로 이 파일에 정확히 같은 결함이 재현됐다 — 차가 인계된 뒤 낙하도 삼킴도 없이
@@ -11853,6 +11966,13 @@ func _physics_process(dt: float) -> void:
 ## (citizens.gd 수정 전과 같은 모양. 관성 때문에 늦게 사라질 뿐 유예가 없는 것은 같다).
 ## 공통 함수로 뽑지 않는다 — 두 파일은 독립된 스윕 리스트(`_cars`/`_people`)를 관리하고,
 ## `ORPHAN_STILL` 상수도 이미 두 파일에 중복돼 있다(이 저장소의 기존 관례).
+##
+## **§0.6: citizens.gd 와 같은 이유로 정리 = 삭제가 아니라 재동결이다** — 구멍이 스치기만
+## 하고 지나간 차가 1초 뒤 화면에서 사라지는 것은 "쓰러진 행인 방치 시 사라짐" 과 같은
+## 뿌리다. 그 자리에서 얼려 두면 도로 위의 정적 장애물로 영구히 남고, 나중에 어떤
+## 구멍이든 다가오면 `hold_awake(true)` 가 다시 풀어 준다. 재동결된 차가 **두 번째로**
+## 스치기만 하면 그 뒤로는 다시 얼지도 `_orphans` 로 돌아오지도 않는다 — 그 시점부터는
+## 이 저장소의 일반 도시 프롭과 같은 처지가 된다(citizens.gd 의 같은 주석 참고).
 var _orphans := []
 const ORPHAN_STILL := 0.35
 const ORPHAN_GRACE := 60
@@ -11876,7 +11996,8 @@ func sweep_orphans() -> void:
 			rb.still_frames += 1
 			if rb.still_frames >= ORPHAN_GRACE:
 				_orphans.remove_at(n)
-				rb.queue_free()
+				rb.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+				rb.freeze = true
 		else:
 			rb.still_frames = 0
 
@@ -12126,13 +12247,25 @@ static func model_path(letter: String) -> String:
 var _rng := RandomNumberGenerator.new()
 ## 각 원소: { rb, mesh, axis, line, u, lo, hi, s, dir, speed, phase }
 var _people := []
-## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 치운다(§27 의 교통과 같은 이유).
+## 인계했으나 삼켜지지 않은 사람. 멈춰 섰으면 다시 얼려 둔다(§27 의 교통과 같은 이유).
 var _orphans := []
 const ORPHAN_STILL := 0.35
-## 멈춘 채 이만큼 이어져야 치운다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
+## 멈춘 채 이만큼 이어져야 정리한다(§35). 유예가 없으면 구멍이 스쳐 지나간 시민이 **접촉
 ## 1프레임 만에** 점수도 없이 사라진다 — 유저가 "닿으면 사라진다" 로 본 것이 그것이다.
 ## §35 실측(`tools/probe_orphan.gd`): 스치기만 한 시민은 `still_frames` 가 정확히
-## `ORPHAN_GRACE − 1`(=59)까지 관측된 뒤 제거된다 — judge9 M16c 가 그 등식을 그대로 묻는다.
+## `ORPHAN_GRACE − 1`(=59)까지 관측된 뒤 정리된다 — judge9 M16c 가 그 등식을 그대로 묻는다.
+##
+## **§0.6: 정리 = 삭제가 아니라 재동결이다.** `queue_free()` 였을 때는 "구멍이 삼키지
+## 않고 지나간 쓰러진 행인이 방치되면 1초 만에 화면에서 사라진다" 는 신고를 그대로
+## 낳았다 — 유예는 사라짐 자체를 막지 못하고 늦출 뿐이었다. 이제는 `start_frozen`
+## 프롭과 같은 방식으로 그 자리에서 얼린다: 시각적으로 영구히 남고(쓰러진 자세 그대로),
+## 물리 비용은 정적 바디 수준으로 돌아가며, 나중에 어떤 구멍이든 다시 다가오면
+## `hold_awake(true)` 가 얼음을 풀어 평소처럼 다시 흡입 대상이 된다.
+##
+## **재동결된 시민이 두 번째로 스치기만 하면** — 그 뒤로 다시 얼지도, `_orphans` 로
+## 되돌아오지도 않는다(`hold_awake` 는 "한 번 풀리면 되돌리지 않는다"). 그 시점부터는
+## 이 저장소가 처음부터 그래 온 일반 도시 프롭(한 번 스치면 그걸로 감시가 끝나는)과
+## 정확히 같은 처지가 된다 — 새 회귀가 아니라 기존 계약을 그대로 물려받는 것이다.
 const ORPHAN_GRACE := 60
 ## 접촉 관통으로 y 가 살짝 음수가 되는 잡음을 "우물 안" 으로 오판하지 않게 하는 여유.
 ## 림 위에 정지한 순간 접촉이 아주 조금 파고들 수 있다 — 그것을 낙하로 잘못 읽으면
@@ -12159,7 +12292,8 @@ func sweep_orphans() -> void:
 			rb.still_frames += 1
 			if rb.still_frames >= ORPHAN_GRACE:
 				_orphans.remove_at(n)
-				rb.queue_free()
+				rb.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+				rb.freeze = true
 		else:
 			rb.still_frames = 0
 

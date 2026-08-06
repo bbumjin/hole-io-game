@@ -233,7 +233,8 @@ const RESTART_HOLES := 6                           # T5: 재시작 후 구멍 �
 const RESTART_PROPS := 2112
 ## §10 의 성장 계수. 구현체의 hole.growth_k 를 읽으면 계수만 바꾼 빌드가
 ## 자기 값끼리 일치해 그대로 통과한다 — 규격에서 판정기가 직접 들고 있어야 한다.
-const SPEC_GROWTH_K := 1.0
+## §0.6: 1.0 → 0.5 (큰 건물 한 입에 초거대화된다는 플레이 피드백).
+const SPEC_GROWTH_K := 0.5
 
 # --- §23 물리 통과 판정 ----------------------------------------------------
 ## 통과 판정 시행의 기본 구멍 반경. 픽스처 치수가 이 값 둘레에서 정해진다:
@@ -324,6 +325,14 @@ const PERF_CAM_DT := 1.0 / 60.0
 ## 구간 전제. 미끄러짐으로 주행이 막히면 유령 집합이 고정된 채 통과하는 것을 막는다.
 const PERF_CAM_MOVE_MIN := 0.9                     # 기대 이동거리의 이 비율 이상
 const PERF_CAM_CHURN_MIN := 3                      # 유령 집합이 바뀐 프레임 수 하한(실측 7 의 절반)
+## §0.6: 가림 후보를 "큰 건물"(kind=="tower")로만 좁히면서(유저 피드백 — 나무·차·소형
+## 건물까지 반투명해지면 안 된다) `PERF_SPOTS["dense"]`(도심 밀도 지점, 위 [dynamic]과
+## like-for-like 비교선이라 그대로 둔다)에서 동쪽으로 70m 직진해도 타워 하나 안 스친다
+## — 도로변에 늘어선 소형 건물·가로수·차가 사라진 자리라 원래도 타워는 드물다.
+## 그래서 이 하위 시나리오만 별도 시작점을 쓴다: 남쪽 경계 도로(z=-113.3)에 타워
+## 6개가 30m 안팎 간격으로 늘어서 있다(`tools/probe_tower_scan.gd` 실측) — x=-80 에서
+## 동쪽 70m 는 그중 넷을 스쳐 유령변화 7회(옛 판정과 같은 값)를 낸다.
+const PERF_CAM_START := Vector3(-80.0, 0.0, -113.3)
 const OVERLAP_EPS := 0.02                          # E3: SAT 수치 여유
 # D5: 구멍을 옮겨 재판정할 규격 지점 (오브젝트가 없는 -x/+z 쪽)
 # 앞의 셋에서 `road`·`block` 은 실측상 **인덱스 0 대로(z=0)** 를 표본한다(로그의 k·등급
@@ -2754,7 +2763,7 @@ func run_judge_3c() -> void:
 		# `set_hole_position` 이 §25 미끄러짐으로 막히면 카메라가 서고, 유령 집합이 고정된
 		# 채 위 지점과 같은 것을 재고도 "churn 을 측정했다" 로 기록된다.
 		hole.set_physics_process(false)
-		var start: Vector3 = PERF_SPOTS["dense"]
+		var start: Vector3 = PERF_CAM_START
 		_main.set_hole_position(start)
 		_reg.flush()
 		_cam.follow(hole, hole.radius, true)
@@ -3759,16 +3768,18 @@ func m16_observe(hole: Node3D, target: Node3D, frames: int, score0: int) -> Dict
 	var removed_at := -1
 	var max_still := 0
 	var max_tilt := 0.0
+	var frozen := false
 	for f in frames:
 		await get_tree().physics_frame
 		if not is_instance_valid(target):
 			removed_at = f
 			break
 		max_still = maxi(max_still, int(target.still_frames))
+		frozen = bool(target.freeze)
 		var up: Vector3 = target.global_transform.basis.y
 		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
 	return {"scored": hole.score > score0, "removed_at": removed_at,
-		"max_still": max_still, "max_tilt": max_tilt}
+		"max_still": max_still, "max_tilt": max_tilt, "frozen": frozen}
 
 
 ## M16c/M18 공용: **정지하지 않고** 대상 옆을 lateral 만큼 벗어난 직선으로 지나간다
@@ -3786,6 +3797,7 @@ func m16_graze(hole: Node3D, target: Node3D, lateral: float, span: float,
 	var removed_at := -1
 	var max_still := 0
 	var max_tilt := 0.0
+	var frozen := false
 	var cur := start
 	var score0: int = hole.score
 	for f in max_frames:
@@ -3799,10 +3811,11 @@ func m16_graze(hole: Node3D, target: Node3D, lateral: float, span: float,
 		if target.held_by_hole():
 			held = true
 		max_still = maxi(max_still, int(target.still_frames))
+		frozen = bool(target.freeze)
 		var up: Vector3 = target.global_transform.basis.y
 		max_tilt = maxf(max_tilt, rad_to_deg(acos(clampf(up.dot(Vector3.UP), -1.0, 1.0))))
 	return {"held": held, "scored": hole.score > score0, "removed_at": removed_at,
-		"max_still": max_still, "max_tilt": max_tilt}
+		"max_still": max_still, "max_tilt": max_tilt, "frozen": frozen}
 
 
 ## M18 전용: 차는 정지해 있지 않으므로 접근 직전 실측 속도로 진행 방향을 추정해
@@ -3828,6 +3841,7 @@ func m18_graze_car(hole: Node3D, rb: RigidBody3D, lateral: float, approach: floa
 	var held := false
 	var removed_at := -1
 	var max_still := 0
+	var frozen := false
 	var cur := start
 	var travel: Vector3 = stop_at - start
 	var step: Vector3 = travel.normalized() * (speed / 60.0)
@@ -3846,8 +3860,9 @@ func m18_graze_car(hole: Node3D, rb: RigidBody3D, lateral: float, approach: floa
 		if rb.held_by_hole():
 			held = true
 		max_still = maxi(max_still, int(rb.still_frames))
+		frozen = bool(rb.freeze)
 	return {"reached": true, "held": held, "scored": hole.score > score0,
-		"removed_at": removed_at, "max_still": max_still}
+		"removed_at": removed_at, "max_still": max_still, "frozen": frozen}
 
 
 ## M1~M5. 교통이 규격대로 흐르는가.
@@ -4418,14 +4433,17 @@ func run_judge_9() -> void:
 					% [M16_RIM_D, M16_MAX_APPROACH_F])
 			else:
 				var obs_a := await m16_observe(hole, target_a, M16_OBSERVE_F, score_a)
-				m16a = bool(obs_a["scored"]) or (int(obs_a["removed_at"]) >= 0 \
-					and int(obs_a["max_still"]) == int(cz.ORPHAN_GRACE) - 1)
+				# §0.6: 고아 정리는 삭제가 아니라 재동결이다 — "안 지워지고 그 자리에
+				# 얼어붙는가"를 묻는다. `removed_at` 은 이제 이 시나리오에서 절대
+				# >= 0 이면 안 된다(그러면 다시 사라지는 회귀다).
+				m16a = bool(obs_a["scored"]) or (int(obs_a["removed_at"]) < 0 \
+					and bool(obs_a["frozen"]))
 				tilt_a = float(obs_a["max_tilt"])
-				print(("JUDGE 9 M16a 림정지 도달f=%d 낙하=%s 제거f=%d still최대=%d(=%d?) " +
+				print(("JUDGE 9 M16a 림정지 도달f=%d 낙하=%s 제거f=%d still최대=%d 재동결=%s " +
 					"최대tilt=%.1f° %s")
 					% [int(app_a["reached"]), pf(bool(obs_a["scored"])),
 					   int(obs_a["removed_at"]), int(obs_a["max_still"]),
-					   int(cz.ORPHAN_GRACE) - 1, tilt_a, pf(m16a)])
+					   pf(bool(obs_a["frozen"])), tilt_a, pf(m16a)])
 
 		# M16b: 개구부 정중앙 — 핸드오프 표의 A(1.12)·G 재현. tilt 는 안 묻는다
 		# (핸드오프: "A 는 정중앙이라 묻지 않는다").
@@ -4453,11 +4471,10 @@ func run_judge_9() -> void:
 				print("JUDGE 9 M16b 정중앙 도달f=%d 낙하=%s" % [int(app_b["reached"]), pf(m16b)])
 
 		# M16c: 스침 — 정지 없이 지나간다(§35 §0.5-A 의 발견을 판정으로 승격).
-		# 통과식은 상한이 아니라 **등식**이다: `removed_at ≤ GRACE+여유` 는
-		# `sweep_orphans()` 구조상 GRACE 값과 무관하게 항상 참이라 위약이다
-		# (계획 감사가 실행으로 잡았다) — 마지막으로 관측되는 `still_frames` 가
-		# 정확히 `ORPHAN_GRACE − 1` 인지를 묻는다(§0.5-A 의 실측이 이미 이 등식이다:
-		# 옵셋 네 종 전부 제거f−시작f = 59 = GRACE−1).
+		# §0.6: 고아 정리 = 재동결이다 — "스치기만 한 시민이 화면에서 사라지면 안 된다"
+		# 는 유저 피드백이 그대로 규격이 됐다. `removed_at` 은 이 시나리오에서 절대
+		# >= 0 이면 안 되고, 대신 `still_frames` 유예가 다 찬 뒤 실제로 `freeze` 로
+		# 정착했는가를 묻는다.
 		hole.set_radius(SPEC_START_R)
 		hole.move_to(Vector3(-176.0, 0.0, -176.0))
 		cz.reset()
@@ -4465,7 +4482,8 @@ func run_judge_9() -> void:
 		var best_c := nearest_citizen(cz)
 		var m16c := false
 		# M17 이 재사용하므로 `best_c<0` 이어도 안전한 기본값을 채워 둔다.
-		var g := {"held": false, "scored": false, "removed_at": -1, "max_still": 0, "max_tilt": 0.0}
+		var g := {"held": false, "scored": false, "removed_at": -1, "max_still": 0,
+			"max_tilt": 0.0, "frozen": false}
 		if best_c < 0:
 			print("JUDGE 9 M16c 전제 위반: 시민이 없다")
 		else:
@@ -4473,11 +4491,11 @@ func run_judge_9() -> void:
 			g = await m16_graze(hole, target_c, M16_GRAZE_LATERAL, M16_GRAZE_SPAN,
 				M16_GRAZE_MAX_F)
 			m16c = bool(g["held"]) and (bool(g["scored"]) \
-				or (int(g["removed_at"]) >= 0 and int(g["max_still"]) == int(cz.ORPHAN_GRACE) - 1))
-			print(("JUDGE 9 M16c 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d(=%d?) " +
+				or (int(g["removed_at"]) < 0 and bool(g["frozen"])))
+			print(("JUDGE 9 M16c 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d 재동결=%s " +
 				"최대tilt=%.1f° %s")
 				% [pf(bool(g["held"])), pf(bool(g["scored"])), int(g["removed_at"]),
-				   int(g["max_still"]), int(cz.ORPHAN_GRACE) - 1, float(g["max_tilt"]), pf(m16c)])
+				   int(g["max_still"]), pf(bool(g["frozen"])), float(g["max_tilt"]), pf(m16c)])
 
 		m16 = m16a and m16b and m16c
 		# M17: 넘어짐 — M16a·M16c 에서 이미 잰 tilt 를 재사용한다(공짜 표본).
@@ -4513,11 +4531,10 @@ func run_judge_9() -> void:
 			print("JUDGE 9 M18 전제 위반: 차 속도를 못 쟀다(재시도 필요)")
 		else:
 			m18 = bool(gc["held"]) and (bool(gc["scored"]) \
-				or (int(gc["removed_at"]) >= 0 \
-					and int(gc["max_still"]) == int(tr.ORPHAN_GRACE) - 1))
-			print(("JUDGE 9 M18 차량 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d(=%d?) %s")
+				or (int(gc["removed_at"]) < 0 and bool(gc["frozen"])))
+			print(("JUDGE 9 M18 차량 스침 접촉=%s 낙하=%s 제거f=%d still최대=%d 재동결=%s %s")
 				% [pf(bool(gc["held"])), pf(bool(gc["scored"])), int(gc["removed_at"]),
-				   int(gc["max_still"]), int(tr.ORPHAN_GRACE) - 1, pf(m18)])
+				   int(gc["max_still"]), pf(bool(gc["frozen"])), pf(m18)])
 
 	print("JUDGE 9 M1=%s M2=%s M3=%s M4=%s M5=%s M6=%s M7=%s M8=%s M9=%s"
 		% [pf(m1), pf(m2), pf(m3), pf(m4), pf(m5), pf(m6), pf(m7), pf(m8), pf(m9)])
@@ -5361,7 +5378,12 @@ func judge_hud_font() -> bool:
 ## 시정수를 바꾼 빌드가 자기 값끼리 일치해 통과한다 — 판정기가 따로 든다.
 const SPEC_CAM_OFFSET := Vector3(0.0, 22.0, 26.0)
 const SPEC_CAM_BASE_R := 5.0
-const SPEC_CAM_MIN_H := 14.0
+## §0.6: 14.0 → 11.0 (camera_rig.gd min_height 와 동기 — "시작이 더 zoom in 되어야
+## 한다"는 유저 피드백). 반경 1.5 의 자연값(6.6)까지는 못 낮춘다 — 카메라가 그보다
+## 낮아지면 유한 지면(448×448)의 가장자리를 화면 위쪽 시선이 못 넘어서 배경(하늘)이
+## 사라지고(judge1 bg), `probe_blocks()`의 블록 탐색도 후보를 못 찾는다(judge3 D1).
+## 실측 경계는 10.0(탈락)~10.1(통과) — 여유를 두고 11.0 로 낮췄다(camera_rig.gd 참고).
+const SPEC_CAM_MIN_H := 11.0
 const SPEC_CAM_SMOOTH := 6.0
 ## 합성 dt. 판정은 프레임을 실제로 넘기되 **시간은 이 값으로 센다.** 브라우저 rAF 의
 ## 실측 dt 를 쓰면 저프레임 기기에서 목표점의 계단(ZOH) 간격이 커져 정상 빌드가
@@ -5588,14 +5610,21 @@ const OCC_FIX_PIXEL_MIN := 2000      # O2①: 픽스처가 화면 밖이면 양�
 ## O2②③ 은 **도시가 실제로 둘러싼 지점**에서 잰다. 원점 광장(반경 26 빈 터)에서는
 ## R=20 의 시선 원뿔이 픽스처 근면에서 지상 49m 를 지나 도시 최대 높이 19.22m 를
 ## **원리적으로 못 만나** 유령이 0 이다 — 상·하한을 그 자리에서 물으면 하한이 위약이 된다.
-## 실측(R=20): (-16,16)=3 · (-48,-48)=3 · (16,-16)=3 · **(-32,16)=5** · (-80,-80)=2.
-## 가장 큰 지점을 고르고 상·하한을 그 수에서 유도한다(E9·E7a 의 "실측의 절반" 관례).
-const OCC_MELT_SPOT := Vector3(-32, 0, 16)
-const OCC_MELT_MAX := 10             # 실측 5 의 2배
-const OCC_MELT_MIN := 2              # 실측 5 의 절반 — 상한의 거울
-## R=1.5 는 카메라가 14m 라 13m 이상 건물이 **조기반려를 건너뛰고 정확 경로를 탄다** —
-## 게임이 실제로 도는 길이다. R=20(카메라 88m)만 재면 그 분기를 한 번도 안 묻는다.
-## 실측 2 (후보 67, 두 렌더러·웹에서 같다). 상한은 2배.
+##
+## §0.6: 가림 후보를 "큰 건물"(kind=="tower")로 좁히면서(유저 피드백 — 나무·차·소형
+## 건물까지 반투명해지면 안 된다) 옛 지점 (-32,16)의 실측이 무너졌다(옛 판정은 프롭
+## 전체를 후보로 삼았을 때의 값이다) — 타워는 44개뿐이라 예전만큼 흔하게 겹치지
+## 않는다. `tools/probe_ghost_scan.gd` 로 재훑어 **R=1.5·R=20 양쪽에서 동시에 2 를
+## 내는 지점**을 다시 골랐다(격자 8m 간격 전수 탐색 — 이 도시 배치에서 R=1.5 가
+## 동시에 2 타워를 보는 자리 중 R=20 값이 가장 큰 것). 상·하한 자체는 우연히 옛
+## 값과 같다(둘 다 실측 2 그대로 — 여유 0. §0.6 이전에도 이 지점은 여유가 0 이었다는
+## 사실을 그대로 물려받는다).
+const OCC_MELT_SPOT := Vector3(-52.0, 0.0, -84.0)
+const OCC_MELT_MAX := 10             # 실측 2 의 5배(옛 상수 그대로 — 상한은 넉넉하다)
+const OCC_MELT_MIN := 2              # 실측과 같은 2
+## R=1.5 는 카메라가 11m 다(§0.6: min_height 14→11, camera_rig.gd 참고). 12m 이상
+## 건물이 **조기반려를 건너뛰고 정확 경로를 탄다** — 게임이 실제로 도는 길이다.
+## R=20(카메라 88m)만 재면 그 분기를 한 번도 안 묻는다.
 ## **하한은 실측과 같은 2 다** — 1 로 두면 `COVER_ON` 을 10배로 올려도 R=1.5 유령이 1 로
 ## 남아 통과해 **어떤 주입도 단독으로 못 잡는다**(코드 감사가 실증했다). 여유가 0 이지만
 ## 이 지점은 결정론적이고, 배치가 바뀌면 어차피 `RESTART_PROPS` 부터 다시 유도해야 한다.
@@ -5644,6 +5673,11 @@ func occ_make_fixture(city: Node3D, center: Vector3, size: Vector3, cull_off: bo
 	n.add_child(mi)
 	city.add_child(n)
 	n.global_position = center
+	# `city.rebuild_occluders()` 가 이제 "큰 건물"(kind=="tower")만 고른다(§37 유저
+	# 피드백 — 나무·차·소형 건물은 더는 후보가 아니다). 이 픽스처는 "카메라를 가리는
+	# 큰 건물"을 흉내내는 것이 목적이므로 같은 표를 단다 — 안 달면 O1~O6 이 색인에서
+	# 전부 빠져 자기 자신을 탈락시킨다.
+	n.set_meta("kind", "tower")
 	return n
 
 

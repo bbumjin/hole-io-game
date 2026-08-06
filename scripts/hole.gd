@@ -19,6 +19,12 @@ const CITY := preload("res://scripts/city.gd")
 @export var depth_ratio := 2.4
 ## 흡입력(중심 방향). 가장자리에서 덜덜 떨다 빨려드는 느낌을 만든다.
 @export var suction := 26.0
+## §30 이후에도 남았던 플레이 피드백 — "회색 지대"(fit_radius <= R 이라 흡입은 받지만
+## 외접반경(rb.radius) > R 이라 실제로는 구멍보다 큰 택시·SUV·버스 따위)가 여전히
+## 26 m/s² 그대로 끌려와 "못 삼킬 것을 질질 끌고 다닌다"로 읽혔다. 이 비율만큼
+## 흡입을 깎아 **살짝 밀리거나 기울어 넘어지는 정도**로 낮춘다 — 완전히 0 으로 하면
+## §30 이 의도한 "회색 지대는 여전히(느리게) 흡입된다" 는 거동 자체가 사라진다.
+@export var grey_zone_pull_scale := 0.12
 ## 낙하 오브젝트를 소멸시키는 깊이 = well_depth * kill_ratio.
 @export var kill_ratio := 0.8
 ## AI 목표 선정용 상한(§23). 흡입을 막는 게이트가 **아니다** — 무엇이 들어가는지는
@@ -43,7 +49,10 @@ const CITY := preload("res://scripts/city.gd")
 
 ## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
 ## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
-@export var growth_k := 1.0
+## 1.0 도 후반부에 건물처럼 큰 물체를 먹으면 한 입에 초거대화된다는 플레이 피드백으로
+## 0.5 로 낮췄다 — 공식의 형태(제곱합 보존)는 그대로라 작은 물체를 잇달아 먹는
+## 초반 체감은 유지되고, 큰 물체 한 입의 기여만 실질적으로 절반이 된다.
+@export var growth_k := 0.5
 ## 지면 반폭. move_to() 가 구멍을 지면 안에 붙잡아 두는 데 쓴다.
 ## main.gd 가 스폰 시 GROUND_HALF 를 넣어 준다 — 값의 진실 원천은 거기 하나다.
 @export var ground_half := 224.0
@@ -342,7 +351,12 @@ func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 	var to_center := Vector3(here.x - rb.global_position.x, 0.0, here.z - rb.global_position.z)
 	if to_center.length_squared() < 1e-6:
 		return
-	rb.apply_central_force(to_center.normalized() * suction * scale * rb.mass)
+	# 회색 지대(외접반경 rb.radius > R, §30) — 물리적으로는 통과 가능해도 눈에는
+	# "구멍보다 큰데 끌려온다"로 읽힌다. 세게 깎아 살짝 밀리는 정도만 남긴다.
+	var s := scale
+	if float(rb.radius) > radius:
+		s *= grey_zone_pull_scale
+	rb.apply_central_force(to_center.normalized() * suction * s * rb.mass)
 
 
 ## 콜라이더의 **월드 공간 꼭대기**(강체 원점 기준 높이). 직립이면 `top_height` 와 같고

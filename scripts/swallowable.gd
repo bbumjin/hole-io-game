@@ -108,16 +108,22 @@ func auto_top_height() -> float:
 ## 구멍 위에는 바닥이 없으므로, 여기서부터는 물체가 스스로 기울고 빠진다.
 ## 구멍 두 개의 감지 범위에 동시에 들어갈 수 있어 **횟수를 센다** — 하나가 떠났다고
 ## 지면을 되돌리면 나머지 구멍 위에서 지면을 딛고 서 있게 된다.
+##
+## **다른 흡입 대상(레이어 2)과의 충돌도 함께 끈다.** 두 오브젝트가 같은 구멍으로
+## 동시에 모여들면 중심(구멍) 쪽으로 서로를 떠밀다 정확히 그 지점에서 맞부딪혀
+## 서로를 밀어내고, 어느 쪽도 기울어 빠지는 지점까지 못 들어가 **크기와 무관하게
+## 영원히 걸린다**(플레이 피드백). 림을 딛는 동안은 서로 겹쳐도 되는 사이로 만들어
+## 이 교착을 없앤다 — 어차피 둘 다 곧 각자 빠지거나(§23) 넘어져 떠날 참이다.
 func enter_rim() -> void:
 	_rim_refs += 1
 	if not falling:
-		collision_mask = (collision_mask & ~1) | 8
+		collision_mask = (collision_mask & ~1 & ~2) | 8
 
 
 func exit_rim() -> void:
 	_rim_refs = maxi(_rim_refs - 1, 0)
 	if _rim_refs == 0 and not falling:
-		collision_mask = (collision_mask & ~8) | 1
+		collision_mask = (collision_mask & ~8) | 1 | 2
 
 
 ## 지면 아래로 확실히 내려갔을 때 hole.gd 가 호출한다(§23 이후로는 **물리가**

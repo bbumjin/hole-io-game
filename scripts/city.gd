@@ -758,7 +758,7 @@ func add_slot(rng: RandomNumberGenerator, pos: Vector3, zone: String, out: Array
 	# scale 은 **지구 배수를 곱한 실효값**을 싣는다. make_prop·지문·판정이 전부
 	# 이 값을 쓰므로, 여기서 확정하지 않으면 도심 고층이 배치만 크고 렌더는 원래 크기가 된다.
 	out.append({ "path": e["path"], "scale": pick["s"], "zone": zone,
-		"pos": pos, "ex": pick["ex"], "yaw": pick["yaw"] })
+		"pos": pos, "ex": pick["ex"], "yaw": pick["yaw"], "kind": e.get("kind", "") })
 
 
 ## 회전(90° 단위)을 반영한 월드 축방향 반extent.
@@ -904,6 +904,12 @@ var occ_max_ext := 0.0
 var occ_max_h := 0.0
 
 
+## 가림 후보로 셀 프롭 종류. **오로지 큰 건물**만 — 유저 피드백: 나무·전봇대·주차된
+## 차·소형 상가/주택처럼 구멍이 곧 삼킬 것들까지 반투명해지면 "먹을 것이 흐릿해진다"
+## 로 읽힌다. `kind` 는 §25 지구제가 쓰던 분류를 그대로 재사용한다("tower" = 대형
+## 건물 전용 — Building*_Large/Big, Bank·Flat·Flat2·Hospital 등. "house"·"shop" 은
+## 소형 건물이라 제외).
+const OCCLUDER_KINDS := ["tower"]
 ## 판정이 픽스처를 세운 뒤에도 부른다 — 그러지 않으면 **정상 구현이 픽스처를 절대
 ## 투명화하지 않아 판정이 자기 자신을 탈락시킨다**(계획 감사가 잡았다).
 func rebuild_occluders() -> void:
@@ -914,6 +920,8 @@ func rebuild_occluders() -> void:
 	for c in get_children():
 		var n := c as Node3D
 		if n == null:
+			continue
+		if not OCCLUDER_KINDS.has(String(n.get_meta("kind", ""))):
 			continue
 		var mi: MeshInstance3D = null
 		for g in n.get_children():
@@ -1072,6 +1080,11 @@ func make_prop(it: Dictionary, idx: int) -> RigidBody3D:
 	# 질량은 부피 비례. pull() 이 mass 를 곱하므로 가속도가 크기와 무관해진다.
 	var vol: float = ab.size.x * ab.size.y * ab.size.z * s * s * s
 	body.mass = clampf(vol * 0.25, 0.5, 400.0)
+	# §37 가림 후보 선별용(occluders.gd). `rebuild_occluders()` 가 이 값으로 "큰 건물"만
+	# 골라낸다 — 메타로 두는 이유는 이 dict("kind")가 배치(§25)에만 쓰이던 것을 재사용해
+	# 별도 목록을 안 만들기 위해서다(값이 어긋난 사본이 생기면 그것만 고치고 아무 일도
+	# 안 일어난다).
+	body.set_meta("kind", String(it.get("kind", "")))
 	return body
 
 

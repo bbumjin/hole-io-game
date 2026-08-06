@@ -237,7 +237,7 @@ func _physics_process(dt: float) -> void:
 ## 아무도 그 차를 다시 인수하지 않는다. 그대로 두면 **주행 차선 한복판에 자유 강체가
 ## 영구히 남고**, 주행차는 매 프레임 순간이동하므로 스윕 없이 그것을 관통한다 —
 ## §27 이 주차 자리를 줄여 가며 없애려던 상황이 판 중반부터 스스로 되살아난다.
-## 낙하하지 않았고 멈춰 섰으면 치운다.
+## 낙하하지 않았고 멈춰 섰으면 정리한다.
 ##
 ## §35: **citizens.gd 와 글자 그대로 같은 게이트를 쓴다.** `tools/probe_orphan_car.gd`
 ## 실측으로 이 파일에 정확히 같은 결함이 재현됐다 — 차가 인계된 뒤 낙하도 삼킴도 없이
@@ -245,6 +245,13 @@ func _physics_process(dt: float) -> void:
 ## (citizens.gd 수정 전과 같은 모양. 관성 때문에 늦게 사라질 뿐 유예가 없는 것은 같다).
 ## 공통 함수로 뽑지 않는다 — 두 파일은 독립된 스윕 리스트(`_cars`/`_people`)를 관리하고,
 ## `ORPHAN_STILL` 상수도 이미 두 파일에 중복돼 있다(이 저장소의 기존 관례).
+##
+## **§0.6: citizens.gd 와 같은 이유로 정리 = 삭제가 아니라 재동결이다** — 구멍이 스치기만
+## 하고 지나간 차가 1초 뒤 화면에서 사라지는 것은 "쓰러진 행인 방치 시 사라짐" 과 같은
+## 뿌리다. 그 자리에서 얼려 두면 도로 위의 정적 장애물로 영구히 남고, 나중에 어떤
+## 구멍이든 다가오면 `hold_awake(true)` 가 다시 풀어 준다. 재동결된 차가 **두 번째로**
+## 스치기만 하면 그 뒤로는 다시 얼지도 `_orphans` 로 돌아오지도 않는다 — 그 시점부터는
+## 이 저장소의 일반 도시 프롭과 같은 처지가 된다(citizens.gd 의 같은 주석 참고).
 var _orphans := []
 const ORPHAN_STILL := 0.35
 const ORPHAN_GRACE := 60
@@ -268,7 +275,8 @@ func sweep_orphans() -> void:
 			rb.still_frames += 1
 			if rb.still_frames >= ORPHAN_GRACE:
 				_orphans.remove_at(n)
-				rb.queue_free()
+				rb.freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
+				rb.freeze = true
 		else:
 			rb.still_frames = 0
 
