@@ -13,3 +13,6 @@ run.err
 
 # Vercel 빌드가 Godot 에디터/템플릿을 풀어놓는 임시 디렉터리 (scripts/vercel-build.sh)
 .godot-vercel/
+
+# 로컬 판정용으로 내려받은 Godot 에디터 바이너리(171M) — 원본은 godotengine.org
+.godot_engine/
