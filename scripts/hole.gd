@@ -47,11 +47,9 @@ const CITY := preload("res://scripts/city.gd")
 ## 둘 다 바닥 −1.8 보다 얕다.
 @export var area_fall_margin := 1.2
 
-## 성장: 면적 보존 법칙. R' = sqrt(R^2 + growth_k * r^2)
-## 1.0 = 삼킨 단면적을 **그대로** 더한다(순수 면적 보존). 4.0 은 체감이 너무 빨랐다.
-## 1.0 도 후반부에 건물처럼 큰 물체를 먹으면 한 입에 초거대화된다는 플레이 피드백으로
-## 0.5 로 낮췄다 — 공식의 형태(제곱합 보존)는 그대로라 작은 물체를 잇달아 먹는
-## 초반 체감은 유지되고, 큰 물체 한 입의 기여만 실질적으로 절반이 된다.
+## 성장: 먹은 물체의 볼륨에 비례. R' = cbrt(R^3 + growth_k * r^3)
+## 반경을 선형이나 면적으로 더할 때보다 작은 먹이가 만드는 증가폭이 완만하다.
+## 큰 건물 한 입의 기여도 낮추도록 원격 변경의 계수 0.5 를 함께 유지한다.
 @export var growth_k := 0.5
 ## 지면 반폭. move_to() 가 구멍을 지면 안에 붙잡아 두는 데 쓴다.
 ## main.gd 가 스폰 시 GROUND_HALF 를 넣어 준다 — 값의 진실 원천은 거기 하나다.
@@ -153,10 +151,11 @@ func set_radius(r: float) -> void:
 		move_to(global_position)
 
 
-## 면적 보존 성장. 삼킨 오브젝트의 단면적이 구멍 단면적에 더해진다.
+## 볼륨 보존 성장. 삼킨 오브젝트의 반경으로 환산한 볼륨을 구멍 볼륨에 더한다.
 func grow_by(obj_radius: float) -> void:
 	var before := radius
-	set_radius(sqrt(radius * radius + growth_k * obj_radius * obj_radius))
+	set_radius(pow(radius * radius * radius
+		+ growth_k * obj_radius * obj_radius * obj_radius, 1.0 / 3.0))
 	grew.emit(before, radius)
 
 
@@ -204,11 +203,11 @@ func can_bite(other: Node3D) -> bool:
 	return d + float(other.radius) * bite_depth <= radius
 
 
-## 다른 구멍을 흡수한다. 면적을 그대로 더한다 — 오브젝트 흡입의 growth_k 는
-## 체감 조정 계수이지만, 구멍끼리는 실제 단면적이므로 보정 없이 R' = sqrt(Ra^2 + Rb^2) 다.
+## 다른 구멍을 흡수한다. 구멍끼리도 같은 볼륨 규칙을 적용하되 보정 계수는 쓰지 않는다.
 func bite(other: Node3D) -> void:
 	var before := radius
-	set_radius(sqrt(radius * radius + float(other.radius) * float(other.radius)))
+	set_radius(pow(radius * radius * radius
+		+ float(other.radius) * float(other.radius) * float(other.radius), 1.0 / 3.0))
 	score += int(other.score)
 	swallowed_count += int(other.swallowed_count)
 	grew.emit(before, radius)

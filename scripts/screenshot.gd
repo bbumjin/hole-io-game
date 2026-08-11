@@ -156,7 +156,7 @@ const SETTLE_MOVE_TOL := 0.01                      # E5: 그동안 허용되는 
 ## 해결은 "프롭을 먹어 자란 양" 과 "AI 를 먹어 자란 양" 을 갈라 묻는 것이지만, 그것은
 ## G7 의 재설계라 §36 의 범위 밖이다.
 ##
-## 비용: `--judge4` 자유 실행이 3배가 된다(데스크톱·브라우저 양쪽). G2(면적 보존)·G5
+## 비용: `--judge4` 자유 실행이 3배가 된다(데스크톱·브라우저 양쪽). G2(볼륨 보존)·G5
 ## (오프그라운드)·G6 은 누적 기회가 3배가 되므로 **더 엄해진다** — 실측 오차 0, offground 0.
 const ARENA_FRAMES := 2700
 const BITE_FRAMES := 20                            # G3·G4: 포식이 성사될 때까지 주는 프레임
@@ -164,7 +164,7 @@ const BITE_FRAMES := 20                            # G3·G4: 포식이 성사될
                                                    #  그사이 오브젝트가 삼켜져 기대값이 흐려진다)
 const BITE_R_BIG := 12.0                           # G3·G4 시나리오의 큰 구멍 반경
 const BITE_R_SMALL := 4.0                          # G3·G4 시나리오의 작은 구멍 반경
-const AREA_TOL := 0.02                             # G2: 면적 보존 허용 오차(R^2 단위)
+const VOLUME_TOL := 0.02                           # G2: 볼륨 보존 허용 오차(R^3 단위)
 const EDGE_SLACK := 0.05                           # G5: 지면 경계 허용 여유
 ## 판정이 유효한 최소 앙각(§8). 이보다 낮게 보이는 구멍은 판정 대상이 아니다.
 const MIN_ELEV := deg_to_rad(30.0)
@@ -180,10 +180,12 @@ const SPEC_BITE_DEPTH := 0.8
 ## 44.7 / 37.2 / 21.9, 그동안 반경은 각각 +0.41 / +0.57 / +0.70 자랐다).
 ## 11 은 그 최솟값 21.9 의 절반이다. 굳은 AI 는 0 이 되므로 변별력은 그대로다.
 const AI_MIN_PATH := 11.0
-## G7: AI 전체가 자유 실행 동안 자라야 할 반경 합의 하한(§27). 실측 0.418 의 절반이다.
+## G7: AI 전체가 자유 실행 동안 자라야 할 반경 합의 하한. 볼륨 성장+k=0.5 실측
+## 0.096 의 절반보다 조금 낮은 0.04 다. 성장 곡선 자체를 완만하게 바꿨으므로 옛 면적
+## 성장 실측 0.418 에서 파생한 0.20 을 유지하면 정상 빌드를 거절한다.
 ## 성장을 개체마다 묻지 않는 대신(배치의 운이 된다) 합에 하한을 둔다 — 하한이 없으면
 ## 다섯 중 넷이 죽어도 하나가 아주 조금 자라면 통과한다.
-const AI_MIN_GROW := 0.2
+const AI_MIN_GROW := 0.04
 const OVERLAP_FRAMES := 300                        # G6 시나리오: 사냥이 성사될 때까지
 
 # --- 4b 게임 루프 판정 ----------------------------------------------------
@@ -2342,8 +2344,8 @@ func judge_player_eaten() -> Dictionary:
 # --- 4a: 아레나 판정 -------------------------------------------------------
 
 ## G1: 남은 모든 구멍이 자기 위치에서 착시를 유지하는가 (카메라를 옮겨 가며 재판정)
-## G2: 총 면적이 보존되는가 — 성장의 출처가 실제로 사라진 것들인가
-## G3: 큰 구멍이 작은 구멍을 삼키고, 면적이 그대로 더해지는가
+## G2: 총 볼륨이 보존되는가 — 성장의 출처가 실제로 사라진 것들인가
+## G3: 큰 구멍이 작은 구멍을 삼키고, 볼륨이 그대로 더해지는가
 ## G4: 작은 구멍은 큰 구멍을 삼키지 못한다 (방향이 뒤집히지 않는가)
 ## G5: 어떤 구멍도 지면 밖으로 나가지 않는가
 func run_judge_4() -> void:
@@ -2395,7 +2397,7 @@ func run_judge_4() -> void:
 	# 시작 상태를 판정기가 따로 기록한다.
 	var r0_sum := 0.0
 	for h in _reg.holes():
-		r0_sum += float(h.radius) * float(h.radius)
+		r0_sum += float(h.radius) * float(h.radius) * float(h.radius)
 	var obj_r := {}
 	for o in get_tree().get_nodes_in_group("swallowable"):
 		obj_r[o.get_instance_id()] = true_radius(o)
@@ -2429,21 +2431,21 @@ func run_judge_4() -> void:
 	var alive: Array = _reg.holes().duplicate()
 	bites = n_before - alive.size()
 
-	# --- G2: 총 면적 보존 ---
+	# --- G2: 총 볼륨 보존 ---
 	# 좌변(현재 반경)만 구현체에서 읽는다. 우변은 판정기가 콜라이더에서 잰 반경과
 	# "인스턴스가 실제로 사라졌는가" 로 독립 계산한다. AI 가 공짜로 자라면 어긋난다.
 	var r1_sum := 0.0
 	for h in alive:
-		r1_sum += float(h.radius) * float(h.radius)
-	var eaten_sq := 0.0
+		r1_sum += float(h.radius) * float(h.radius) * float(h.radius)
+	var eaten_cube := 0.0
 	var eaten_n := 0
 	for id in obj_r:
 		if not instance_from_id(id):
-			eaten_sq += float(obj_r[id]) * float(obj_r[id])
+			eaten_cube += float(obj_r[id]) * float(obj_r[id]) * float(obj_r[id])
 			eaten_n += 1
-	var expect_sum: float = r0_sum + SPEC_GROWTH_K * eaten_sq
-	var g2: bool = absf(r1_sum - expect_sum) <= AREA_TOL * maxf(expect_sum, 1.0)
-	print("JUDGE 4 arena: holes %d->%d bites=%d objects_eaten=%d SumR2 %.4f -> %.4f (expect %.4f)"
+	var expect_sum: float = r0_sum + SPEC_GROWTH_K * eaten_cube
+	var g2: bool = absf(r1_sum - expect_sum) <= VOLUME_TOL * maxf(expect_sum, 1.0)
+	print("JUDGE 4 arena: holes %d->%d bites=%d objects_eaten=%d SumR3 %.4f -> %.4f (expect %.4f)"
 		% [n_before, alive.size(), bites, eaten_n, r0_sum, r1_sum, expect_sum])
 
 	# --- G7: AI 가 실제로 움직이고 자랐는가 ---
@@ -2470,7 +2472,7 @@ func run_judge_4() -> void:
 		print("JUDGE 4 G7 %s: path=%.1f (>= %.0f) dR=%+.3f -> %s"
 			% [h.label, moved, AI_MIN_PATH, grew, pf(okh)])
 	# 하한이 없으면 다섯 중 넷의 성장이 죽어도 하나가 +0.001 만 자라면 통과한다.
-	# 실측 총합 0.418 의 절반을 문턱으로 둔다(다른 계측 파생 상수와 같은 방식).
+	# 볼륨 성장 실측 총합 0.096 에서 여유를 둔 0.04 를 문턱으로 쓴다.
 	g7 = g7 and g7_n > 0 and g7_grew >= AI_MIN_GROW
 	print("JUDGE 4 G7 AI 총 성장=%+.3f (>= %.2f)" % [g7_grew, AI_MIN_GROW])
 
@@ -2522,7 +2524,7 @@ func judge_overlap() -> Dictionary:
 
 
 ## 포식 한 판. eater_i / prey_i 는 레지스트리 인덱스다.
-## 큰 쪽이 작은 쪽을 삼키고, 반경이 정확히 sqrt(Ra^2 + Rb^2) 가 되어야 한다.
+## 큰 쪽이 작은 쪽을 삼키고, 반경이 정확히 cbrt(Ra^3 + Rb^3) 가 되어야 한다.
 ## G3 와 G4 는 두 구멍의 역할만 맞바꾼 같은 시나리오다 — 포식이 크기로 정해지고
 ## 등록 순서나 플레이어 여부로 정해지지 않는다는 것을 그렇게 확인한다.
 func judge_bite(tag: String, eater_i: int, prey_i: int) -> bool:
@@ -2541,7 +2543,8 @@ func judge_bite(tag: String, eater_i: int, prey_i: int) -> bool:
 	prey.move_to(eater.global_position)
 	var eater_id := eater.get_instance_id()
 	var prey_id := prey.get_instance_id()
-	var expect := sqrt(BITE_R_BIG * BITE_R_BIG + BITE_R_SMALL * BITE_R_SMALL)
+	var expect := pow(BITE_R_BIG * BITE_R_BIG * BITE_R_BIG
+		+ BITE_R_SMALL * BITE_R_SMALL * BITE_R_SMALL, 1.0 / 3.0)
 	print("JUDGE 4 %s setup: %s" % [tag, holes_dump()])
 	_main.judging = false
 	for _i in BITE_FRAMES:
@@ -3028,9 +3031,9 @@ func true_radius(o: Node3D) -> float:
 
 # --- 2단계 판정 ------------------------------------------------------------
 
-## C1: 성장이 면적 보존 법칙을 따르는가  R' = sqrt(R^2 + k*r^2)
+## C1: 성장이 볼륨 보존 법칙을 따르는가  R' = cbrt(R^3 + k*r^3)
 ## C2: 거절 규격 — 통과반경이 구멍 반경보다 큰 물체는 삼켜지지도, 가라앉지도 않는다.
-##     그리고 구멍이 자라 그 반경을 넘기면 그때는 삼켜진다(R 2.3 → 5.06).
+##     그리고 구멍이 자라 그 반경을 넘기면 그때는 삼켜진다(R 2.3 → 3.67).
 ##     구간마다 묻는 것이 다르다: 0차는 **반경이 고정된 채** 거절이 성립하는가,
 ##     1차는 자라는 내내 매 프레임 규격이 지켜지는가(gate_breaches), 2차는 열리는가.
 ## C3: 스코어가 삼킨 오브젝트의 기여 합과 일치하는가
@@ -3084,9 +3087,9 @@ func run_judge_2() -> void:
 		gate_violation += await hover(hole, objs, b, HOVER_FRAMES)
 	# **거절 생존은 여기서 묻는다 — 1차가 끝난 뒤가 아니다.**
 	# 0차 내내 반경은 r0 그대로라 "거절 규격이면 안 들어간다" 가 그대로 성립한다.
-	# 1차에서는 구멍이 소형을 먹으며 2.3 → 5.79 로 자라고, 그 경로가 대형 픽스처
+	# 1차에서는 구멍이 소형을 먹으며 2.3 → 3.67 로 자라고, 그 경로가 대형 픽스처
 	# (16,-2)에서 5.4m 까지 접근한다 — 그때 대형이 빠지는 것은 **규격대로다**
-	# (거절 반경 2.83 < 5.79). 옛 기준은 그 소멸을 위반으로 셌고, 그래서 §23 이
+	# (거절 반경 2.83 < 3.67). 옛 기준은 그 소멸을 위반으로 셌고, 그래서 §23 이
 	# 크기 게이트를 걷어낸 뒤로는 픽스처 배치라는 우연에 기대고 있었다.
 	# 1차 구간의 규격 준수는 gate_breaches 가 **매 물리 프레임** 본다 — 그쪽이
 	# 반경과 물체를 그때그때 비교하므로 자라는 도중에도 정확하다.
@@ -3098,13 +3101,13 @@ func run_judge_2() -> void:
 	gate_violation += await suck(hole, objs, small)
 
 	var r1: float = hole.radius
-	var sum_sq := 0.0
+	var sum_cube := 0.0
 	var expect_score := 0
 	for id in r_of:
 		if not instance_from_id(id):
-			sum_sq += float(r_of[id]) * float(r_of[id])
+			sum_cube += float(r_of[id]) * float(r_of[id]) * float(r_of[id])
 			expect_score += int(score_of[id])
-	var expect_r1: float = sqrt(r0 * r0 + SPEC_GROWTH_K * sum_sq)
+	var expect_r1: float = pow(r0 * r0 * r0 + SPEC_GROWTH_K * sum_cube, 1.0 / 3.0)
 	var c1 := absf(r1 - expect_r1) < 0.005
 	var c3: bool = _main.score == expect_score
 
@@ -5378,12 +5381,9 @@ func judge_hud_font() -> bool:
 ## 시정수를 바꾼 빌드가 자기 값끼리 일치해 통과한다 — 판정기가 따로 든다.
 const SPEC_CAM_OFFSET := Vector3(0.0, 22.0, 26.0)
 const SPEC_CAM_BASE_R := 5.0
-## §0.6: 14.0 → 11.0 (camera_rig.gd min_height 와 동기 — "시작이 더 zoom in 되어야
-## 한다"는 유저 피드백). 반경 1.5 의 자연값(6.6)까지는 못 낮춘다 — 카메라가 그보다
-## 낮아지면 유한 지면(448×448)의 가장자리를 화면 위쪽 시선이 못 넘어서 배경(하늘)이
-## 사라지고(judge1 bg), `probe_blocks()`의 블록 탐색도 후보를 못 찾는다(judge3 D1).
-## 실측 경계는 10.0(탈락)~10.1(통과) — 여유를 두고 11.0 로 낮췄다(camera_rig.gd 참고).
-const SPEC_CAM_MIN_H := 11.0
+## 시작 배율 0.5 는 base_offset.y 22 기준 높이 11.0 — 실측 안전 하한과 같다.
+const SPEC_CAM_START_R := 1.5
+const SPEC_CAM_START_K := 0.5
 const SPEC_CAM_SMOOTH := 6.0
 ## 합성 dt. 판정은 프레임을 실제로 넘기되 **시간은 이 값으로 센다.** 브라우저 rAF 의
 ## 실측 dt 를 쓰면 저프레임 기기에서 목표점의 계단(ZOH) 간격이 커져 정상 빌드가
@@ -5403,7 +5403,7 @@ const CAM_ROT_TOTAL_DEG := 0.01
 const CAM_RECEDE_MAX := 16.0
 const CAM_SETTLE_SEC := 2.5      # V2: 성장 후 수렴을 묻는 시점(초)
 const CAM_SETTLE_TOL := 1.0      # V2: 그때 목표점과의 허용 거리(m) — 수렴 하한
-const CAM_GROW_OBJ_R := 5.0      # V2: 성장 이벤트로 삼키는 물체 반경
+const CAM_GROW_OBJ_R := 3.0      # V2: 초기 줌 곡선 안에서 삼키는 합성 물체 반경
 const CAM_STEP_D := 10.0         # V4: 계단 크기(m)
 const CAM_STEP_SEC := 0.5        # V4: 계단 후 관찰 시간(초)
 const CAM_STEP_TOL := 0.05       # V4: 잔차 허용 오차(m)
@@ -5424,7 +5424,12 @@ const CAM_SCRIPT := [
 
 ## 규격 오프셋 배율. camera_rig.follow 의 k 와 같은 식이지만 **규격 상수로만** 계산한다.
 func cam_spec_k(r: float) -> float:
-	return maxf(r / SPEC_CAM_BASE_R, SPEC_CAM_MIN_H / SPEC_CAM_OFFSET.y)
+	if r <= SPEC_CAM_START_R:
+		return SPEC_CAM_START_K
+	if r >= SPEC_CAM_BASE_R:
+		return r / SPEC_CAM_BASE_R
+	var t := (r - SPEC_CAM_START_R) / (SPEC_CAM_BASE_R - SPEC_CAM_START_R)
+	return lerpf(SPEC_CAM_START_K, 1.0, t)
 
 
 ## §29 V1~V4. 판정기가 게임 루프의 카메라 호출을 재현한다 — 판정 모드에서는
@@ -5526,8 +5531,9 @@ func run_judge_10() -> void:
 
 	# --- V2: 성장 후퇴 — 상한과 수렴 -------------------------------------------
 	hole.grow_by(CAM_GROW_OBJ_R)
-	var spec_r1 := sqrt(SPEC_START_R * SPEC_START_R
-		+ SPEC_GROWTH_K * CAM_GROW_OBJ_R * CAM_GROW_OBJ_R)
+	var spec_r1 := pow(SPEC_START_R * SPEC_START_R * SPEC_START_R
+		+ SPEC_GROWTH_K * CAM_GROW_OBJ_R * CAM_GROW_OBJ_R * CAM_GROW_OBJ_R,
+		1.0 / 3.0)
 	# 전제: 성장식이 규격과 일치. 성장식 자체는 C 계열의 몫이지만, 어긋나면
 	# V2 의 기대 종점이 무의미해지므로 전제로 못 박는다.
 	var pre_g: bool = absf(float(hole.radius) - spec_r1) < 1e-4
@@ -5585,7 +5591,7 @@ const OCC_TALL := 1.6                # (a) 높이 = 그 지점 시선 높이 × 
 const OCC_TALL_HIGH := 1.2           # (c)(d) 높이 = 카메라 높이 × 이것
 const OCC_PAD := 2.0                 # 픽스처 반폭 = r + 이것
 const OCC_DT := 1.0 / 60.0
-## O4 의 세 반경: 시작 반경 · probe_occlude 의 표본값 · min_height clamp 를 확실히 벗어난 값.
+## O4 의 세 반경: 시작 반경 · 초기 줌 곡선을 벗어난 표본값 · 큰 반경 표본값.
 const OCC_RADII := [1.5, 6.73, 20.0]
 const OCC_FIX_COLOR := Color(1, 0, 0)
 
@@ -6141,5 +6147,3 @@ func occ_hysteresis(hole: Node3D, city: Node3D, r: float) -> bool:
 		% [res, OCC_HYST_RES_MAX, pf(res_ok), pf(hyst_ok), pf(ok)])
 	await occ_drop_fixture(city, fix)
 	return ok
-
-
