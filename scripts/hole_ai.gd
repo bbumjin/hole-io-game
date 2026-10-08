@@ -40,19 +40,33 @@ var _tick := 0
 var _stuck_ref := Vector3.ZERO
 ## 인스턴스 ID -> 이 틱까지 목표에서 제외
 var _banned := {}
+## §39: 재선정 위상. 구멍 다섯이 `_tick` 을 0 에서 함께 세면 **같은 물리 프레임에 다섯 번**
+## 목표를 고른다 — 한 번 2.1 ms 라 그 프레임이 23 ms 로 튀었다(실측, 초당 3회). 시드에서
+## 위상을 뽑아 서로 다른 프레임에 흩는다(시드 1000+i → 0,7,14,1,8).
+var _phase := 0
+## 지금 목표의 인스턴스 ID (0 = 목표 없음). "목표를 **잃었다**" 와 "원래 **없었다**" 를
+## 가르는 데 쓴다 — 없는 상태에서 매 프레임 다시 고르면 2.1 ms 가 매 프레임 든다(§39 감사).
+var _target_id := 0
+var _city: Node = null
 
 
 func _ready() -> void:
 	_hole = get_parent()
 	_reg = get_node("/root/HoleRegistry")
 	_rng.seed = ai_seed
+	_phase = posmod(ai_seed * 7, retarget_frames)
 	_wander = pick_wander()
+	var arena := _hole.get_parent()
+	_city = arena.get_node_or_null("City") if arena != null else null
+	if _city != null and not _city.has_method("food_near"):
+		_city = null
 
 
 func _physics_process(_dt: float) -> void:
 	if _hole == null or not is_instance_valid(_hole):
 		return
 	_tick += 1
+	var force := false
 	# 무진전이면 배회 지점을 다시 뽑고 지금 목표를 한동안 제외한다(§25).
 	if _tick % stuck_frames == 0:
 		if _hole.global_position.distance_to(_stuck_ref) < stuck_dist:
@@ -60,9 +74,14 @@ func _physics_process(_dt: float) -> void:
 			if is_instance_valid(_target):
 				_banned[_target.get_instance_id()] = _tick + ban_frames
 			_target = null
+			force = true
 		_stuck_ref = _hole.global_position
-	if _tick % retarget_frames == 0 or not is_instance_valid(_target):
+	# 주기가 됐거나, 쫓던 목표가 **방금 사라졌으면**(삼켜짐) 다시 고른다. 목표가 원래 없던
+	# 상태는 주기를 기다린다 — 그동안은 배회 지점으로 간다.
+	var lost := _target_id != 0 and not is_instance_valid(_target)
+	if force or lost or (_tick + _phase) % retarget_frames == 0:
 		_target = choose_target()
+		_target_id = _target.get_instance_id() if _target != null else 0
 	var goal := _wander
 	if is_instance_valid(_target):
 		goal = _target.global_position
@@ -114,17 +133,30 @@ func choose_target() -> Node3D:
 			best = h
 	if best != null:
 		return best
-	for o in get_tree().get_nodes_in_group("swallowable"):
-		if not is_instance_valid(o) or o.falling or is_banned(o):
+	# §39: 후보 = 시야 안 버킷의 정적 도시 프롭 + 움직이는 것들(`swallowable_dyn`).
+	# 도시가 없으면(판정 픽스처만 있는 씬 등) 옛 전수 경로로 간다.
+	var here := _hole.global_position
+	var cands: Array
+	if _city != null:
+		cands = _city.food_near(here, sight)
+		cands.append_array(get_tree().get_nodes_in_group("swallowable_dyn"))
+	else:
+		cands = get_tree().get_nodes_in_group("swallowable")
+	for o in cands:
+		if not is_instance_valid(o):
+			continue
+		# 거리를 **먼저** 본다 — 후보 대부분이 시야 밖이고, 스크립트 속성 읽기보다 싸다.
+		var d2: float = flat_dist(o.global_position, here)
+		if d2 >= sight or d2 >= bd:
+			continue
+		if o.falling or is_banned(o):
 			continue
 		# 척도는 좁은 쪽 반폭이다(§23) — 외접반경으로 고르면 원 안에 들어가는
 		# 길쭉한 물체를 AI 가 통째로 무시한다.
 		if not _hole.can_swallow(float(o.fit_radius)):
 			continue
-		var d2: float = flat_dist(o.global_position, _hole.global_position)
-		if d2 < sight and d2 < bd:
-			bd = d2
-			best = o
+		bd = d2
+		best = o
 	return best
 
 

@@ -32,6 +32,11 @@ var consumed := false
 ## 밑동 0.6m 만 잠기고도 충돌을 잃어 그대로 통과했다).
 var top_height := 0.0
 
+## §39: 도시의 정적 먹이 색인(city.gd `_food_bucket`)에 들어 있는가. City.build 가
+## `_ready` 전에 세운다. 색인 밖의 것(차·시민·판정 픽스처)은 `_ready` 에서, 색인된 것은
+## 풀려나는 순간(hold_awake) `swallowable_dyn` 그룹에 든다 — AI 는 그 그룹을 따로 훑는다.
+var indexed := false
+
 var _can_sleep_default := true
 ## 이 물체를 감지 범위에 두고 있는 구멍의 수(§23).
 var _rim_refs := 0
@@ -51,6 +56,8 @@ func _ready() -> void:
 	if start_frozen:
 		freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 		freeze = true
+	if not indexed:
+		add_to_group("swallowable_dyn")
 
 
 ## 셰이프가 여럿이면 각각의 XZ 외접반경 중 최대값을 쓴다(보수적 = 안전한 방향).
@@ -145,6 +152,7 @@ func begin_fall() -> void:
 func hold_awake(on: bool) -> void:
 	if on and freeze:
 		freeze = false
+		add_to_group("swallowable_dyn")    # §39: 이제 움직인다 — 정적 색인 밖에서도 보이게
 	can_sleep = _can_sleep_default and not on
 	if on:
 		sleeping = false

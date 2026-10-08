@@ -129,8 +129,14 @@ float aa_band(float u, float edge) {
 // 중심선 인덱스 k 가 대로인가 (1.0 = 대로). GLSL 의 mod 는 음수 인덱스에서도
 // [0, n) 을 돌려주므로 k = -3, -6 도 0 이 되어 GDScript 의 posmod 와 **같은 집합**
 // {…, -6, -3, 0, 3, 6, …} 을 만든다. 이 일치가 규격의 전제다.
+//
+// §39: `mod(k, 3.0)` 를 직접 쓰면 **GPU 에 따라 k=3 에서 0 이 아니라 3 이 나온다** —
+// mod 가 `k - y*floor(k*(1/y))` 로 컴파일되고 3*(1/3) = 0.99999994 라 floor 가 0 이 된다
+// (AMD Radeon 890M 실측: k=±3·±6 대로가 전부 일반 도로로 그려졌고 judge3 D·judge7 Z4·Z8 이
+// 잡았다. 모바일 GPU 도 같은 축약을 한다). 반 칸 밀어 판정점을 구간 한가운데(0.5)에 둔다 —
+// 오차가 ±0.5 미만이면 어느 GPU 에서도 같은 집합이다.
 float boulevard(float k) {
-	return 1.0 - step(0.5, mod(k, boul_every));
+	return 1.0 - step(1.0, mod(k + 0.5, boul_every));
 }
 
 void fragment() {

@@ -708,8 +708,14 @@ float aa_band(float u, float edge) {
 // 중심선 인덱스 k 가 대로인가 (1.0 = 대로). GLSL 의 mod 는 음수 인덱스에서도
 // [0, n) 을 돌려주므로 k = -3, -6 도 0 이 되어 GDScript 의 posmod 와 **같은 집합**
 // {…, -6, -3, 0, 3, 6, …} 을 만든다. 이 일치가 규격의 전제다.
+//
+// §39: `mod(k, 3.0)` 를 직접 쓰면 **GPU 에 따라 k=3 에서 0 이 아니라 3 이 나온다** —
+// mod 가 `k - y*floor(k*(1/y))` 로 컴파일되고 3*(1/3) = 0.99999994 라 floor 가 0 이 된다
+// (AMD Radeon 890M 실측: k=±3·±6 대로가 전부 일반 도로로 그려졌고 judge3 D·judge7 Z4·Z8 이
+// 잡았다. 모바일 GPU 도 같은 축약을 한다). 반 칸 밀어 판정점을 구간 한가운데(0.5)에 둔다 —
+// 오차가 ±0.5 미만이면 어느 GPU 에서도 같은 집합이다.
 float boulevard(float k) {
-	return 1.0 - step(0.5, mod(k, boul_every));
+	return 1.0 - step(1.0, mod(k + 0.5, boul_every));
 }
 
 void fragment() {
@@ -1320,6 +1326,11 @@ var consumed := false
 ## 밑동 0.6m 만 잠기고도 충돌을 잃어 그대로 통과했다).
 var top_height := 0.0
 
+## §39: 도시의 정적 먹이 색인(city.gd `_food_bucket`)에 들어 있는가. City.build 가
+## `_ready` 전에 세운다. 색인 밖의 것(차·시민·판정 픽스처)은 `_ready` 에서, 색인된 것은
+## 풀려나는 순간(hold_awake) `swallowable_dyn` 그룹에 든다 — AI 는 그 그룹을 따로 훑는다.
+var indexed := false
+
 var _can_sleep_default := true
 ## 이 물체를 감지 범위에 두고 있는 구멍의 수(§23).
 var _rim_refs := 0
@@ -1339,6 +1350,8 @@ func _ready() -> void:
 	if start_frozen:
 		freeze_mode = RigidBody3D.FREEZE_MODE_STATIC
 		freeze = true
+	if not indexed:
+		add_to_group("swallowable_dyn")
 
 
 ## 셰이프가 여럿이면 각각의 XZ 외접반경 중 최대값을 쓴다(보수적 = 안전한 방향).
@@ -1433,6 +1446,7 @@ func begin_fall() -> void:
 func hold_awake(on: bool) -> void:
 	if on and freeze:
 		freeze = false
+		add_to_group("swallowable_dyn")    # §39: 이제 움직인다 — 정적 색인 밖에서도 보이게
 	can_sleep = _can_sleep_default and not on
 	if on:
 		sleeping = false
@@ -9658,8 +9672,51 @@ func mesh_of(path: String) -> Mesh:
 ## (레이어 2, "swallowable" 그룹, swallowable.gd)을 따른다 — 도시가 곧 먹이다.
 func build(items: Array) -> void:
 	for i in items.size():
-		add_child(make_prop(items[i], i))
+		var p := make_prop(items[i], i)
+		p.indexed = true          # §39: 정적 먹이 색인 소속 — `_ready` 전에 세워야 한다
+		add_child(p)
 	rebuild_occluders()
+	rebuild_food()
+
+
+# --- §39 먹이 색인 (AI 목표 선정용) ------------------------------------------
+## AI 가 목표를 고를 때 `get_nodes_in_group("swallowable")` 로 2400개를 전수로 훑으면
+## 한 번에 2.1 ms, 다섯 구멍이 같은 틱에 몰려 **프레임당 23 ms 스파이크**가 났다(실측).
+## 도시 프롭은 얼어 있는 동안 **움직이지 않으므로** 32m 격자로 버킷팅해 시야 안만 본다.
+##
+## **움직이는 것은 색인하지 않는다.** 차·시민도 얼어 있지만 스크립트가 매 프레임 옮긴다
+## (traffic.gd·citizens.gd). 그것들과 풀려난 프롭은 `DYN_GROUP` 에 들어 있고 AI 가 그
+## 그룹을 따로 훑는다(위치를 그때그때 읽는다). 풀려난 도시 프롭은 **두 곳 모두**에 남지만
+## 거리는 항상 실제 위치로 재므로 중복은 무해하고, 옛 버킷 밖으로 밀려난 것도 그룹이 잡는다.
+## 버킷은 묘비를 정리하지 않는다 — `is_instance_valid` 로 건너뛰고 build() 가 전면 재구축한다.
+const DYN_GROUP := "swallowable_dyn"
+var _food_bucket := {}                    # Vector2i -> Array
+
+
+func rebuild_food() -> void:
+	_food_bucket.clear()
+	for c in get_children():
+		if not (c is RigidBody3D) or not bool(c.get("indexed")):
+			continue
+		var p: Vector3 = (c as Node3D).position
+		var key := Vector2i(floori(p.x / PITCH), floori(p.z / PITCH))
+		if not _food_bucket.has(key):
+			_food_bucket[key] = []
+		(_food_bucket[key] as Array).append(c)
+
+
+## 색인된 도시 프롭 중 `center` 에서 XZ 반경 `r` 정사각형 안의 버킷에 든 것(상위집합).
+## 거리 판정은 부르는 쪽이 실제 위치로 한다.
+func food_near(center: Vector3, r: float) -> Array:
+	var out := []
+	var k0 := Vector2i(floori((center.x - r) / PITCH), floori((center.z - r) / PITCH))
+	var k1 := Vector2i(floori((center.x + r) / PITCH), floori((center.z + r) / PITCH))
+	for kx in range(k0.x, k1.x + 1):
+		for kz in range(k0.y, k1.y + 1):
+			var b = _food_bucket.get(Vector2i(kx, kz))
+			if b != null:
+				out.append_array(b)
+	return out
 
 
 # --- §37 가림 후보 색인 -------------------------------------------------------
@@ -10011,19 +10068,33 @@ var _tick := 0
 var _stuck_ref := Vector3.ZERO
 ## 인스턴스 ID -> 이 틱까지 목표에서 제외
 var _banned := {}
+## §39: 재선정 위상. 구멍 다섯이 `_tick` 을 0 에서 함께 세면 **같은 물리 프레임에 다섯 번**
+## 목표를 고른다 — 한 번 2.1 ms 라 그 프레임이 23 ms 로 튀었다(실측, 초당 3회). 시드에서
+## 위상을 뽑아 서로 다른 프레임에 흩는다(시드 1000+i → 0,7,14,1,8).
+var _phase := 0
+## 지금 목표의 인스턴스 ID (0 = 목표 없음). "목표를 **잃었다**" 와 "원래 **없었다**" 를
+## 가르는 데 쓴다 — 없는 상태에서 매 프레임 다시 고르면 2.1 ms 가 매 프레임 든다(§39 감사).
+var _target_id := 0
+var _city: Node = null
 
 
 func _ready() -> void:
 	_hole = get_parent()
 	_reg = get_node("/root/HoleRegistry")
 	_rng.seed = ai_seed
+	_phase = posmod(ai_seed * 7, retarget_frames)
 	_wander = pick_wander()
+	var arena := _hole.get_parent()
+	_city = arena.get_node_or_null("City") if arena != null else null
+	if _city != null and not _city.has_method("food_near"):
+		_city = null
 
 
 func _physics_process(_dt: float) -> void:
 	if _hole == null or not is_instance_valid(_hole):
 		return
 	_tick += 1
+	var force := false
 	# 무진전이면 배회 지점을 다시 뽑고 지금 목표를 한동안 제외한다(§25).
 	if _tick % stuck_frames == 0:
 		if _hole.global_position.distance_to(_stuck_ref) < stuck_dist:
@@ -10031,9 +10102,14 @@ func _physics_process(_dt: float) -> void:
 			if is_instance_valid(_target):
 				_banned[_target.get_instance_id()] = _tick + ban_frames
 			_target = null
+			force = true
 		_stuck_ref = _hole.global_position
-	if _tick % retarget_frames == 0 or not is_instance_valid(_target):
+	# 주기가 됐거나, 쫓던 목표가 **방금 사라졌으면**(삼켜짐) 다시 고른다. 목표가 원래 없던
+	# 상태는 주기를 기다린다 — 그동안은 배회 지점으로 간다.
+	var lost := _target_id != 0 and not is_instance_valid(_target)
+	if force or lost or (_tick + _phase) % retarget_frames == 0:
 		_target = choose_target()
+		_target_id = _target.get_instance_id() if _target != null else 0
 	var goal := _wander
 	if is_instance_valid(_target):
 		goal = _target.global_position
@@ -10085,17 +10161,30 @@ func choose_target() -> Node3D:
 			best = h
 	if best != null:
 		return best
-	for o in get_tree().get_nodes_in_group("swallowable"):
-		if not is_instance_valid(o) or o.falling or is_banned(o):
+	# §39: 후보 = 시야 안 버킷의 정적 도시 프롭 + 움직이는 것들(`swallowable_dyn`).
+	# 도시가 없으면(판정 픽스처만 있는 씬 등) 옛 전수 경로로 간다.
+	var here := _hole.global_position
+	var cands: Array
+	if _city != null:
+		cands = _city.food_near(here, sight)
+		cands.append_array(get_tree().get_nodes_in_group("swallowable_dyn"))
+	else:
+		cands = get_tree().get_nodes_in_group("swallowable")
+	for o in cands:
+		if not is_instance_valid(o):
+			continue
+		# 거리를 **먼저** 본다 — 후보 대부분이 시야 밖이고, 스크립트 속성 읽기보다 싸다.
+		var d2: float = flat_dist(o.global_position, here)
+		if d2 >= sight or d2 >= bd:
+			continue
+		if o.falling or is_banned(o):
 			continue
 		# 척도는 좁은 쪽 반폭이다(§23) — 외접반경으로 고르면 원 안에 들어가는
 		# 길쭉한 물체를 AI 가 통째로 무시한다.
 		if not _hole.can_swallow(float(o.fit_radius)):
 			continue
-		var d2: float = flat_dist(o.global_position, _hole.global_position)
-		if d2 < sight and d2 < bd:
-			bd = d2
-			best = o
+		bd = d2
+		best = o
 	return best
 
 

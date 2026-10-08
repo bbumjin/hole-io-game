@@ -879,8 +879,51 @@ func mesh_of(path: String) -> Mesh:
 ## (레이어 2, "swallowable" 그룹, swallowable.gd)을 따른다 — 도시가 곧 먹이다.
 func build(items: Array) -> void:
 	for i in items.size():
-		add_child(make_prop(items[i], i))
+		var p := make_prop(items[i], i)
+		p.indexed = true          # §39: 정적 먹이 색인 소속 — `_ready` 전에 세워야 한다
+		add_child(p)
 	rebuild_occluders()
+	rebuild_food()
+
+
+# --- §39 먹이 색인 (AI 목표 선정용) ------------------------------------------
+## AI 가 목표를 고를 때 `get_nodes_in_group("swallowable")` 로 2400개를 전수로 훑으면
+## 한 번에 2.1 ms, 다섯 구멍이 같은 틱에 몰려 **프레임당 23 ms 스파이크**가 났다(실측).
+## 도시 프롭은 얼어 있는 동안 **움직이지 않으므로** 32m 격자로 버킷팅해 시야 안만 본다.
+##
+## **움직이는 것은 색인하지 않는다.** 차·시민도 얼어 있지만 스크립트가 매 프레임 옮긴다
+## (traffic.gd·citizens.gd). 그것들과 풀려난 프롭은 `DYN_GROUP` 에 들어 있고 AI 가 그
+## 그룹을 따로 훑는다(위치를 그때그때 읽는다). 풀려난 도시 프롭은 **두 곳 모두**에 남지만
+## 거리는 항상 실제 위치로 재므로 중복은 무해하고, 옛 버킷 밖으로 밀려난 것도 그룹이 잡는다.
+## 버킷은 묘비를 정리하지 않는다 — `is_instance_valid` 로 건너뛰고 build() 가 전면 재구축한다.
+const DYN_GROUP := "swallowable_dyn"
+var _food_bucket := {}                    # Vector2i -> Array
+
+
+func rebuild_food() -> void:
+	_food_bucket.clear()
+	for c in get_children():
+		if not (c is RigidBody3D) or not bool(c.get("indexed")):
+			continue
+		var p: Vector3 = (c as Node3D).position
+		var key := Vector2i(floori(p.x / PITCH), floori(p.z / PITCH))
+		if not _food_bucket.has(key):
+			_food_bucket[key] = []
+		(_food_bucket[key] as Array).append(c)
+
+
+## 색인된 도시 프롭 중 `center` 에서 XZ 반경 `r` 정사각형 안의 버킷에 든 것(상위집합).
+## 거리 판정은 부르는 쪽이 실제 위치로 한다.
+func food_near(center: Vector3, r: float) -> Array:
+	var out := []
+	var k0 := Vector2i(floori((center.x - r) / PITCH), floori((center.z - r) / PITCH))
+	var k1 := Vector2i(floori((center.x + r) / PITCH), floori((center.z + r) / PITCH))
+	for kx in range(k0.x, k1.x + 1):
+		for kz in range(k0.y, k1.y + 1):
+			var b = _food_bucket.get(Vector2i(kx, kz))
+			if b != null:
+				out.append_array(b)
+	return out
 
 
 # --- §37 가림 후보 색인 -------------------------------------------------------
