@@ -1584,6 +1584,7 @@ const GROUND_HALF := 224.0           # PlaneMesh size 448 의 절반 (14x14 도�
 const HOLE_SCENE := preload("res://scenes/hole.tscn")
 const HOLE_AI := preload("res://scripts/hole_ai.gd")
 const CITY := preload("res://scripts/city.gd")
+const PERF_BENCH := preload("res://scripts/perf_bench.gd")
 
 ## 4a: 경쟁 구멍 수. 0 이면 1단계~3단계와 같은 단독 구멍 씬이다.
 @export var ai_count := 5
@@ -1718,6 +1719,30 @@ func _ready() -> void:
 		set_ai(false)
 		set_holes_physics(false)
 	update_hud()
+	# §39 성능 계측. 판정 모드에서는 붙이지 않는다 — 판정 화면에 글자가 찍히면 안 된다.
+	var pf := perf_flag()
+	if not judging and pf != "":
+		var pb: CanvasLayer = PERF_BENCH.new()
+		pb.name = "PerfBench"
+		pb.bench = pf == "bench"
+		add_child(pb)
+
+
+## `?perf=1` · `?perf=bench`(웹) 또는 `--perf` · `--perf-bench`(데스크톱). 없으면 "".
+## 판정의 `judge_flag()` 와 같은 모양이다 — 브라우저에는 명령줄이 없어 쿼리로 받는다.
+static func perf_flag() -> String:
+	var args := OS.get_cmdline_user_args()
+	if "--perf-bench" in args:
+		return "bench"
+	if "--perf" in args:
+		return "hud"
+	if OS.has_feature("web"):
+		var q := str(JavaScriptBridge.eval("window.location.search", true))
+		for pair in q.trim_prefix("?").split("&", false):
+			var kv := pair.split("=", true, 1)
+			if kv.size() == 2 and kv[0] == "perf":
+				return "bench" if kv[1] == "bench" else "hud"
+	return ""
 
 
 ## 모든 구멍의 물리를 켜고 끈다. **AI 조종자만 멈추는 것으로는 부족하다** —
