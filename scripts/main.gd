@@ -116,9 +116,13 @@ func _ready() -> void:
 	# 아래 첫 `follow(snap)` 이 이미 가림을 확정하므로, 늦게 물리면 첫 프레임이 가려진 채 뜬다.
 	# 없으면 `update()` 가 즉시 반환해 **기능 전체가 에러 없이 죽는다** — 이 저장소가 가장
 	# 경계하는 결함 모양이라 침묵시키지 않는다.
+	cam.sun = get_node_or_null("Sun")        # §39: 그림자 거리를 줌에 맞춘다
+	if cam.sun == null:
+		push_error("§39: Sun 노드가 없다 — 그림자 거리 조정이 꺼진다")
 	cam.occluders.city = get_node_or_null("City")
 	if cam.occluders.city == null:
 		push_error("§37: City 노드가 없다 — 가림 투명화가 통째로 꺼진다")
+	cam.occluders.prewarm()        # §39: 유령 셰이더를 로드 때 컴파일해 둔다
 	if arena:
 		spawn_ai()
 	cam.follow(hole, hole.radius, true)
@@ -162,7 +166,11 @@ static func perf_flag() -> String:
 		for pair in q.trim_prefix("?").split("&", false):
 			var kv := pair.split("=", true, 1)
 			if kv.size() == 2 and kv[0] == "perf":
-				return "bench" if kv[1] == "bench" else "hud"
+				match kv[1]:
+					"bench":
+						return "bench"
+					"1", "hud", "true":
+						return "hud"
 	return ""
 
 
@@ -318,11 +326,10 @@ func restart() -> void:
 	if arena:
 		spawn_ai()
 
+	# §39 P2-7: 통째로 다시 짓지 않는다 — 건드려진 프롭만 계획의 자리에 복원한다(city.restore).
 	var city := get_node_or_null("City")
 	if city != null:
-		for c in city.get_children():
-			c.free()
-		city.build(city.plan(city.city_seed))
+		city.restore(city.planned(city.city_seed))
 
 	var box := get_node_or_null("Swallowables")
 	if box != null:
@@ -346,6 +353,7 @@ func restart() -> void:
 	winner_score = 0
 	over_reason = ""
 	hud_over.visible = false
+	cam.occluders.reset()          # §39: 남아 있던 유령 상태를 걷는다 — 새 판과 같은 출발점
 	cam.follow(hole, hole.radius, true)
 	update_hud()
 

@@ -361,13 +361,25 @@ func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 ## 콜라이더의 **월드 공간 꼭대기**(강체 원점 기준 높이). 직립이면 `top_height` 와 같고
 ## 누우면 낮아진다 — §23 의 삼킴 문턱이 회전을 알아야 하는 이유는 `_on_body_exited` 의
 ## 주석에 적었다. 셰이프가 여럿이면 가장 높은 것을 쓴다(보수적 = 안전한 방향).
+##
+## §39: 후보마다 **매 물리 프레임** 부른다. 셰이프 목록과 로컬 AABB 는 바뀌지 않으므로
+## 처음 한 번 강체의 메타에 [셰이프 트랜스폼, AABB] 쌍으로 적어 두고 그 뒤로는 곱셈만 한다
+## (`find_children` 와 `get_debug_mesh` 를 매 프레임 돌리지 않는다).
 func world_top(rb: Node3D) -> float:
+	var boxes: Array
+	if rb.has_meta("_shape_boxes"):
+		boxes = rb.get_meta("_shape_boxes")
+	else:
+		boxes = []
+		for c in rb.find_children("", "CollisionShape3D", false, false):
+			var col := c as CollisionShape3D
+			if col.shape == null:
+				continue
+			boxes.append([col.transform, col.shape.get_debug_mesh().get_aabb()])
+		rb.set_meta("_shape_boxes", boxes)
 	var t := 0.0
-	for c in rb.find_children("", "CollisionShape3D", false, false):
-		var col := c as CollisionShape3D
-		if col.shape == null:
-			continue
-		var ab: AABB = (rb.global_transform * col.transform) \
-			* col.shape.get_debug_mesh().get_aabb()
+	var gt := rb.global_transform
+	for b in boxes:
+		var ab: AABB = (gt * (b[0] as Transform3D)) * (b[1] as AABB)
 		t = maxf(t, ab.end.y - rb.global_position.y)
 	return t

@@ -321,6 +321,13 @@ const PERF_SPOTS := {
 }
 const PERF_FRAMES := 300
 const FRAME_BUDGET_MS := 16.67                     # 60fps
+## §39 F3: 정적 지점(dense·boul)의 드로우콜 상한 — **데스크톱 Compatibility(opengl3)에서만** 건다.
+## fps 는 브라우저에서 rAF 에 묶여 게이트가 못 되지만(§24) 드로우콜은 모니터와 무관한 결정적
+## 수치다. 웹과 같은 백엔드라 웹 부담의 대리 지표가 된다(Chrome 벤치 경로 평균 2335 대 데스크톱
+## opengl3 2326 — 같다). 실측: 구운 메시 dense 1321 · boul 1152 / 원본 메시 6490 · 5620.
+## 2000 은 구운 쪽의 약 1.5배 — **굽기가 조용히 빠지면(원본 폴백) 여기서 탈락한다.**
+## Forward+ 는 콜 수 체계가 달라(dense 538) 걸지 않는다.
+const SPEC_DRAWS_GL_MAX := 2000
 ## §37 [dynamic-cam]: 도심을 가로지르는 주행. 플레이어 속도 14 m/s 를 그대로 쓴다.
 const PERF_CAM_SPEED := 14.0
 const PERF_CAM_DT := 1.0 / 60.0
@@ -2253,8 +2260,44 @@ func run_judge_5() -> void:
 	# T5 는 **판정 모드의** 재시작을 본다. §20 이후 픽스처 8개는 판정 모드에서만
 	# 스폰되므로, 앞의 시나리오가 내려 둔 플래그를 여기서 다시 올려야 한다.
 	_main.judging = true
+	# §39 P2-7: 재시작이 도시를 통째로 다시 짓지 않고 **건드려진 것만** 복원한다. 개수만 보면
+	# "움직인 프롭을 그 자리에 둔 채 개수만 맞춘" 복원이 통과한다. 그래서 판정이 직접 세 가지를
+	# 망가뜨린다 — 하나 삭제 · 하나 풀어서 옮김 · 계획 밖 노드 하나 추가 — 그리고 재시작 뒤
+	# **모든 자식이 판정기 자신이 부른 계획(plan, 순수 함수)의 i 번째와 자리·방향·얼음까지
+	# 같은지** 본다(구현체의 restore/untouched 를 쓰지 않는다).
+	var plan_items: Array = city.plan(city.city_seed)
+	var victims := []
+	for c in city.get_children():
+		if c is RigidBody3D and (c as RigidBody3D).freeze:
+			victims.append(c)
+		if victims.size() >= 2:
+			break
+	# 주입이 성립하지 않으면(얼어 있는 도시 프롭이 둘 미만) **판정이 아무것도 안 물은 것**이다 —
+	# 통과로 두지 않는다(§39 코드 감사).
+	var t5_injected := victims.size() == 2
+	if not t5_injected:
+		print("JUDGE 5 T5 주입 불가: 얼어 있는 도시 프롭 %d개 — 판정 무효로 탈락시킨다" % victims.size())
+	if t5_injected:
+		(victims[0] as Node).free()
+		var mv := victims[1] as RigidBody3D
+		mv.freeze = false
+		mv.position += Vector3(3.0, 0.0, 0.0)
+	var stray := Node3D.new()
+	stray.name = "T5_stray"
+	city.add_child(stray)
 	_main.restart()
 	await get_tree().process_frame
+	var t5_plan_bad := 0
+	var kids := city.get_children()
+	if kids.size() != plan_items.size():
+		t5_plan_bad += absi(kids.size() - plan_items.size())
+	for i in mini(kids.size(), plan_items.size()):
+		var b := kids[i] as RigidBody3D
+		var it: Dictionary = plan_items[i]
+		var want := Transform3D(Basis(Vector3.UP, float(it["yaw"])), it["pos"])
+		if b == null or not b.freeze or not b.transform.is_equal_approx(want):
+			t5_plan_bad += 1
+	print("JUDGE 5 T5 프롭별 계획 대조: 불일치=%d (삭제·이동·잡것 주입 후 재시작)" % t5_plan_bad)
 	var hs: Array = _reg.holes()
 	var radii_ok := true
 	var score_ok := true
@@ -2267,7 +2310,7 @@ func run_judge_5() -> void:
 		and props == RESTART_PROPS and jset == 8 \
 		and int(_main.state) == SPEC_STATE_PLAYING \
 		and absf(float(_main.time_left) - ROUND_TEST_SEC) < 0.2 \
-		and fp0 == city.fingerprint(city.plan(city.city_seed))
+		and fp0 == city.fingerprint(city.plan(city.city_seed)) and t5_plan_bad == 0 and t5_injected
 	print("JUDGE 5 T5: 구멍=%d(기대 %d) R=5 %s 점수0 %s 프롭=%d(기대 %d) 판정대상=%d state=%d 남은시간=%.2f"
 		% [hs.size(), RESTART_HOLES, pf(radii_ok), pf(score_ok), props, RESTART_PROPS,
 		   jset, _main.state, _main.time_left])
@@ -2655,6 +2698,14 @@ func run_judge_3c() -> void:
 	## `전제=F … F1=P` 를, 요약 줄은 `F1=F` 를 찍어 한 실행에서 F1 이 P 이자 F 가 된다
 	## (코드 감사가 잡았다). 원인을 안 섞겠다는 목적이 바로 그 자리에서 깨졌다.
 	var f_pre := true
+	var f3 := true
+	# `begins_with` — Windows 는 opengl3 를 요청해도 ANGLE(`opengl3_angle`)로 떨어질 수 있다.
+	# `==` 로 비교하면 그때 F3 가 **조용히 꺼진다**(§39 코드 감사). 끄는 경우는 이유를 찍는다.
+	var drv := RenderingServer.get_current_rendering_driver_name()
+	var gl: bool = drv.begins_with("opengl3") and not OS.has_feature("web")
+	if not gl:
+		print("JUDGE 3c F3 건너뜀: 드라이버=%s web=%s (F3 는 데스크톱 opengl3 계열에서만 건다)"
+			% [drv, OS.has_feature("web")])
 	for key in PERF_SPOTS:
 		_main.set_hole_position(PERF_SPOTS[key])
 		_reg.flush()
@@ -2679,8 +2730,11 @@ func run_judge_3c() -> void:
 		var s2 := worst <= FRAME_BUDGET_MS * 2.0
 		f1 = f1 and s1
 		f2 = f2 and s2
-		print("JUDGE 3c [%s] props=%d draws=%d prims=%d active_bodies=%d"
-			% [key, props, int(draws), int(prims), int(phys)])
+		var s3: bool = not gl or int(draws) <= SPEC_DRAWS_GL_MAX
+		f3 = f3 and s3
+		print("JUDGE 3c [%s] props=%d draws=%d prims=%d active_bodies=%d F3(콜≤%d, opengl3만)=%s"
+			% [key, props, int(draws), int(prims), int(phys), SPEC_DRAWS_GL_MAX,
+			   pf(s3) if gl else "-"])
 		print("JUDGE 3c [%s] avg=%.2fms (%.0f fps) worst=%.2fms budget=%.2fms F1=%s F2=%s"
 			% [key, avg, 1000.0 / maxf(avg, 0.001), worst, FRAME_BUDGET_MS, pf(s1), pf(s2)])
 
@@ -2806,9 +2860,9 @@ func run_judge_3c() -> void:
 			% [int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
 			   avgc, 1000.0 / maxf(avgc, 0.001), worstc, pf(s1c), pf(s2c)])
 
-	var ok := f1 and f2 and f_pre
-	print("JUDGE 3c F1=%s F2=%s 구간전제=%s -> %s"
-		% [pf(f1), pf(f2), pf(f_pre), ("PASS" if ok else "FAIL")])
+	var ok := f1 and f2 and f3 and f_pre
+	print("JUDGE 3c F1=%s F2=%s F3=%s 구간전제=%s -> %s"
+		% [pf(f1), pf(f2), pf(f3) if gl else "-", pf(f_pre), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 

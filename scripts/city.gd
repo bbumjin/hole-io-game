@@ -239,7 +239,7 @@ var _base_cache := {}
 
 func _ready() -> void:
 	if enabled:
-		build(plan(city_seed))
+		build(planned(city_seed))     # §39: 계획을 캐시해 재시작이 다시 계산하지 않는다
 
 
 ## 배치 계획. 같은 시드면 항상 같은 배열을 돌려준다(E4).
@@ -879,6 +879,13 @@ const BAKED_DIR := "res://assets/baked/"
 static var _warned_unbaked := false
 
 
+## 구운 메시의 원본 지문. 정점은 .obj 에서, **정점 색이 되는 albedo 는 .mtl 에서** 온다 —
+## 둘 중 하나만 보면 다른 쪽을 고쳤을 때 낡은 굽기를 못 잡는다(§39 코드 감사).
+static func source_md5(path: String) -> String:
+	var mtl := path.get_basename() + ".mtl"
+	return FileAccess.get_md5(path) + (FileAccess.get_md5(mtl) if FileAccess.file_exists(mtl) else "")
+
+
 func mesh_of(path: String) -> Mesh:
 	if not _mesh_cache.has(path):
 		var baked := BAKED_DIR + path.get_base_dir().get_file() + "_" \
@@ -886,6 +893,11 @@ func mesh_of(path: String) -> Mesh:
 		var m: Mesh = null
 		if ResourceLoader.exists(baked):
 			m = load(baked)
+			# 원본이 굽기 뒤에 바뀌었으면 알린다(원본 OBJ 가 있는 개발 환경에서만 — 익스포트본에는
+			# 원본 텍스트가 없다). 배포 빌드는 매번 새로 구우므로 해당이 없다.
+			if m != null and m.has_meta("src_md5") and FileAccess.file_exists(path) \
+					and source_md5(path) != String(m.get_meta("src_md5")):
+				push_warning("§39: 구운 메시가 원본보다 낡았다(%s) — tools/bake_meshes.gd 를 다시 돌려라" % baked)
 		if m == null:
 			m = load(path)
 			if m != null and m.get_surface_count() > 1 and not _warned_unbaked:
@@ -899,11 +911,71 @@ func mesh_of(path: String) -> Mesh:
 ## (레이어 2, "swallowable" 그룹, swallowable.gd)을 따른다 — 도시가 곧 먹이다.
 func build(items: Array) -> void:
 	for i in items.size():
-		var p := make_prop(items[i], i)
-		p.indexed = true          # §39: 정적 먹이 색인 소속 — `_ready` 전에 세워야 한다
-		add_child(p)
+		add_child(make_planned(items[i], i))
 	rebuild_occluders()
 	rebuild_food()
+
+
+func make_planned(it: Dictionary, i: int) -> RigidBody3D:
+	var p := make_prop(it, i)
+	p.indexed = true          # §39: 정적 먹이 색인 소속 — `_ready` 전에 세워야 한다
+	p.set_meta("plan_idx", i)
+	return p
+
+
+# --- §39 P2-7 재시작 델타 복원 ---------------------------------------------------
+## 재시작이 도시 2112개를 통째로 부수고 다시 지으면 데스크톱 네이티브에서도 2.4초(계획 0.66초
+## 별도)가 들었고, 단일 스레드 wasm 에서는 그것이 그대로 멈춤으로 보였다(§38 의 임시 완화가
+## "근본 해결은 다음 세션 최우선" 으로 남긴 자리).
+##
+## **얼어 있는 도시 프롭은 판 동안 한 번도 건드려지지 않은 것이다.** 프롭이 움직이려면 먼저
+## `hold_awake(true)` 가 얼음을 풀어야 하고, 도시 프롭은 다시 얼지 않는다(다시 어는 것은
+## 차·시민뿐 — 그것들은 City 의 자식이 아니다). 그러니 얼어 있고 계획의 자리·방향 그대로인
+## 것은 새로 지은 것과 같다 — 그대로 둔다. 나머지(삼켜져 사라진 것·풀려나 움직인 것·
+## 계획 밖의 것)만 정리하고 **계획의 인덱스 자리에** 다시 짓는다. 자식 순서까지 최초 빌드와
+## 같아진다(판정 T5 가 프롭별로 대조한다).
+##
+## 계획은 시드의 순수 함수라(E4) 한 번만 계산해 둔다. `plan()` 자체는 그대로 순수하게 둔다 —
+## 판정이 그것을 두 번 불러 재현성을 본다.
+var _plan_cache := {}
+
+
+func planned(s: int) -> Array:
+	if not _plan_cache.has(s):
+		_plan_cache[s] = plan(s)
+	return _plan_cache[s]
+
+
+## 계획 그대로인가 — 얼어 있고, 보이고, 계획의 자리·방향에 있다.
+static func untouched(c: Node, it: Dictionary) -> bool:
+	var b := c as RigidBody3D
+	if b == null or not b.freeze or not b.visible or bool(b.get("falling")):
+		return false
+	var want := Transform3D(Basis(Vector3.UP, float(it["yaw"])), it["pos"])
+	return b.transform.is_equal_approx(want)
+
+
+## 반환: 다시 지은 개수.
+func restore(items: Array) -> int:
+	var keep := {}
+	for c in get_children():
+		var idx := int(c.get_meta("plan_idx", -1))
+		if idx >= 0 and idx < items.size() and not keep.has(idx) and untouched(c, items[idx]):
+			keep[idx] = c
+		else:
+			c.free()
+	var made := 0
+	# 인덱스 오름차순으로 채우면 i 보다 앞 자리는 전부 차 있으므로 move_child(i) 가 정확하다.
+	for i in items.size():
+		if keep.has(i):
+			continue
+		var p := make_planned(items[i], i)
+		add_child(p)
+		move_child(p, i)
+		made += 1
+	rebuild_occluders()
+	rebuild_food()
+	return made
 
 
 # --- §39 먹이 색인 (AI 목표 선정용) ------------------------------------------
@@ -1008,6 +1080,15 @@ func rebuild_occluders() -> void:
 		var arr: PackedInt32Array = _occ_bucket.get(key, PackedInt32Array())
 		arr.append(idx)
 		_occ_bucket[key] = arr
+
+
+## 가림 색인의 살아 있는 프롭 전부(§39 occluders.prewarm 용).
+func occluder_candidates_all() -> Array:
+	var out := []
+	for n in _occ_node:
+		if n != null and is_instance_valid(n):
+			out.append(n)
+	return out
 
 
 ## 카메라와 구멍 원판 사이에 들 수 있는 프롭들.

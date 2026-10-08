@@ -94,10 +94,16 @@ func build_lanes() -> Array:
 
 ## 이 차선에서 셀 c 구간의 도로가 존재하는가. §25 의 마스크를 그대로 쓴다 —
 ## 공원 안이나 다리 없는 강 위를 달리지 않는다.
+## §39: 차마다 매 프레임 부른다(36대 × 60). seg_ew/seg_ns 는 지도의 순수 함수라 표로 둔다.
+var _open_cache := {}
+
+
 func lane_open(lane: Dictionary, c: int) -> bool:
-	if str(lane["axis"]) == "x":
-		return CITY.seg_ew(int(lane["line"]), c)
-	return CITY.seg_ns(int(lane["line"]), c)
+	var x := str(lane["axis"]) == "x"
+	var key := Vector3i(1 if x else 0, int(lane["line"]), c)
+	if not _open_cache.has(key):
+		_open_cache[key] = CITY.seg_ew(key.y, c) if x else CITY.seg_ns(key.y, c)
+	return _open_cache[key]
 
 
 ## 차선에서 진행 방향의 **출발 셀**. dir 이 +1 이면 가장 낮은 유효 셀, -1 이면 가장 높은 셀.

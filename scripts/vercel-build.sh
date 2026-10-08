@@ -158,7 +158,7 @@ echo "==> 메시 굽기 (§39 — 다중 서피스 → 단일 서피스. 산출�
 # 도구의 종료코드와 산출물 개수를 둘 다 하드 게이트로 본다(기대 개수는 도구가 낸다).
 "$GODOT" --headless --path . --script res://tools/bake_meshes.gd | tee "${WORK}/bake.log"
 made=$(sed -n 's/^BAKE RESULT made=\([0-9]*\).*/\1/p' "${WORK}/bake.log")
-files=$(ls -1 assets/baked/*.res 2>/dev/null | wc -l)
+files=$(find assets/baked -maxdepth 1 -name '*.res' 2>/dev/null | wc -l || true)
 echo "    구운 메시 ${made:-0}개 / 파일 ${files}개"
 [ -n "$made" ] && [ "$made" -gt 0 ] && [ "$files" -eq "$made" ] || {
   echo "FAIL: 메시 굽기 산출물 불일치 — 원본 메시로 export 될 뻔했다"; exit 1; }

@@ -86,7 +86,15 @@ func bake(m: ArrayMesh, p: String) -> ArrayMesh:
 		if mat == null or not same_params(m0, mat):
 			push_error("bake: %s surf%d 의 머티리얼이 albedo 외에도 다르다 — 정점 색으로 못 합친다" % [p, si])
 			return null
+		# 삼각형이 아니거나 법선이 없으면 **런타임 에러로 `_init` 이 멈춰 `quit()` 에 못 닿고**
+		# 헤드리스 Godot 가 Vercel 빌드 시간 초과까지 매달린다(§39 코드 감사). 실패로 세고 넘어간다.
+		if m.surface_get_primitive_type(si) != Mesh.PRIMITIVE_TRIANGLES:
+			push_error("bake: %s surf%d 가 삼각형이 아니다" % [p, si])
+			return null
 		var arr := m.surface_get_arrays(si)
+		if arr[Mesh.ARRAY_NORMAL] == null or arr[Mesh.ARRAY_VERTEX] == null:
+			push_error("bake: %s surf%d 에 정점/법선이 없다" % [p, si])
+			return null
 		var base := v.size()
 		var sv: PackedVector3Array = arr[Mesh.ARRAY_VERTEX]
 		v.append_array(sv)
@@ -116,4 +124,8 @@ func bake(m: ArrayMesh, p: String) -> ArrayMesh:
 	var im := ImporterMesh.new()
 	im.add_surface(Mesh.PRIMITIVE_TRIANGLES, a, [], {}, mat_out, "baked")
 	im.generate_lods(25.0, 60.0, [])
-	return im.get_mesh()
+	var out := im.get_mesh()
+	# 원본이 바뀌었는데 굽기를 안 다시 돌리면 게임은 **옛 모양**을 그리고 E1·E4 는 새 원본을 본다.
+	# 원본의 md5 를 실어 두고 city.mesh_of 가 대조한다(원본 파일이 있는 개발 환경에서).
+	out.set_meta("src_md5", CITY.source_md5(p))
+	return out

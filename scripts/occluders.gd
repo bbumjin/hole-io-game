@@ -219,6 +219,39 @@ func _apply(want: Dictionary, snap: bool, dt: float) -> void:
 		_state.erase(id)
 
 
+## §39: 원본 머티리얼 → 반투명 **견본**. 견본은 놓지 않는다.
+##
+## 유령 전환 한 번에 `_paint` 가 **CPU 25~28ms** 였다(Forward+ 실측, 타워 여섯 전부). 반투명
+## 변형 셰이더는 그것을 쓰는 머티리얼이 하나도 없으면 해제되는데, 유령이 풀릴 때 `_state` 와
+## 함께 사본이 사라지므로 **다음 유령마다 셰이더를 처음부터 다시 컴파일**하고 있었다
+## (judge3c [dynamic-cam] 의 유령 전환 프레임 +20ms — WebGL 은 셰이더 컴파일이 더 느리다).
+## 견본이 살아 있으면 같은 변형을 공유하므로 사본은 복제만 한다. `prewarm()` 이 로드 때
+## 타워 머티리얼의 견본을 미리 만들어 첫 유령의 컴파일도 플레이 밖으로 뺀다.
+var _ghost_tpl := {}
+
+
+func _ghost_of(src: StandardMaterial3D) -> StandardMaterial3D:
+	if not _ghost_tpl.has(src):
+		var t: StandardMaterial3D = src.duplicate()
+		t.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_ghost_tpl[src] = t
+	return (_ghost_tpl[src] as StandardMaterial3D).duplicate()
+
+
+## 가림 후보(타워) 머티리얼의 반투명 견본을 미리 만든다. main 이 도시를 물린 직후 부른다.
+func prewarm() -> void:
+	if city == null:
+		return
+	for n in city.occluder_candidates_all():
+		var mi := _mesh_of(n)
+		if mi == null:
+			continue
+		for i in mi.mesh.get_surface_count():
+			var src := mi.mesh.surface_get_material(i) as StandardMaterial3D
+			if src != null and not _ghost_tpl.has(src):
+				_ghost_of(src)
+
+
 ## 서피스별 반투명 사본을 건다. `material_override` 는 프롭 전체를 한 색으로 뭉개므로
 ## (건물은 서피스가 최대 7개다) 서피스마다 원본을 복제해 알파만 바꾼다.
 func _paint(mi: MeshInstance3D, st: Dictionary, a: float) -> void:
@@ -229,9 +262,7 @@ func _paint(mi: MeshInstance3D, st: Dictionary, a: float) -> void:
 			if src == null:
 				mats.append(null)
 				continue
-			var m: StandardMaterial3D = src.duplicate()
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mats.append(m)
+			mats.append(_ghost_of(src))
 		st["mats"] = mats
 	for i in mats.size():
 		var m2: StandardMaterial3D = mats[i]
@@ -242,6 +273,19 @@ func _paint(mi: MeshInstance3D, st: Dictionary, a: float) -> void:
 		m2.albedo_color = c
 		if mi.get_surface_override_material(i) != m2:
 			mi.set_surface_override_material(i, m2)
+
+
+## 재시작이 부른다(§39). 델타 복원은 건드려지지 않은 타워를 **그대로 둔다** — 유령이던 타워의
+## 상태(`on=true`)가 남으면 그것만 낮은 문턱(COVER_OFF)으로 판정되어 새로 지은 판과 달라진다
+## (§39 코드 감사). 반투명 사본을 걷고 상태를 비워 새 판과 같은 출발점에 둔다. 견본은 남긴다.
+func reset() -> void:
+	for id in _state:
+		var node := instance_from_id(id) as Node3D
+		if node != null and is_instance_valid(node):
+			var mi := _mesh_of(node)
+			if mi != null:
+				_clear(mi)
+	_state.clear()
 
 
 func _clear(mi: MeshInstance3D) -> void:

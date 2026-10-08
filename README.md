@@ -28,13 +28,33 @@ scripts/
   hole_ai.gd           경쟁 구멍 조종 — 도망 / 추격 / 먹이 / 배회
   main.gd              아레나. 포식 해소·타이머·리더보드·승패·재시작
   camera_rig.gd        반경 비례 추적 + 최저 높이 clamp
-  screenshot.gd        기계 판정기 (--judge ~ --judge6)
+  screenshot.gd        기계 판정기 (--judge ~ --judge11)
+  perf_bench.gd        성능 계측 — ?perf=1 오버레이 · ?perf=bench 고정 경로 벤치(§39)
 assets/                Quaternius CC0 78모델 (OBJ + MTL 단색)
 tools/
+  bake_meshes.gd       다중 서피스 OBJ → 단일 서피스·정점 색 메시(assets/baked/, git 밖 — §39)
+  probe_bake_diff.gd   구운 메시가 원본과 같게 그려지는지 프롭별 픽셀 대조
   web_judge.mjs        브라우저 판정 하네스 — build/ 서빙 + 판정 결과 수집(§24)
   sync_plan_blocks.ps1 PLAN.md 에 실린 소스 전문이 실제 파일과 같은지 대조(§24)
 PLAN.md                설계 근거 · 실측 · 뒤집힌 결정 전부
 ```
+
+## 처음 받았을 때 — 메시 굽기 (§39)
+
+드로우콜을 1/3 로 줄이는 구운 메시는 저장소에 없다(원본에서 재생성). 판정·실행 전에 한 번 돌린다.
+안 돌리면 게임은 원본 메시로 돌지만 드로우콜이 세 배가 되고 경고가 찍힌다.
+Vercel 빌드는 이것을 자동으로 돌리고 개수를 하드 게이트로 본다.
+
+```powershell
+& $GODOT --headless --path . --script res://tools/bake_meshes.gd     # BAKE RESULT made=35
+& $GODOT --path . --rendering-driver opengl3 --script res://tools/probe_bake_diff.gd   # 외형 대조
+```
+
+## 성능 계측 (§39)
+
+웹: `https://hole-io-game-delta.vercel.app/?perf=bench` — 고정 경로를 자동 주행하고 결과표를
+화면에 띄운다(반경 1.5/5/10/20 별 avg·p95·p99·33ms 초과 프레임·드로우콜, boot·restart).
+`?perf=1` 은 실시간 오버레이. 데스크톱: `& $GODOT --path . --rendering-driver opengl3 -- --perf-bench --perf-novsync --perf-quit`.
 
 ## 검증
 
@@ -47,7 +67,7 @@ $GODOT = "...\Godot_v4.7.1-stable_win64_console.exe"
 & $GODOT --path . -- --judge2     # 2   성장 · 거절 규격 · 스코어 (C1~C4)
 & $GODOT --path . -- --judge3     # 3a  도로 셰이더 · 도시 격자 (D1~D6, 도로 위계 포함)
 & $GODOT --path . -- --judge3b    # 3b  절차적 배치 (E1~E9, §36 가로수 포함)
-& $GODOT --path . -- --judge3c    # 3c  성능 (F1~F2) — 단독으로 돌린다
+& $GODOT --path . -- --judge3c    # 3c  성능 (F1~F3, F3 드로우콜은 opengl3 만) — 단독으로 돌린다
 & $GODOT --path . -- --judge4     # 4a  AI 경쟁 · 포식 (G1~G7)
 & $GODOT --path . -- --judge5     # 4b  게임 루프 · 픽스처 격리 · 한글 HUD (T1~T8)
 & $GODOT --path . -- --judge6     # §23 물리 통과 — 통과·거절·수관 걸림 (K1~K6)

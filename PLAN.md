@@ -1,4 +1,13 @@
-# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 · 가림 투명화 · 인계 뒤를 물리에 맡긴다 · 재시작 로딩 피드백 · 가림 대상 정정 · 볼륨 성장과 연속 줌 (rev.39)
+# hole.io 클론 — 구현 계획 + 1a~4b 구현 · 플레이 재조정 · 도로 위계 · 물리적 림 · 한글 HUD · 브라우저 판정 · 지구제 도시 · 게임 UI · 교통 · 시민 · 카메라 멀미 · 흡입 게이트 · 수변 난간 · 수변 끝 도로 제거 · 병합 수퍼블록 · 시민 모델 · 가로수 · 가림 투명화 · 인계 뒤를 물리에 맡긴다 · 재시작 로딩 피드백 · 가림 대상 정정 · 볼륨 성장과 연속 줌 · 성능 — 서피스 굽기·AI 스파이크·델타 재시작 (rev.40)
+
+> **rev.40 = 성능(§39).** 유저 보고 "게임이 너무 느리고 무겁다". 웹(Compatibility)에서 재니
+> 프레임의 ~70% 가 렌더였고 드로우콜이 평균 7600(최대 1만 이상), 주기적 끊김은 AI 재선정이
+> 다섯 구멍 같은 틱에 몰린 **23ms CPU 스파이크**였다. 게임 안에 계측(`?perf=bench`)을 두고
+> 같은 절차로 전후를 쟀다 — **데스크톱 Chrome p95 34.7→18.5ms, 33ms 초과 프레임 146→2**,
+> 드로우콜 7617→2335(서피스 굽기 −69%), 재시작 3.7s→0.33s(델타 복원·모델 풀). 같은 라운드에
+> 기존 결함 둘을 고쳤다: ① 셰이더 `mod(k,3)` 이 AMD GPU 에서 k=3 을 3 으로 돌려 **±96·±192
+> 대로가 일반 도로로 그려졌다**(judge3·judge7 이 §34 이후 이 기기에서 계속 FAIL 이었다).
+> ② 그림자 최대 거리 100m 고정이라 **R ≥ 15 부터 구멍 주변 그림자가 사라졌다**.
 
 > **rev.39 = 시작 화면은 더 가까이, 성장할수록 서서히 멀어지고, 성장 자체는 볼륨에
 > 비례한다.** 카메라의 최저 높이 clamp 는 R=1.5~3.18 을 같은 배율 0.636으로 묶어
@@ -1212,14 +1221,26 @@ func pull(rb: RigidBody3D, here: Vector3, scale := 1.0) -> void:
 ## 콜라이더의 **월드 공간 꼭대기**(강체 원점 기준 높이). 직립이면 `top_height` 와 같고
 ## 누우면 낮아진다 — §23 의 삼킴 문턱이 회전을 알아야 하는 이유는 `_on_body_exited` 의
 ## 주석에 적었다. 셰이프가 여럿이면 가장 높은 것을 쓴다(보수적 = 안전한 방향).
+##
+## §39: 후보마다 **매 물리 프레임** 부른다. 셰이프 목록과 로컬 AABB 는 바뀌지 않으므로
+## 처음 한 번 강체의 메타에 [셰이프 트랜스폼, AABB] 쌍으로 적어 두고 그 뒤로는 곱셈만 한다
+## (`find_children` 와 `get_debug_mesh` 를 매 프레임 돌리지 않는다).
 func world_top(rb: Node3D) -> float:
+	var boxes: Array
+	if rb.has_meta("_shape_boxes"):
+		boxes = rb.get_meta("_shape_boxes")
+	else:
+		boxes = []
+		for c in rb.find_children("", "CollisionShape3D", false, false):
+			var col := c as CollisionShape3D
+			if col.shape == null:
+				continue
+			boxes.append([col.transform, col.shape.get_debug_mesh().get_aabb()])
+		rb.set_meta("_shape_boxes", boxes)
 	var t := 0.0
-	for c in rb.find_children("", "CollisionShape3D", false, false):
-		var col := c as CollisionShape3D
-		if col.shape == null:
-			continue
-		var ab: AABB = (rb.global_transform * col.transform) \
-			* col.shape.get_debug_mesh().get_aabb()
+	var gt := rb.global_transform
+	for b in boxes:
+		var ab: AABB = (gt * (b[0] as Transform3D)) * (b[1] as AABB)
 		t = maxf(t, ab.end.y - rb.global_position.y)
 	return t
 ```
@@ -1500,6 +1521,22 @@ var _k := 0.0
 const OCCLUDERS := preload("res://scripts/occluders.gd")
 var occluders := OCCLUDERS.new()
 
+## §39: 그림자 거리를 줌에 맞춘다. 방향광 그림자는 **카메라에서** 최대 거리(기본 100m)까지만
+## 그려지는데, 카메라-구멍 거리는 `|base_offset|·k` = 34.06·k 라 k ≥ 3(R ≥ 15)부터 **구멍
+## 주변의 그림자가 통째로 사라졌다**(감사가 잡은 기존 결함). 구멍 너머 여유를 더해 키우되
+## 기본값 아래로는 내리지 않는다 — 작은 줌의 화면과 비용은 그대로다.
+## 거리를 키우면 그림자 패스가 그리는 것이 늘어 드로우콜이 k=4 에서 +72% 였다(실측, 여유 60m·
+## 4분할). 멀어진 화면은 그림자 텍셀이 덜 필요하므로 **기본값을 넘는 동안은 2분할**로 내리고
+## 여유도 30m 로 줄인다.
+## main 이 `_ready` 에서 Sun 을 물린다. 없으면 아무것도 안 한다(판정 픽스처 씬 등).
+const SHADOW_MIN := 100.0
+const SHADOW_PAD := 30.0
+var sun: DirectionalLight3D = null
+
+
+func shadow_distance(k: float) -> float:
+	return maxf(SHADOW_MIN, base_offset.length() * k + SHADOW_PAD)
+
 
 func zoom_scale(radius: float) -> float:
 	if radius <= start_radius:
@@ -1522,6 +1559,15 @@ func follow(target: Node3D, radius: float, snap: bool, dt := 0.0) -> void:
 		var want := target.global_position + base_offset * _k
 		global_position = global_position.lerp(want, 1.0 - exp(-smooth * dt))
 	global_basis = Basis.looking_at(-base_offset)
+	if sun != null:
+		# 바뀔 때만 쓴다 — 세터가 매번 빛의 종속자에 알리고 모드 세터는 속성 목록 갱신까지 낸다.
+		var sd := snappedf(shadow_distance(_k), 0.5)
+		if sun.directional_shadow_max_distance != sd:
+			sun.directional_shadow_max_distance = sd
+		var mode := DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS \
+			if sd <= SHADOW_MIN else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		if sun.directional_shadow_mode != mode:
+			sun.directional_shadow_mode = mode
 	# §37: **여기가 유일한 호출 자리다.** main 3곳과 판정 13곳이 전부 `follow` 로 오므로
 	# 여기 걸면 판정 스크린샷에도 자동으로 반영된다 — 판정 모드에서는 `main._process` 가
 	# 일찍 반환해 `follow` 말고는 도는 것이 없다. `judge_flag()` 와 같은 원칙이다.
@@ -1709,9 +1755,13 @@ func _ready() -> void:
 	# 아래 첫 `follow(snap)` 이 이미 가림을 확정하므로, 늦게 물리면 첫 프레임이 가려진 채 뜬다.
 	# 없으면 `update()` 가 즉시 반환해 **기능 전체가 에러 없이 죽는다** — 이 저장소가 가장
 	# 경계하는 결함 모양이라 침묵시키지 않는다.
+	cam.sun = get_node_or_null("Sun")        # §39: 그림자 거리를 줌에 맞춘다
+	if cam.sun == null:
+		push_error("§39: Sun 노드가 없다 — 그림자 거리 조정이 꺼진다")
 	cam.occluders.city = get_node_or_null("City")
 	if cam.occluders.city == null:
 		push_error("§37: City 노드가 없다 — 가림 투명화가 통째로 꺼진다")
+	cam.occluders.prewarm()        # §39: 유령 셰이더를 로드 때 컴파일해 둔다
 	if arena:
 		spawn_ai()
 	cam.follow(hole, hole.radius, true)
@@ -1755,7 +1805,11 @@ static func perf_flag() -> String:
 		for pair in q.trim_prefix("?").split("&", false):
 			var kv := pair.split("=", true, 1)
 			if kv.size() == 2 and kv[0] == "perf":
-				return "bench" if kv[1] == "bench" else "hud"
+				match kv[1]:
+					"bench":
+						return "bench"
+					"1", "hud", "true":
+						return "hud"
 	return ""
 
 
@@ -1911,11 +1965,10 @@ func restart() -> void:
 	if arena:
 		spawn_ai()
 
+	# §39 P2-7: 통째로 다시 짓지 않는다 — 건드려진 프롭만 계획의 자리에 복원한다(city.restore).
 	var city := get_node_or_null("City")
 	if city != null:
-		for c in city.get_children():
-			c.free()
-		city.build(city.plan(city.city_seed))
+		city.restore(city.planned(city.city_seed))
 
 	var box := get_node_or_null("Swallowables")
 	if box != null:
@@ -1939,6 +1992,7 @@ func restart() -> void:
 	winner_score = 0
 	over_reason = ""
 	hud_over.visible = false
+	cam.occluders.reset()          # §39: 남아 있던 유령 상태를 걷는다 — 새 판과 같은 출발점
 	cam.follow(hole, hole.radius, true)
 	update_hud()
 
@@ -2547,6 +2601,13 @@ const PERF_SPOTS := {
 }
 const PERF_FRAMES := 300
 const FRAME_BUDGET_MS := 16.67                     # 60fps
+## §39 F3: 정적 지점(dense·boul)의 드로우콜 상한 — **데스크톱 Compatibility(opengl3)에서만** 건다.
+## fps 는 브라우저에서 rAF 에 묶여 게이트가 못 되지만(§24) 드로우콜은 모니터와 무관한 결정적
+## 수치다. 웹과 같은 백엔드라 웹 부담의 대리 지표가 된다(Chrome 벤치 경로 평균 2335 대 데스크톱
+## opengl3 2326 — 같다). 실측: 구운 메시 dense 1321 · boul 1152 / 원본 메시 6490 · 5620.
+## 2000 은 구운 쪽의 약 1.5배 — **굽기가 조용히 빠지면(원본 폴백) 여기서 탈락한다.**
+## Forward+ 는 콜 수 체계가 달라(dense 538) 걸지 않는다.
+const SPEC_DRAWS_GL_MAX := 2000
 ## §37 [dynamic-cam]: 도심을 가로지르는 주행. 플레이어 속도 14 m/s 를 그대로 쓴다.
 const PERF_CAM_SPEED := 14.0
 const PERF_CAM_DT := 1.0 / 60.0
@@ -4479,8 +4540,44 @@ func run_judge_5() -> void:
 	# T5 는 **판정 모드의** 재시작을 본다. §20 이후 픽스처 8개는 판정 모드에서만
 	# 스폰되므로, 앞의 시나리오가 내려 둔 플래그를 여기서 다시 올려야 한다.
 	_main.judging = true
+	# §39 P2-7: 재시작이 도시를 통째로 다시 짓지 않고 **건드려진 것만** 복원한다. 개수만 보면
+	# "움직인 프롭을 그 자리에 둔 채 개수만 맞춘" 복원이 통과한다. 그래서 판정이 직접 세 가지를
+	# 망가뜨린다 — 하나 삭제 · 하나 풀어서 옮김 · 계획 밖 노드 하나 추가 — 그리고 재시작 뒤
+	# **모든 자식이 판정기 자신이 부른 계획(plan, 순수 함수)의 i 번째와 자리·방향·얼음까지
+	# 같은지** 본다(구현체의 restore/untouched 를 쓰지 않는다).
+	var plan_items: Array = city.plan(city.city_seed)
+	var victims := []
+	for c in city.get_children():
+		if c is RigidBody3D and (c as RigidBody3D).freeze:
+			victims.append(c)
+		if victims.size() >= 2:
+			break
+	# 주입이 성립하지 않으면(얼어 있는 도시 프롭이 둘 미만) **판정이 아무것도 안 물은 것**이다 —
+	# 통과로 두지 않는다(§39 코드 감사).
+	var t5_injected := victims.size() == 2
+	if not t5_injected:
+		print("JUDGE 5 T5 주입 불가: 얼어 있는 도시 프롭 %d개 — 판정 무효로 탈락시킨다" % victims.size())
+	if t5_injected:
+		(victims[0] as Node).free()
+		var mv := victims[1] as RigidBody3D
+		mv.freeze = false
+		mv.position += Vector3(3.0, 0.0, 0.0)
+	var stray := Node3D.new()
+	stray.name = "T5_stray"
+	city.add_child(stray)
 	_main.restart()
 	await get_tree().process_frame
+	var t5_plan_bad := 0
+	var kids := city.get_children()
+	if kids.size() != plan_items.size():
+		t5_plan_bad += absi(kids.size() - plan_items.size())
+	for i in mini(kids.size(), plan_items.size()):
+		var b := kids[i] as RigidBody3D
+		var it: Dictionary = plan_items[i]
+		var want := Transform3D(Basis(Vector3.UP, float(it["yaw"])), it["pos"])
+		if b == null or not b.freeze or not b.transform.is_equal_approx(want):
+			t5_plan_bad += 1
+	print("JUDGE 5 T5 프롭별 계획 대조: 불일치=%d (삭제·이동·잡것 주입 후 재시작)" % t5_plan_bad)
 	var hs: Array = _reg.holes()
 	var radii_ok := true
 	var score_ok := true
@@ -4493,7 +4590,7 @@ func run_judge_5() -> void:
 		and props == RESTART_PROPS and jset == 8 \
 		and int(_main.state) == SPEC_STATE_PLAYING \
 		and absf(float(_main.time_left) - ROUND_TEST_SEC) < 0.2 \
-		and fp0 == city.fingerprint(city.plan(city.city_seed))
+		and fp0 == city.fingerprint(city.plan(city.city_seed)) and t5_plan_bad == 0 and t5_injected
 	print("JUDGE 5 T5: 구멍=%d(기대 %d) R=5 %s 점수0 %s 프롭=%d(기대 %d) 판정대상=%d state=%d 남은시간=%.2f"
 		% [hs.size(), RESTART_HOLES, pf(radii_ok), pf(score_ok), props, RESTART_PROPS,
 		   jset, _main.state, _main.time_left])
@@ -4881,6 +4978,14 @@ func run_judge_3c() -> void:
 	## `전제=F … F1=P` 를, 요약 줄은 `F1=F` 를 찍어 한 실행에서 F1 이 P 이자 F 가 된다
 	## (코드 감사가 잡았다). 원인을 안 섞겠다는 목적이 바로 그 자리에서 깨졌다.
 	var f_pre := true
+	var f3 := true
+	# `begins_with` — Windows 는 opengl3 를 요청해도 ANGLE(`opengl3_angle`)로 떨어질 수 있다.
+	# `==` 로 비교하면 그때 F3 가 **조용히 꺼진다**(§39 코드 감사). 끄는 경우는 이유를 찍는다.
+	var drv := RenderingServer.get_current_rendering_driver_name()
+	var gl: bool = drv.begins_with("opengl3") and not OS.has_feature("web")
+	if not gl:
+		print("JUDGE 3c F3 건너뜀: 드라이버=%s web=%s (F3 는 데스크톱 opengl3 계열에서만 건다)"
+			% [drv, OS.has_feature("web")])
 	for key in PERF_SPOTS:
 		_main.set_hole_position(PERF_SPOTS[key])
 		_reg.flush()
@@ -4905,8 +5010,11 @@ func run_judge_3c() -> void:
 		var s2 := worst <= FRAME_BUDGET_MS * 2.0
 		f1 = f1 and s1
 		f2 = f2 and s2
-		print("JUDGE 3c [%s] props=%d draws=%d prims=%d active_bodies=%d"
-			% [key, props, int(draws), int(prims), int(phys)])
+		var s3: bool = not gl or int(draws) <= SPEC_DRAWS_GL_MAX
+		f3 = f3 and s3
+		print("JUDGE 3c [%s] props=%d draws=%d prims=%d active_bodies=%d F3(콜≤%d, opengl3만)=%s"
+			% [key, props, int(draws), int(prims), int(phys), SPEC_DRAWS_GL_MAX,
+			   pf(s3) if gl else "-"])
 		print("JUDGE 3c [%s] avg=%.2fms (%.0f fps) worst=%.2fms budget=%.2fms F1=%s F2=%s"
 			% [key, avg, 1000.0 / maxf(avg, 0.001), worst, FRAME_BUDGET_MS, pf(s1), pf(s2)])
 
@@ -5032,9 +5140,9 @@ func run_judge_3c() -> void:
 			% [int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
 			   avgc, 1000.0 / maxf(avgc, 0.001), worstc, pf(s1c), pf(s2c)])
 
-	var ok := f1 and f2 and f_pre
-	print("JUDGE 3c F1=%s F2=%s 구간전제=%s -> %s"
-		% [pf(f1), pf(f2), pf(f_pre), ("PASS" if ok else "FAIL")])
+	var ok := f1 and f2 and f3 and f_pre
+	print("JUDGE 3c F1=%s F2=%s F3=%s 구간전제=%s -> %s"
+		% [pf(f1), pf(f2), pf(f3) if gl else "-", pf(f_pre), ("PASS" if ok else "FAIL")])
 	print("JUDGE RESULT -> %s" % ("PASS" if ok else "FAIL"))
 	get_tree().quit(0 if ok else 1)
 
@@ -9032,7 +9140,7 @@ var _base_cache := {}
 
 func _ready() -> void:
 	if enabled:
-		build(plan(city_seed))
+		build(planned(city_seed))     # §39: 계획을 캐시해 재시작이 다시 계산하지 않는다
 
 
 ## 배치 계획. 같은 시드면 항상 같은 배열을 돌려준다(E4).
@@ -9672,6 +9780,13 @@ const BAKED_DIR := "res://assets/baked/"
 static var _warned_unbaked := false
 
 
+## 구운 메시의 원본 지문. 정점은 .obj 에서, **정점 색이 되는 albedo 는 .mtl 에서** 온다 —
+## 둘 중 하나만 보면 다른 쪽을 고쳤을 때 낡은 굽기를 못 잡는다(§39 코드 감사).
+static func source_md5(path: String) -> String:
+	var mtl := path.get_basename() + ".mtl"
+	return FileAccess.get_md5(path) + (FileAccess.get_md5(mtl) if FileAccess.file_exists(mtl) else "")
+
+
 func mesh_of(path: String) -> Mesh:
 	if not _mesh_cache.has(path):
 		var baked := BAKED_DIR + path.get_base_dir().get_file() + "_" \
@@ -9679,6 +9794,11 @@ func mesh_of(path: String) -> Mesh:
 		var m: Mesh = null
 		if ResourceLoader.exists(baked):
 			m = load(baked)
+			# 원본이 굽기 뒤에 바뀌었으면 알린다(원본 OBJ 가 있는 개발 환경에서만 — 익스포트본에는
+			# 원본 텍스트가 없다). 배포 빌드는 매번 새로 구우므로 해당이 없다.
+			if m != null and m.has_meta("src_md5") and FileAccess.file_exists(path) \
+					and source_md5(path) != String(m.get_meta("src_md5")):
+				push_warning("§39: 구운 메시가 원본보다 낡았다(%s) — tools/bake_meshes.gd 를 다시 돌려라" % baked)
 		if m == null:
 			m = load(path)
 			if m != null and m.get_surface_count() > 1 and not _warned_unbaked:
@@ -9692,11 +9812,71 @@ func mesh_of(path: String) -> Mesh:
 ## (레이어 2, "swallowable" 그룹, swallowable.gd)을 따른다 — 도시가 곧 먹이다.
 func build(items: Array) -> void:
 	for i in items.size():
-		var p := make_prop(items[i], i)
-		p.indexed = true          # §39: 정적 먹이 색인 소속 — `_ready` 전에 세워야 한다
-		add_child(p)
+		add_child(make_planned(items[i], i))
 	rebuild_occluders()
 	rebuild_food()
+
+
+func make_planned(it: Dictionary, i: int) -> RigidBody3D:
+	var p := make_prop(it, i)
+	p.indexed = true          # §39: 정적 먹이 색인 소속 — `_ready` 전에 세워야 한다
+	p.set_meta("plan_idx", i)
+	return p
+
+
+# --- §39 P2-7 재시작 델타 복원 ---------------------------------------------------
+## 재시작이 도시 2112개를 통째로 부수고 다시 지으면 데스크톱 네이티브에서도 2.4초(계획 0.66초
+## 별도)가 들었고, 단일 스레드 wasm 에서는 그것이 그대로 멈춤으로 보였다(§38 의 임시 완화가
+## "근본 해결은 다음 세션 최우선" 으로 남긴 자리).
+##
+## **얼어 있는 도시 프롭은 판 동안 한 번도 건드려지지 않은 것이다.** 프롭이 움직이려면 먼저
+## `hold_awake(true)` 가 얼음을 풀어야 하고, 도시 프롭은 다시 얼지 않는다(다시 어는 것은
+## 차·시민뿐 — 그것들은 City 의 자식이 아니다). 그러니 얼어 있고 계획의 자리·방향 그대로인
+## 것은 새로 지은 것과 같다 — 그대로 둔다. 나머지(삼켜져 사라진 것·풀려나 움직인 것·
+## 계획 밖의 것)만 정리하고 **계획의 인덱스 자리에** 다시 짓는다. 자식 순서까지 최초 빌드와
+## 같아진다(판정 T5 가 프롭별로 대조한다).
+##
+## 계획은 시드의 순수 함수라(E4) 한 번만 계산해 둔다. `plan()` 자체는 그대로 순수하게 둔다 —
+## 판정이 그것을 두 번 불러 재현성을 본다.
+var _plan_cache := {}
+
+
+func planned(s: int) -> Array:
+	if not _plan_cache.has(s):
+		_plan_cache[s] = plan(s)
+	return _plan_cache[s]
+
+
+## 계획 그대로인가 — 얼어 있고, 보이고, 계획의 자리·방향에 있다.
+static func untouched(c: Node, it: Dictionary) -> bool:
+	var b := c as RigidBody3D
+	if b == null or not b.freeze or not b.visible or bool(b.get("falling")):
+		return false
+	var want := Transform3D(Basis(Vector3.UP, float(it["yaw"])), it["pos"])
+	return b.transform.is_equal_approx(want)
+
+
+## 반환: 다시 지은 개수.
+func restore(items: Array) -> int:
+	var keep := {}
+	for c in get_children():
+		var idx := int(c.get_meta("plan_idx", -1))
+		if idx >= 0 and idx < items.size() and not keep.has(idx) and untouched(c, items[idx]):
+			keep[idx] = c
+		else:
+			c.free()
+	var made := 0
+	# 인덱스 오름차순으로 채우면 i 보다 앞 자리는 전부 차 있으므로 move_child(i) 가 정확하다.
+	for i in items.size():
+		if keep.has(i):
+			continue
+		var p := make_planned(items[i], i)
+		add_child(p)
+		move_child(p, i)
+		made += 1
+	rebuild_occluders()
+	rebuild_food()
+	return made
 
 
 # --- §39 먹이 색인 (AI 목표 선정용) ------------------------------------------
@@ -9801,6 +9981,15 @@ func rebuild_occluders() -> void:
 		var arr: PackedInt32Array = _occ_bucket.get(key, PackedInt32Array())
 		arr.append(idx)
 		_occ_bucket[key] = arr
+
+
+## 가림 색인의 살아 있는 프롭 전부(§39 occluders.prewarm 용).
+func occluder_candidates_all() -> Array:
+	var out := []
+	for n in _occ_node:
+		if n != null and is_instance_valid(n):
+			out.append(n)
+	return out
 
 
 ## 카메라와 구멍 원판 사이에 들 수 있는 프롭들.
@@ -11964,10 +12153,16 @@ func build_lanes() -> Array:
 
 ## 이 차선에서 셀 c 구간의 도로가 존재하는가. §25 의 마스크를 그대로 쓴다 —
 ## 공원 안이나 다리 없는 강 위를 달리지 않는다.
+## §39: 차마다 매 프레임 부른다(36대 × 60). seg_ew/seg_ns 는 지도의 순수 함수라 표로 둔다.
+var _open_cache := {}
+
+
 func lane_open(lane: Dictionary, c: int) -> bool:
-	if str(lane["axis"]) == "x":
-		return CITY.seg_ew(int(lane["line"]), c)
-	return CITY.seg_ns(int(lane["line"]), c)
+	var x := str(lane["axis"]) == "x"
+	var key := Vector3i(1 if x else 0, int(lane["line"]), c)
+	if not _open_cache.has(key):
+		_open_cache[key] = CITY.seg_ew(key.y, c) if x else CITY.seg_ns(key.y, c)
+	return _open_cache[key]
 
 
 ## 차선에서 진행 방향의 **출발 셀**. dir 이 +1 이면 가장 낮은 유효 셀, -1 이면 가장 높은 셀.
@@ -12473,7 +12668,18 @@ static func walk_lane_u(k: int) -> float:
 	return CITY.road_half_at(k) + 0.5
 
 
+## §39: 보도 구간은 지도의 순수 함수라 한 번만 계산한다. 시민이 삼켜질 때마다 재스폰이
+## 이것을 불러 0.75 ms 씩 들었다(실측 — 재스폰 프레임 9~15 ms 의 일부). 부르는 쪽은 읽기만 한다.
+var _walks_cache: Array = []
+
+
 func build_walks() -> Array:
+	if _walks_cache.is_empty():
+		_walks_cache = compute_walks()
+	return _walks_cache
+
+
+func compute_walks() -> Array:
 	var out := []
 	for k in range(CITY.CELL_MIN, CITY.CELL_MAX + 2):
 		var wc := walk_lane_u(k)
@@ -12597,7 +12803,7 @@ func make_person(dz: int, pos: Vector3, idx: int) -> RigidBody3D:
 	# 달라진다(스폰 루프가 사람마다 정해진 횟수만 소비하는 것을 전제로 서 있다).
 	var wardrobe: Array = ZONE_WARDROBE[dz] if ZONE_WARDROBE.has(dz) else ZONE_WARDROBE[2]
 	var letter: String = wardrobe[idx % wardrobe.size()]
-	var model := (load(model_path(letter)) as PackedScene).instantiate() as Node3D
+	var model := take_model(letter)
 	model.name = "Model"
 	model.scale = Vector3(SCALE, SCALE, SCALE)
 	body.add_child(model)
@@ -12757,9 +12963,44 @@ static func anim_t0(phase: float) -> float:
 	return fmod(phase / TAU, 1.0) * WALK_LEN
 
 
+## §39 P2-7: 캐릭터 모델 풀. 재시작마다 GLB 씬 260벌을 다시 인스턴스하면 데스크톱
+## 네이티브에서도 0.63초였다. 몸통(RigidBody·셰이프)은 싸서 새로 만들고 **모델만** 재사용한다 —
+## 강체 상태(falling·consumed·_rim_refs·마스크·얼음)를 손으로 되돌리면 그중 하나를 빠뜨리는
+## 순간 판을 넘어 새는 결함이 되기 때문이다. 모델은 상태가 없다: 트랜스폼은 아래에서 다시
+## 세우고, 애니메이션은 `pose()` 가 clip "" 에서 play→pause→seek 로 처음부터 다시 잡는다.
+## 배역은 `scene_file_path` 로 가른다(M15 가 보는 바로 그 값이라 풀이 배역을 섞을 수 없다).
+var _model_pool := {}
+
+
+func take_model(letter: String) -> Node3D:
+	var pool: Array = _model_pool.get(letter, [])
+	if not pool.is_empty():
+		var m: Node3D = pool.pop_back()
+		m.transform = Transform3D.IDENTITY
+		return m
+	return (load(model_path(letter)) as PackedScene).instantiate() as Node3D
+
+
+## 풀의 모델은 트리 밖에 있어 아무도 해제하지 않는다 — 여기서 놓지 않으면 종료 때
+## 메시·인스턴스 RID 누수 경고가 수백 줄 난다(실측).
+func _exit_tree() -> void:
+	for letter in _model_pool:
+		for m in (_model_pool[letter] as Array):
+			if is_instance_valid(m):
+				(m as Node).free()
+	_model_pool.clear()
+
+
 ## 판을 되돌린다. main.gd 의 restart() 가 부른다(§27 의 교통과 같은 이유).
 func reset() -> void:
 	for c in get_children():
+		var m := c.get_node_or_null("Model") as Node3D
+		if m != null:
+			c.remove_child(m)
+			var letter := m.scene_file_path.get_file().get_basename().trim_prefix("character-")
+			if not _model_pool.has(letter):
+				_model_pool[letter] = []
+			(_model_pool[letter] as Array).append(m)
 		c.free()
 	_people.clear()
 	_orphans.clear()
@@ -14094,6 +14335,39 @@ func _apply(want: Dictionary, snap: bool, dt: float) -> void:
 		_state.erase(id)
 
 
+## §39: 원본 머티리얼 → 반투명 **견본**. 견본은 놓지 않는다.
+##
+## 유령 전환 한 번에 `_paint` 가 **CPU 25~28ms** 였다(Forward+ 실측, 타워 여섯 전부). 반투명
+## 변형 셰이더는 그것을 쓰는 머티리얼이 하나도 없으면 해제되는데, 유령이 풀릴 때 `_state` 와
+## 함께 사본이 사라지므로 **다음 유령마다 셰이더를 처음부터 다시 컴파일**하고 있었다
+## (judge3c [dynamic-cam] 의 유령 전환 프레임 +20ms — WebGL 은 셰이더 컴파일이 더 느리다).
+## 견본이 살아 있으면 같은 변형을 공유하므로 사본은 복제만 한다. `prewarm()` 이 로드 때
+## 타워 머티리얼의 견본을 미리 만들어 첫 유령의 컴파일도 플레이 밖으로 뺀다.
+var _ghost_tpl := {}
+
+
+func _ghost_of(src: StandardMaterial3D) -> StandardMaterial3D:
+	if not _ghost_tpl.has(src):
+		var t: StandardMaterial3D = src.duplicate()
+		t.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		_ghost_tpl[src] = t
+	return (_ghost_tpl[src] as StandardMaterial3D).duplicate()
+
+
+## 가림 후보(타워) 머티리얼의 반투명 견본을 미리 만든다. main 이 도시를 물린 직후 부른다.
+func prewarm() -> void:
+	if city == null:
+		return
+	for n in city.occluder_candidates_all():
+		var mi := _mesh_of(n)
+		if mi == null:
+			continue
+		for i in mi.mesh.get_surface_count():
+			var src := mi.mesh.surface_get_material(i) as StandardMaterial3D
+			if src != null and not _ghost_tpl.has(src):
+				_ghost_of(src)
+
+
 ## 서피스별 반투명 사본을 건다. `material_override` 는 프롭 전체를 한 색으로 뭉개므로
 ## (건물은 서피스가 최대 7개다) 서피스마다 원본을 복제해 알파만 바꾼다.
 func _paint(mi: MeshInstance3D, st: Dictionary, a: float) -> void:
@@ -14104,9 +14378,7 @@ func _paint(mi: MeshInstance3D, st: Dictionary, a: float) -> void:
 			if src == null:
 				mats.append(null)
 				continue
-			var m: StandardMaterial3D = src.duplicate()
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-			mats.append(m)
+			mats.append(_ghost_of(src))
 		st["mats"] = mats
 	for i in mats.size():
 		var m2: StandardMaterial3D = mats[i]
@@ -14117,6 +14389,19 @@ func _paint(mi: MeshInstance3D, st: Dictionary, a: float) -> void:
 		m2.albedo_color = c
 		if mi.get_surface_override_material(i) != m2:
 			mi.set_surface_override_material(i, m2)
+
+
+## 재시작이 부른다(§39). 델타 복원은 건드려지지 않은 타워를 **그대로 둔다** — 유령이던 타워의
+## 상태(`on=true`)가 남으면 그것만 낮은 문턱(COVER_OFF)으로 판정되어 새로 지은 판과 달라진다
+## (§39 코드 감사). 반투명 사본을 걷고 상태를 비워 새 판과 같은 출발점에 둔다. 견본은 남긴다.
+func reset() -> void:
+	for id in _state:
+		var node := instance_from_id(id) as Node3D
+		if node != null and is_instance_valid(node):
+			var mi := _mesh_of(node)
+			if mi != null:
+				_clear(mi)
+	_state.clear()
 
 
 func _clear(mi: MeshInstance3D) -> void:
@@ -14270,3 +14555,136 @@ if Input.is_key_pressed(KEY_R) and state == State.OVER:
   방식으로 바꾸면 대부분의 2112개가 그대로 남아 재건 비용이 급감한다.
 
 관련: [[hand-derived-geometry-is-unreliable]], [[screenshot-is-not-measurement]], [[asset-contract-vs-code-use]], [[audit-cadence]]
+
+---
+
+## §39. 성능 — 서피스 굽기 · AI 스파이크 · 델타 재시작 · 그림자 거리 (rev.40)
+
+유저 보고: **"게임이 너무 느리고 무겁다. 전체 리뷰하고 성능 최적화 방안 제안줘"** → 제안 승인("go").
+목표는 **웹(특히 모바일)에서 프레임 끊김 제거 + 로딩·재시작 단축**이다. 배포본은
+Compatibility(WebGL2)·단일 스레드 wasm 이고, 웹 성능에는 게이트가 없었다(§24 — rAF 가 fps 를 묶는다).
+
+### 진단 (데스크톱 네이티브 `--rendering-driver opengl3`, AMD Radeon 890M, 실게임 모드)
+
+| 조건 | 평균 ms | 드로우콜 | 비고 |
+|---|---|---|---|
+| 기준 | 7.69 | 7619 (최대 10870) | 프롭 전부 숨기면 2.16ms → **렌더 ~70%** |
+| 그림자 끔 | 4.29 | 3030 | 그림자 패스가 콜을 2.5배로 |
+| 서피스 병합(시험) | 5.80 | 2334 | 모든 k(0.5~4.5)에서 −67~69% |
+| 고정 거리 그림자·far 축소 | — | k=4.5 에서 **5564로 증가** | 고정 거리는 줌이 크면 역효과 → 기각 |
+
+스파이크(렌더 숨김, CPU 만): 평상 1.81ms / **AI 재선정 프레임 23ms**(2.1ms × 다섯 구멍이 `_tick`
+을 0 에서 함께 셈) / 시민 재스폰 9~15ms(`build_walks` 0.75ms 포함) / 삼킴 8~13ms.
+재시작 3.7s(계획 0.66 + 빌드 2.4 + 시민 0.63). 다운로드 15MB(br: wasm 9.5 + pck 5.5).
+
+### 감사 로그
+- 제안 감사 1판 **78**(미달) — 고정 거리 그림자/가시거리는 큰 k 에서 구멍 주변을 지운다, 서피스
+  병합 누락, AI 무목표 매 프레임 재선정 버그, 웹 기준선 선행 필요, 추정을 사실로 적음.
+- 2판 **88**(미달) — "얼어 있는 프롭은 안 움직인다" 는 거짓(차·시민은 얼린 채 스크립트로 옮긴다),
+  "외형 동일" 은 측정 전 주장.
+- 3판 **92 합격**.
+
+### Step 0 — 계측을 게임 안에 둔다 (`scripts/perf_bench.gd`)
+`?perf=1` 오버레이 · `?perf=bench` 고정 경로 × 반경 1.5/5/10/20(k 0.5~4) 자동 주행 → 결과표
+(boot·restart 포함). 데스크톱은 `-- --perf-bench [--perf-novsync] [--perf-quit]`. 프레임 기준
+(매 프레임 14/60 m)이라 느린 기기도 같은 자리에서 같은 수의 프레임을 잰다. 벤치 중 AI 는 돌되
+아무도 삼키지 못한다. 판정 모드에서는 붙지 않는다.
+
+### P0-1 — AI 재선정 스파이크 (`hole_ai.gd`·`city.gd`·`swallowable.gd`)
+- 재선정 위상을 시드에서 흩는다(1000+i → 0,7,14,1,8). 스파이크 23 → 12ms(실측).
+- 목표가 **원래 없을 때** 매 프레임 다시 고르지 않는다. 쫓던 것을 **잃었을 때만** 즉시.
+- 정적 도시 프롭은 32m 격자 색인(`food_near`), 움직이는 것(차·시민·풀린 프롭·판정 픽스처)은
+  `swallowable_dyn` 그룹. 풀린 도시 프롭은 양쪽에 다 있지만 거리는 항상 실제 위치로 잰다.
+- judge4 수치가 rev.39 와 **완전히 같다**(ΣR³ 10.1250→10.7925, AI 성장 +0.096).
+
+### 기존 결함 — 대로가 GPU 에 따라 일반 도로로 그려졌다 (`ground_hole.gdshader`)
+judge3(D5)·judge7(Z4·Z8)이 이 기기에서 **§34(26f21be)까지 거슬러 계속 FAIL** 이었다(bisect).
+교량 위 표본이 노란 중앙선(초록우세 +0.22·파랑우세 −0.56·휘도 0.81)이었고 스크린샷에서 k=3 대로가
+단선 일반 도로였다. `mod(k, 3.0)` 이 `k - 3*floor(k*(1/3))` 로 컴파일되어 3*(1/3)=0.99999994 →
+floor 0 → mod 3. `mod(k+0.5, 3) < 1` 로 판정점을 구간 중앙에 둔다. 두 판정 PASS 복귀 — 옛 식이
+이 기기에서 그대로 탈락하므로 고장 주입이 공짜로 성립한다. **모바일 GPU 도 같은 축약을 한다.**
+
+### P0-2 — 다중 서피스 메시를 굽는다 (`tools/bake_meshes.gd`)
+Compatibility 는 3D 를 배칭하지 않아 콜 = 서피스 × 인스턴스 × 패스. 임포트 머티리얼은 전부
+roughness 1·metallic 0.5·specular 0.5·불투명·무텍스처이고 **albedo 만 다르다**(도구가 다르면
+실패한다) → albedo 를 정점 색으로 옮겨 한 서피스로. LOD 를 다시 만든다(안 만들면 프리미티브
+1.8M→2.3M). 35종, 산출물은 git 밖(`assets/baked/`, FLAG_COMPRESS 2.6MB) — `vercel-build.sh` 가
+export 전에 굽고 개수를 하드 게이트로 본다. `city.mesh_of` 는 구운 것이 있으면 쓰고, 다중
+서피스인데 없으면 경고한다. 카탈로그 `path` 는 원본 그대로(E1·E4 는 원본을 본다).
+
+**외형 대조** `tools/probe_bake_diff.gd`: 최악 평균차 0.00067(opengl3)·0.00046(Forward+).
+**고장 주입** `vertex_color_is_srgb=false`: Compatibility 에서는 **그대로 통과**(0.00067 — 그
+렌더러는 sRGB 공간에서 바로 그려 플래그를 안 탄다), Forward+ 에서 0.054 로 탈락. 두 드라이버가
+다 필요한 이유다.
+
+**데스크톱 Chrome(WebGL2) 벤치, 전 → 후:**
+
+| R | k | p95 | p99 | 33ms 초과 | 드로우콜 |
+|---|---|---|---|---|---|
+| 1.5 | 0.5 | 34.7 → **18.5** | 48.4 → 20.3 | 146 → **2** | 7617 → 2335 |
+| 5 | 1 | 40.2 → **19.4** | 50.1 → 22.4 | 228 → **8** | 7044 → 2359 |
+| 10 | 2 | 31.4 → **21.3** | 40.6 → 26.8 | 97 → **10** | 5933 → 2220 |
+| 20 | 4 | 24.5 → **19.7** | 27.9 → 22.0 | 7 → 9 | 5067 → 2091 |
+
+평균은 rAF 상한(16.7)에 붙었다 — 이 기기의 Chrome 에서는 60fps 를 지킨다.
+
+### P2-7 — 델타 재시작 (`city.restore`·`citizens` 모델 풀) — §38 이 남긴 "근본 해결"
+얼어 있는 도시 프롭은 판 동안 한 번도 안 건드려진 것이다(움직이려면 `hold_awake` 가 먼저 풀어야
+하고 도시 프롭은 다시 얼지 않는다). 얼어 있고 계획 자리·방향 그대로면 둔다 — 나머지만 정리하고
+**계획의 인덱스 자리에** 다시 짓는다(자식 순서까지 최초 빌드와 같다). 계획은 캐시(`planned`),
+`plan()` 은 순수하게 둔다. 시민은 GLB 모델만 풀에 돌려 재사용한다(강체는 새로 — 상태 되돌리기를
+손으로 하지 않는다). 재시작 3.7s → **0.33s**(무손상), 판 뒤 벤치 4.7s → 1.3s(같은 기기 상태).
+**판정 T5 강화**: 개수만 보던 것을 — 판정이 직접 하나 삭제·하나 풀어 옮김·잡것 하나 추가 후
+재시작하고 **모든 자식을 판정기 자신의 `plan()` i 번째와 자리·방향·얼음까지 대조**한다.
+고장 주입 ① 움직인 것도 유지 → 불일치 6 탈락 ② 계획 밖 노드 유지 → 불일치 1 탈락.
+
+### P1 — 캐시 셋과 그림자 거리
+- `citizens.build_walks` 캐시(재스폰마다 0.75ms) · `traffic.lane_open` 표(차마다 매 프레임) ·
+  `hole.world_top` 셰이프 상자 메타 캐시(후보마다 매 물리 프레임 `find_children`).
+- **기존 결함: R ≥ 15 에서 구멍 주변 그림자 소실.** 그림자 최대 거리 100m 는 카메라 기준인데
+  카메라-구멍 거리가 34.06·k 다. `camera_rig.shadow_distance = max(100, 34.06k + 30)`, 기본값을
+  넘는 동안은 PSSM 2분할. k=4 콜 2237(소실 상태) → 3852(4분할·여유 60) → **3190**(2분할·여유 30).
+  화면 대조로 구멍 주변 건물 그림자 복원 확인.
+
+### 유령 전환 스파이크 (`occluders.gd`)
+judge3c [dynamic-cam] 의 최악 프레임이 전부 **유령 0→1 전환 프레임**이었다(f=105 41ms 등). 탐침
+(타워 여섯에 직접 `_paint`): Forward+ 에서 `_paint` 가 **CPU 25~28ms**, 매번 서피스 파이프라인
+컴파일 +1. 원인: 반투명 변형 셰이더를 쓰는 머티리얼이 하나도 안 남으면 해제되는데, 유령이 풀릴 때
+`_state` 와 함께 사본이 사라져 **다음 유령마다 다시 컴파일**했다. → 원본 머티리얼별 반투명
+**견본**을 놓지 않고 들고(`_ghost_tpl`), 사본은 견본에서 복제한다. `prewarm()` 이 로드 때 타워
+견본(머티리얼·셰이더 코드)을 미리 만든다 — GL 프로그램 링크 자체는 첫 그리기에서 일어나므로
+"로드 때 컴파일" 이 아니라 "반복 재컴파일 제거" 가 정확한 설명이다(코드 감사 정정). **Compatibility(웹) 25ms → 1.5ms**, 파이프라인 컴파일 0.
+**Forward+ 는 남는다** — 쪼개 재니 `set_surface_override_material` 한 줄이 14~17ms(엔진의 서피스
+파이프라인 컴파일). 인스턴스 `transparency` 로 바꾸면 첫 프레임 700ms 라 대안이 아니다. 배포
+렌더러가 아니므로 기록만 한다.
+
+### F3 — 드로우콜 게이트 (judge3c, 데스크톱 opengl3 만)
+fps 는 브라우저에서 게이트가 못 되지만(§24) 드로우콜은 결정적이다. 정적 지점(dense·boul)에서
+`SPEC_DRAWS_GL_MAX = 2000`. 실측 구운 메시 1321·1152 / 원본 6490·5620. Chrome 벤치 경로 평균
+2335 대 데스크톱 opengl3 2326 — 웹과 같은 체계라 웹 부담의 대리 지표가 된다.
+**고장 주입**: `assets/baked/` 를 치우면(굽기 누락 = 원본 폴백) F3=F 로 탈락. 굽기가 조용히
+빠지는 경로를 판정이 막는다(vercel-build.sh 의 개수 게이트와 이중).
+
+### 판정
+Forward+ · Compatibility 28종 — (P0 시점) 27 PASS. **Forward+ judge3c F2 는 이 기기의 현재 스로틀
+상태에서 원본 메시로도 같은 프레임(유령 전환 0→1, f=105)에서 38ms 로 탈락**한다(굽기 무관 — 원본
+기준 커밋도 32.3ms 로 경계). 유령 전환 프레임의 +20ms 는 실재하는 스파이크라 추적 대상이다.
+
+### 남은 것 · 유저 검수 대기
+- **실기기(폰) 측정**: 프로덕션(main = 최적화 전 + 계측)과 프리뷰(perf/p0) 를 `?perf=bench` 로
+  각 3회. 이 문서의 수치는 전부 데스크톱이다.
+- 삼킴 프레임(8~13ms) 프로파일. Forward+ 유령 전환의 엔진 파이프라인 컴파일(14~17ms).
+- **pck 가 구운 메시만큼(약 2.6MB, 압축 저장) 커졌다** — 원본 OBJ 메시도 `all_resources` 로 함께
+  나간다(E1 이 원본을 본다). 다운로드가 목표의 일부이므로 다음 단계에서 export_filter 로 정리한다.
+- 다운로드 15MB: export_filter 를 사용 리소스로, 미사용 모듈을 끈 커스텀 템플릿(추정, 미검증).
+- 모바일 필레이트: 고 DPR 캔버스·MSAA·그림자 아틀라스는 실기기 수치로 정한다.
+
+### 코드 감사 (구현) — 1판 88(미달) → 반영
+조용한 실패 경로 넷과 정합성 하나를 지적받아 전부 고쳤다. ① T5 주입 대상이 둘 미만이면 주입이
+건너뛰어지고 T5 가 통과했다 → 주입 불가 자체를 탈락으로. ② F3 가 `== "opengl3"` 라 ANGLE
+(`opengl3_angle`)로 떨어지면 조용히 꺼졌다 → `begins_with` + 건너뛸 때 이유 출력. ③ 굽기 도구가
+삼각형 아닌 서피스·법선 없는 서피스에서 런타임 에러로 `quit()` 에 못 닿아 헤드리스가 매달렸다 →
+실패로 세고 진행. ④ 델타 재시작이 유령이던 타워의 가림 상태를 넘겨 새 판과 문턱이 달랐다 →
+`occluders.reset()`. 그 밖에: 그림자 세터는 값이 바뀔 때만, Sun 누락은 에러, `perf=0` 은 꺼짐,
+vercel-build 의 파일 수 셈이 pipefail 에서 FAIL 줄 전에 죽던 것, 구운 메시가 원본보다 낡으면
+경고(원본 md5 를 메시 메타에 싣는다).

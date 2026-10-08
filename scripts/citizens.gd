@@ -171,7 +171,18 @@ static func walk_lane_u(k: int) -> float:
 	return CITY.road_half_at(k) + 0.5
 
 
+## §39: 보도 구간은 지도의 순수 함수라 한 번만 계산한다. 시민이 삼켜질 때마다 재스폰이
+## 이것을 불러 0.75 ms 씩 들었다(실측 — 재스폰 프레임 9~15 ms 의 일부). 부르는 쪽은 읽기만 한다.
+var _walks_cache: Array = []
+
+
 func build_walks() -> Array:
+	if _walks_cache.is_empty():
+		_walks_cache = compute_walks()
+	return _walks_cache
+
+
+func compute_walks() -> Array:
 	var out := []
 	for k in range(CITY.CELL_MIN, CITY.CELL_MAX + 2):
 		var wc := walk_lane_u(k)
@@ -295,7 +306,7 @@ func make_person(dz: int, pos: Vector3, idx: int) -> RigidBody3D:
 	# 달라진다(스폰 루프가 사람마다 정해진 횟수만 소비하는 것을 전제로 서 있다).
 	var wardrobe: Array = ZONE_WARDROBE[dz] if ZONE_WARDROBE.has(dz) else ZONE_WARDROBE[2]
 	var letter: String = wardrobe[idx % wardrobe.size()]
-	var model := (load(model_path(letter)) as PackedScene).instantiate() as Node3D
+	var model := take_model(letter)
 	model.name = "Model"
 	model.scale = Vector3(SCALE, SCALE, SCALE)
 	body.add_child(model)
@@ -455,9 +466,44 @@ static func anim_t0(phase: float) -> float:
 	return fmod(phase / TAU, 1.0) * WALK_LEN
 
 
+## §39 P2-7: 캐릭터 모델 풀. 재시작마다 GLB 씬 260벌을 다시 인스턴스하면 데스크톱
+## 네이티브에서도 0.63초였다. 몸통(RigidBody·셰이프)은 싸서 새로 만들고 **모델만** 재사용한다 —
+## 강체 상태(falling·consumed·_rim_refs·마스크·얼음)를 손으로 되돌리면 그중 하나를 빠뜨리는
+## 순간 판을 넘어 새는 결함이 되기 때문이다. 모델은 상태가 없다: 트랜스폼은 아래에서 다시
+## 세우고, 애니메이션은 `pose()` 가 clip "" 에서 play→pause→seek 로 처음부터 다시 잡는다.
+## 배역은 `scene_file_path` 로 가른다(M15 가 보는 바로 그 값이라 풀이 배역을 섞을 수 없다).
+var _model_pool := {}
+
+
+func take_model(letter: String) -> Node3D:
+	var pool: Array = _model_pool.get(letter, [])
+	if not pool.is_empty():
+		var m: Node3D = pool.pop_back()
+		m.transform = Transform3D.IDENTITY
+		return m
+	return (load(model_path(letter)) as PackedScene).instantiate() as Node3D
+
+
+## 풀의 모델은 트리 밖에 있어 아무도 해제하지 않는다 — 여기서 놓지 않으면 종료 때
+## 메시·인스턴스 RID 누수 경고가 수백 줄 난다(실측).
+func _exit_tree() -> void:
+	for letter in _model_pool:
+		for m in (_model_pool[letter] as Array):
+			if is_instance_valid(m):
+				(m as Node).free()
+	_model_pool.clear()
+
+
 ## 판을 되돌린다. main.gd 의 restart() 가 부른다(§27 의 교통과 같은 이유).
 func reset() -> void:
 	for c in get_children():
+		var m := c.get_node_or_null("Model") as Node3D
+		if m != null:
+			c.remove_child(m)
+			var letter := m.scene_file_path.get_file().get_basename().trim_prefix("character-")
+			if not _model_pool.has(letter):
+				_model_pool[letter] = []
+			(_model_pool[letter] as Array).append(m)
 		c.free()
 	_people.clear()
 	_orphans.clear()

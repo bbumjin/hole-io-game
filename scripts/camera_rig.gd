@@ -32,6 +32,22 @@ var _k := 0.0
 const OCCLUDERS := preload("res://scripts/occluders.gd")
 var occluders := OCCLUDERS.new()
 
+## §39: 그림자 거리를 줌에 맞춘다. 방향광 그림자는 **카메라에서** 최대 거리(기본 100m)까지만
+## 그려지는데, 카메라-구멍 거리는 `|base_offset|·k` = 34.06·k 라 k ≥ 3(R ≥ 15)부터 **구멍
+## 주변의 그림자가 통째로 사라졌다**(감사가 잡은 기존 결함). 구멍 너머 여유를 더해 키우되
+## 기본값 아래로는 내리지 않는다 — 작은 줌의 화면과 비용은 그대로다.
+## 거리를 키우면 그림자 패스가 그리는 것이 늘어 드로우콜이 k=4 에서 +72% 였다(실측, 여유 60m·
+## 4분할). 멀어진 화면은 그림자 텍셀이 덜 필요하므로 **기본값을 넘는 동안은 2분할**로 내리고
+## 여유도 30m 로 줄인다.
+## main 이 `_ready` 에서 Sun 을 물린다. 없으면 아무것도 안 한다(판정 픽스처 씬 등).
+const SHADOW_MIN := 100.0
+const SHADOW_PAD := 30.0
+var sun: DirectionalLight3D = null
+
+
+func shadow_distance(k: float) -> float:
+	return maxf(SHADOW_MIN, base_offset.length() * k + SHADOW_PAD)
+
 
 func zoom_scale(radius: float) -> float:
 	if radius <= start_radius:
@@ -54,6 +70,15 @@ func follow(target: Node3D, radius: float, snap: bool, dt := 0.0) -> void:
 		var want := target.global_position + base_offset * _k
 		global_position = global_position.lerp(want, 1.0 - exp(-smooth * dt))
 	global_basis = Basis.looking_at(-base_offset)
+	if sun != null:
+		# 바뀔 때만 쓴다 — 세터가 매번 빛의 종속자에 알리고 모드 세터는 속성 목록 갱신까지 낸다.
+		var sd := snappedf(shadow_distance(_k), 0.5)
+		if sun.directional_shadow_max_distance != sd:
+			sun.directional_shadow_max_distance = sd
+		var mode := DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS \
+			if sd <= SHADOW_MIN else DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		if sun.directional_shadow_mode != mode:
+			sun.directional_shadow_mode = mode
 	# §37: **여기가 유일한 호출 자리다.** main 3곳과 판정 13곳이 전부 `follow` 로 오므로
 	# 여기 걸면 판정 스크린샷에도 자동으로 반영된다 — 판정 모드에서는 `main._process` 가
 	# 일찍 반환해 `follow` 말고는 도는 것이 없다. `judge_flag()` 와 같은 원칙이다.
