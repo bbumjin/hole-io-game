@@ -153,6 +153,16 @@ echo "    .import 파일 ${want}개 / .godot/imported/*.md5 ${got}개"
 [ "$got" -ge "$want" ] || {
   echo "FAIL: 임포트 산출물 ${got} < .import 파일 ${want} — 에셋이 누락된 채 export 된다"; exit 1; }
 
+echo "==> 메시 굽기 (§39 — 다중 서피스 → 단일 서피스. 산출물은 git 에 없다)"
+# 굽기가 조용히 빠지면 게임은 원본 메시로 떨어져 **초록인 채 드로우콜이 3배**가 된다.
+# 도구의 종료코드와 산출물 개수를 둘 다 하드 게이트로 본다(기대 개수는 도구가 낸다).
+"$GODOT" --headless --path . --script res://tools/bake_meshes.gd | tee "${WORK}/bake.log"
+made=$(sed -n 's/^BAKE RESULT made=\([0-9]*\).*/\1/p' "${WORK}/bake.log")
+files=$(ls -1 assets/baked/*.res 2>/dev/null | wc -l)
+echo "    구운 메시 ${made:-0}개 / 파일 ${files}개"
+[ -n "$made" ] && [ "$made" -gt 0 ] && [ "$files" -eq "$made" ] || {
+  echo "FAIL: 메시 굽기 산출물 불일치 — 원본 메시로 export 될 뻔했다"; exit 1; }
+
 echo "==> Web export"
 mkdir -p build   # export 는 출력 디렉터리를 만들어주지 않는다
 "$GODOT" --headless --export-release "Web" build/index.html

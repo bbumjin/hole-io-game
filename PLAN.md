@@ -9662,9 +9662,29 @@ func base_extent(path: String, ab: AABB) -> Vector4:
 	return out
 
 
+## 렌더·배치에 쓰는 메시. **구운 단일 서피스 메시가 있으면 그것을 쓴다**(§39 P0-2 —
+## `tools/bake_meshes.gd`). 정점은 원본과 같은 집합이라 AABB·밑동 extent·배치가 그대로이고,
+## 서피스만 하나로 합쳐 드로우콜이 서피스 수만큼 준다. 카탈로그의 `path` 는 그대로 원본을
+## 가리킨다 — 지문(E4)·판정 E1 은 원본을 본다.
+## 구운 것이 없는데 원본이 다중 서피스면 **조용히 넘어가지 않는다** — 게임은 그대로 돌지만
+## 드로우콜이 세 배가 된다(배포 빌드는 vercel-build.sh 가 굽기를 하드 게이트로 본다).
+const BAKED_DIR := "res://assets/baked/"
+static var _warned_unbaked := false
+
+
 func mesh_of(path: String) -> Mesh:
 	if not _mesh_cache.has(path):
-		_mesh_cache[path] = load(path)
+		var baked := BAKED_DIR + path.get_base_dir().get_file() + "_" \
+			+ path.get_file().get_basename() + ".res"
+		var m: Mesh = null
+		if ResourceLoader.exists(baked):
+			m = load(baked)
+		if m == null:
+			m = load(path)
+			if m != null and m.get_surface_count() > 1 and not _warned_unbaked:
+				_warned_unbaked = true
+				push_warning("§39: 구운 메시가 없다(%s) — tools/bake_meshes.gd 를 돌려라. 드로우콜이 서피스 수만큼 늘어난다" % baked)
+		_mesh_cache[path] = m
 	return _mesh_cache[path]
 
 
